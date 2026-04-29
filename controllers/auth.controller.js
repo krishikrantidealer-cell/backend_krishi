@@ -14,7 +14,7 @@ class AuthController {
       res.status(200).json({ 
         success: true, 
         message: 'OTP sent successfully',
-        // In production, don't return the OTP in response
+        cooldown: 60, // Tell frontend to wait 60 seconds
         otp: process.env.NODE_ENV === 'development' ? otp : undefined 
       });
     } catch (error) {

@@ -1,5 +1,5 @@
 const Session = require('../models/Session');
-const redisClient = require('../config/redis');
+const { redisClient } = require('../config/redis');
 const { hashData, compareData } = require('../utils/hash');
 const { generateAccessToken, generateRefreshToken, verifyRefreshToken } = require('../utils/jwt');
 
@@ -61,10 +61,10 @@ class TokenService {
 
     const { userId, deviceId } = decoded;
     const redisKey = `session:${userId}:${deviceId}`;
-    
+
     // 1. Check Redis first (fast path)
     let storedHash = await redisClient.get(redisKey);
-    
+
     // 2. Fallback to MongoDB if Redis cache is empty (unlikely but robust)
     if (!storedHash) {
       const session = await Session.findOne({ userId, deviceId });

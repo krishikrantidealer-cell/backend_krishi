@@ -1,5 +1,5 @@
 const axios = require('axios');
-const redisClient = require('../config/redis');
+const { redisClient } = require('../config/redis');
 
 // SMS Configuration (These should be in .env)
 const SMS_DAILY_LIMIT = 5;

@@ -1,4 +1,4 @@
-const redisClient = require('../config/redis');
+const { redisClient } = require('../config/redis');
 const smsService = require('./sms.service');
 const { generateOTP } = require('../utils/otp');
 const { hashData, compareData } = require('../utils/hash');
