@@ -1,31 +1,22 @@
-const redis = require('redis');
+const { createClient } = require('redis');
+const dotenv = require('dotenv');
 
-const redisClient = redis.createClient({
-  url: process.env.REDIS_URL,
-  socket: {
-    reconnectStrategy: (retries) => {
-      if (retries > 10) {
-        console.error('Redis: Max retries reached. Stopping reconnection.');
-        return new Error('Max retries reached');
-      }
-      return Math.min(retries * 100, 3000); // Backoff strategy
-    },
-    connectTimeout: 10000,
-    keepAlive: 5000,
-  }
+dotenv.config();
+
+const redisClient = createClient({
+  url: process.env.REDIS_URL
 });
 
-redisClient.on('error', (err) => console.error('Redis Client Error:', err));
-redisClient.on('connect', () => console.log('Redis Connected'));
-redisClient.on('reconnecting', () => console.log('Redis Reconnecting...'));
-redisClient.on('ready', () => console.log('Redis Ready'));
+redisClient.on('error', (err) => console.error('Redis Client Error', err));
 
-(async () => {
-  try {
+const connectRedis = async () => {
+  if (!redisClient.isOpen) {
     await redisClient.connect();
-  } catch (err) {
-    console.error('Initial Redis connection failed:', err);
+    console.log('✅ Redis connected successfully');
   }
-})();
+};
 
-module.exports = redisClient;
+module.exports = {
+  redisClient,
+  connectRedis
+};

@@ -1,0 +1,5 @@
+Type of Discount,Discount Code,Percentage OR Absolute,Amount,Minimum Purchase Amount,Buy X Product,Get Y Product,Products/Collections to Apply Discount,Maximum discount uses,Eligibility Criteria,Combine with Other Discounts
+Amount off order,EBS10,Percentage,3%,1000,-,-,-,one use per customer,All customers,No
+Amount off products,NEW5,Percentage,3%,1000,-,-,All Collections,one use per customer,All customers,No
+Amount off order,FIRST20,Percentage,20%,1000,-,-,-,one use per customer,Customers Placing first order on Krishi Bhandar App,No
+Buy X get Y,Get Free Product,Absolute,One Product Free,2500,All Collections,Krishikranti Mix Micronutrient & Silicon Combo,-,one use per customer,Customers Placing orders on Krishi Bhandar App,No

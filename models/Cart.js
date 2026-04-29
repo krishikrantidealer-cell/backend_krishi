@@ -34,7 +34,26 @@ const cartSchema = new mongoose.Schema({
   totalAmount: {
     type: Number,
     default: 0
-  }
+  },
+  appliedCoupon: {
+    type: String,
+    trim: true,
+    uppercase: true
+  },
+  discountAmount: {
+    type: Number,
+    default: 0
+  },
+  finalAmount: {
+    type: Number,
+    default: 0
+  },
+  freeItems: [{
+    name: { type: String, trim: true },
+    imageUrl: { type: String, trim: true },
+    quantity: { type: Number, default: 1 },
+    isFree: { type: Boolean, default: true }
+  }]
 }, {
   timestamps: true
 });

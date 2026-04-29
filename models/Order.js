@@ -17,6 +17,9 @@ const orderItemSchema = new mongoose.Schema({
   vendor: {
     type: String
   },
+  image: {
+    type: String
+  },
   quantity: {
     type: Number,
     required: true,
@@ -51,6 +54,20 @@ const orderSchema = new mongoose.Schema({
     type: Number,
     required: true
   },
+  discountAmount: {
+    type: Number,
+    default: 0
+  },
+  couponCode: {
+    type: String,
+    trim: true
+  },
+  freeItems: [{
+    name: { type: String, trim: true },
+    imageUrl: { type: String, trim: true },
+    quantity: { type: Number, default: 1 },
+    isFree: { type: Boolean, default: true }
+  }],
   shippingAddress: {
     type: shippingAddressSchema,
     required: true

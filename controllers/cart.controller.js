@@ -61,3 +61,22 @@ exports.clearCart = async (req, res, next) => {
     next(error);
   }
 };
+
+exports.applyCoupon = async (req, res, next) => {
+  try {
+    const { code } = req.body;
+    const cart = await cartService.applyCouponToCart(req.user._id, code);
+    res.json({ success: true, message: 'Coupon applied to cart', cart });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+exports.removeCoupon = async (req, res, next) => {
+  try {
+    const cart = await cartService.removeCouponFromCart(req.user._id);
+    res.json({ success: true, message: 'Coupon removed from cart', cart });
+  } catch (error) {
+    next(error);
+  }
+};

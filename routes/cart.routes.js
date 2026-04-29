@@ -52,4 +52,17 @@ router.delete(
 // Clear entire cart
 router.delete('/', cartController.clearCart);
 
+// Apply coupon to cart
+router.post(
+  '/coupon',
+  [
+    body('code').trim().notEmpty().withMessage('Coupon code is required')
+  ],
+  validate,
+  cartController.applyCoupon
+);
+
+// Remove coupon from cart
+router.delete('/coupon', cartController.removeCoupon);
+
 module.exports = router;

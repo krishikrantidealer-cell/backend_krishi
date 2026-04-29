@@ -1,5 +1,7 @@
 const express = require('express');
 const productController = require('../controllers/product.controller');
+const reviewController = require('../controllers/review.controller');
+const { protect } = require('../middlewares/auth.middleware');
 
 const router = express.Router();
 
@@ -18,5 +20,14 @@ router.post('/', productController.createProduct);
 
 // Get single product details
 router.get('/:id', productController.getProduct);
+
+/**
+ * Review Routes
+ */
+// Get reviews for a product
+router.get('/:productId/reviews', reviewController.getProductReviews);
+
+// Add a review to a product (Requires Authentication)
+router.post('/:productId/reviews', protect, reviewController.addReview);
 
 module.exports = router;

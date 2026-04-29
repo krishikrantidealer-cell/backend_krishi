@@ -1,6 +1,7 @@
 const Order = require('../models/Order');
 const Cart = require('../models/Cart');
 const User = require('../models/User');
+const couponService = require('./coupon.service');
 
 class OrderService {
   async createOrderFromCart(userId, paymentMethod = 'COD', shippingAddress = null) {
@@ -18,6 +19,7 @@ class OrderService {
         variantId: item.variantId,
         title: item.product.title,
         vendor: item.product.vendor,
+        image: item.product.images && item.product.images.length > 0 ? item.product.images[0] : null,
         quantity: item.quantity,
         price: item.price
       };
@@ -31,22 +33,53 @@ class OrderService {
       throw new Error('Please provide a complete shipping address');
     }
 
-    // 4. Generate a unique, readable Order ID (e.g. ORD-123456)
+    // 4. Calculate final price with Coupon
+    let discountAmount = 0;
+    let finalAmount = cart.totalAmount;
+    let freeProductAdded = null;
+    let freeProductImage = null;
+    let freeProductQuantity = 1;
+    let finalCouponCode = null;
+
+    if (cart.appliedCoupon) {
+      // This will throw an error if the coupon is invalid or cart doesn't meet requirements
+      const couponResult = await couponService.applyCoupon(userId, cart.appliedCoupon, cart.totalAmount);
+      discountAmount = couponResult.discountAmount;
+      finalAmount = couponResult.finalAmount;
+      freeProductAdded = couponResult.freeProductAdded;
+      freeProductImage = couponResult.freeProductImage;
+      freeProductQuantity = couponResult.freeProductQuantity;
+      finalCouponCode = cart.appliedCoupon.toUpperCase();
+    }
+
+    // 5. Generate a unique, readable Order ID (e.g. ORD-123456)
     const orderId = 'ORD-' + Date.now().toString().slice(-6) + Math.floor(Math.random() * 1000);
 
-    // 5. Create the Order
+    // 6. Create the Order
     const order = await Order.create({
       user: userId,
       orderId,
       items: orderItems,
-      totalAmount: cart.totalAmount,
+      totalAmount: finalAmount, // Saved final amount
+      discountAmount: discountAmount,
+      couponCode: finalCouponCode,
+      freeItems: freeProductAdded ? [{
+        name: freeProductAdded,
+        imageUrl: freeProductImage,
+        quantity: freeProductQuantity,
+        isFree: true
+      }] : [],
       shippingAddress: address,
       paymentMethod
     });
 
-    // 6. Clear the user's cart since they just bought everything
+    // 7. Clear the user's cart thoroughly
     cart.items = [];
     cart.totalAmount = 0;
+    cart.appliedCoupon = undefined;
+    cart.discountAmount = 0;
+    cart.finalAmount = 0;
+    cart.freeItems = [];
     await cart.save();
 
     return order;

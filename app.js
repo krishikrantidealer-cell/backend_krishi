@@ -10,6 +10,7 @@ const productRoutes = require('./routes/product.routes');
 const cartRoutes = require('./routes/cart.routes');
 const orderRoutes = require('./routes/order.routes');
 const favouriteRoutes = require('./routes/favourite.routes');
+const couponRoutes = require('./routes/coupon.routes');
 
 const app = express();
 
@@ -40,10 +41,11 @@ app.use('/api/products', productRoutes);
 app.use('/api/cart', cartRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/favourites', favouriteRoutes);
+app.use('/api/coupons', couponRoutes);
 
 // Health Check
 app.get('/health', async (req, res) => {
-  const redisClient = require('./config/redis');
+  const { redisClient } = require('./config/redis');
   let redisStatus = 'disconnected';
   try {
     const ping = await redisClient.ping();

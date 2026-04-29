@@ -1,5 +1,6 @@
 const Cart = require('../models/Cart');
 const Product = require('../models/Product');
+const couponService = require('./coupon.service');
 
 class CartService {
   async getCart(userId) {
@@ -41,6 +42,7 @@ class CartService {
     }
 
     this.calculateTotal(cart);
+    await this.recalculateCoupon(cart, userId);
     await cart.save();
     return await this.getCart(userId);
   }
@@ -59,6 +61,7 @@ class CartService {
     }
 
     this.calculateTotal(cart);
+    await this.recalculateCoupon(cart, userId);
     await cart.save();
     return await this.getCart(userId);
   }
@@ -73,6 +76,7 @@ class CartService {
     }
 
     this.calculateTotal(cart);
+    await this.recalculateCoupon(cart, userId);
     await cart.save();
     return await this.getCart(userId);
   }
@@ -82,6 +86,10 @@ class CartService {
     if (cart) {
       cart.items = [];
       cart.totalAmount = 0;
+      cart.appliedCoupon = undefined;
+      cart.discountAmount = 0;
+      cart.finalAmount = 0;
+      cart.freeItems = [];
       await cart.save();
     }
     return cart;
@@ -89,6 +97,61 @@ class CartService {
 
   calculateTotal(cart) {
     cart.totalAmount = cart.items.reduce((total, item) => total + (item.price * item.quantity), 0);
+  }
+
+  async recalculateCoupon(cart, userId) {
+    if (!cart.appliedCoupon) {
+      cart.discountAmount = 0;
+      cart.finalAmount = cart.totalAmount;
+      cart.freeItems = [];
+      return;
+    }
+
+    try {
+      // Re-validate coupon against the NEW cart total
+      const result = await couponService.applyCoupon(userId, cart.appliedCoupon, cart.totalAmount);
+      cart.discountAmount = result.discountAmount;
+      cart.finalAmount = result.finalAmount;
+      cart.freeItems = result.freeProductAdded ? [{ 
+        name: result.freeProductAdded, 
+        imageUrl: result.freeProductImage || null,
+        quantity: result.freeProductQuantity || 1,
+        isFree: true 
+      }] : [];
+    } catch (error) {
+      // If the cart no longer meets the coupon requirements (e.g. minimum purchase), remove it
+      cart.appliedCoupon = undefined;
+      cart.discountAmount = 0;
+      cart.finalAmount = cart.totalAmount;
+      cart.freeItems = [];
+    }
+  }
+
+  async applyCouponToCart(userId, code) {
+    const cart = await Cart.findOne({ user: userId });
+    if (!cart || cart.items.length === 0) throw new Error('Cart is empty');
+
+    // Test if coupon is valid before saving
+    await couponService.applyCoupon(userId, code, cart.totalAmount);
+
+    cart.appliedCoupon = code.toUpperCase();
+    await this.recalculateCoupon(cart, userId);
+    await cart.save();
+    
+    return await this.getCart(userId);
+  }
+
+  async removeCouponFromCart(userId) {
+    const cart = await Cart.findOne({ user: userId });
+    if (!cart) throw new Error('Cart not found');
+
+    cart.appliedCoupon = undefined;
+    cart.discountAmount = 0;
+    cart.finalAmount = cart.totalAmount;
+    cart.freeItems = [];
+    await cart.save();
+
+    return await this.getCart(userId);
   }
 }
 

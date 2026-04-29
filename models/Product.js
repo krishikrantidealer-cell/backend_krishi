@@ -13,7 +13,15 @@ const productSchema = new mongoose.Schema({
     required: true,
     trim: true
   },
-  body: {
+  brandName: {
+    type: String,
+    trim: true
+  },
+  technicalName: {
+    type: String,
+    trim: true
+  },
+  thumbnail: {
     type: String,
     trim: true
   },
@@ -32,9 +40,6 @@ const productSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     index: true
   },
-  tags: [{
-    type: String
-  }],
   images: [{
     type: String
   }],
@@ -56,8 +61,11 @@ const productSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Search index for title, vendor and body
-productSchema.index({ title: 'text', vendor: 'text', body: 'text' });
+// Optimized Indexes for scalable loading
+productSchema.index({ availabilityStatus: 1 });
+productSchema.index({ createdAt: -1 });
+// Search index for title, brandName, technicalName, vendor
+productSchema.index({ title: 'text', brandName: 'text', technicalName: 'text', vendor: 'text' });
 
 const Product = mongoose.model('Product', productSchema);
 

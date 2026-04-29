@@ -1,6 +1,6 @@
 const rateLimit = require('express-rate-limit');
 const { RedisStore } = require('rate-limit-redis');
-const redisClient = require('../config/redis');
+const { redisClient } = require('../config/redis');
 
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
