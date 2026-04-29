@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: krishi-backend
+    runtime: node
+    plan: free # Change to starter for 24/7 uptime
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: MONGODB_URI
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: MASTER_OTP
+        value: "123456"
+      - key: GCS_PROJECT_ID
+        sync: false
+      - key: GCS_BUCKET_NAME
+        sync: false
+      - key: GCS_KEY_JSON
+        sync: false
