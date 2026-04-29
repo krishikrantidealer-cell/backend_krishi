@@ -5,10 +5,27 @@ const dotenv = require('dotenv');
 
 dotenv.config();
 
-const storage = new Storage({
-  projectId: process.env.GCS_PROJECT_ID || 'placeholder',
-  keyFilename: process.env.GCS_KEY_FILE_PATH || './config/gcs-key.json',
-});
+let storage;
+
+if (process.env.GCS_KEY_JSON) {
+  // Option A: Load from Environment Variable (Best for Hosting)
+  try {
+    storage = new Storage({
+      projectId: process.env.GCS_PROJECT_ID,
+      credentials: JSON.parse(process.env.GCS_KEY_JSON)
+    });
+  } catch (err) {
+    console.error('Failed to parse GCS_KEY_JSON:', err.message);
+  }
+}
+
+if (!storage) {
+  // Option B: Load from File (Best for Local Development)
+  storage = new Storage({
+    projectId: process.env.GCS_PROJECT_ID || 'placeholder',
+    keyFilename: process.env.GCS_KEY_FILE_PATH || './config/gcs-key.json',
+  });
+}
 
 // Safety check to prevent crash on startup if ENV is not set yet
 const bucketName = process.env.GCS_BUCKET_NAME;
