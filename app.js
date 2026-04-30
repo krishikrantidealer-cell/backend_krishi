@@ -14,6 +14,9 @@ const couponRoutes = require('./routes/coupon.routes');
 
 const app = express();
 
+// Trust proxy for correct IP detection behind Render/Load Balancers
+app.set('trust proxy', 1);
+
 // Security Middleware
 app.use(helmet());
 app.use(cors({
