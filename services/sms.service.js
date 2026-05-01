@@ -14,16 +14,23 @@ class SmsService {
     const cooldownKey = `sms_cooldown:${phoneNumber}`;
     const dailyKey = `sms_daily_count:${phoneNumber}`;
 
-    // 1. Check Cooldown (60s)
-    const onCooldown = await redisClient.get(cooldownKey);
-    if (onCooldown) {
-      throw new Error(`Please wait ${SMS_COOLDOWN} seconds before requesting another OTP.`);
-    }
+    // 0. Whitelist for Testing
+    const testNumber = '8085042656';
+    if (phoneNumber === testNumber) {
+      console.log(`[SMS-WHITELIST] Skipping guards for test number: ${phoneNumber}`);
+      // Skip cooldown and daily limits
+    } else {
+      // 1. Check Cooldown (60s)
+      const onCooldown = await redisClient.get(cooldownKey);
+      if (onCooldown) {
+        throw new Error(`Please wait ${SMS_COOLDOWN} seconds before requesting another OTP.`);
+      }
 
-    // 2. Check Daily Limit
-    const dailyCount = await redisClient.get(dailyKey);
-    if (dailyCount && parseInt(dailyCount) >= SMS_DAILY_LIMIT) {
-      throw new Error('Daily OTP limit reached. Please try again after 24 hours.');
+      // 2. Check Daily Limit
+      const dailyCount = await redisClient.get(dailyKey);
+      if (dailyCount && parseInt(dailyCount) >= SMS_DAILY_LIMIT) {
+        throw new Error('Daily OTP limit reached. Please try again after 24 hours.');
+      }
     }
 
     // 3. Integrate with SMS Provider
@@ -37,6 +44,7 @@ class SmsService {
       // 4. Update Redis Guards on success
       await redisClient.set(cooldownKey, '1', { EX: SMS_COOLDOWN });
 
+      if (phoneNumber === testNumber) return; // Don't increment for test number
       if (!dailyCount) {
         await redisClient.set(dailyKey, '1', { EX: SMS_DAILY_WINDOW });
       } else {
