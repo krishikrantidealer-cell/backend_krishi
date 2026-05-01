@@ -31,7 +31,7 @@ if (process.env.GCS_KEY_JSON) {
 
 // Safety check to prevent crash on startup if ENV is not set yet
 const bucketName = process.env.GCS_BUCKET_NAME;
-const bucket = bucketName ? storage.bucket(bucketName) : null;
+const bucket = (storage && bucketName) ? storage.bucket(bucketName) : null;
 
 /**
  * Uploads a file buffer to Google Cloud Storage
