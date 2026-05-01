@@ -17,14 +17,16 @@ if (process.env.GCS_KEY_JSON) {
   } catch (err) {
     console.error('Failed to parse GCS_KEY_JSON:', err.message);
   }
-}
-
-if (!storage) {
-  // Option B: Load from File (Best for Local Development)
-  storage = new Storage({
-    projectId: process.env.GCS_PROJECT_ID || 'placeholder',
-    keyFilename: process.env.GCS_KEY_FILE_PATH || './config/gcs-key.json',
-  });
+} else if (process.env.NODE_ENV !== 'production') {
+  // Option B: Load from File (ONLY for Local Development)
+  try {
+    storage = new Storage({
+      projectId: process.env.GCS_PROJECT_ID || 'placeholder',
+      keyFilename: process.env.GCS_KEY_FILE_PATH || './config/gcs-key.json',
+    });
+  } catch (err) {
+    console.error('Local GCS Key file not found:', err.message);
+  }
 }
 
 // Safety check to prevent crash on startup if ENV is not set yet
