@@ -15,7 +15,7 @@ class SmsService {
     const dailyKey = `sms_daily_count:${phoneNumber}`;
 
     // 0. Whitelist for Testing
-    const testNumber = '8085042656';
+    const testNumber = '9999999999';
     if (phoneNumber === testNumber) {
       console.log(`[SMS-WHITELIST] Skipping guards for test number: ${phoneNumber}`);
       // Skip cooldown and daily limits

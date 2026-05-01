@@ -20,7 +20,7 @@ const authLimiter = rateLimit({
   max: 10, // Back to strict limit for public
   standardHeaders: true,
   legacyHeaders: false,
-  skip: (req) => req.body && req.body.phoneNumber === '8085042656',
+  skip: (req) => req.body && req.body.phoneNumber === '9999999999',
   store: new RedisStore({
     sendCommand: (...args) => redisClient.sendCommand(args),
     prefix: 'auth_limit:',
