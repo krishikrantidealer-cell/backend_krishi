@@ -4,6 +4,8 @@ const userController = require('../controllers/user.controller');
 const { protect } = require('../middlewares/auth.middleware');
 const validate = require('../middlewares/validate');
 
+const upload = require('../middlewares/upload.middleware');
+
 const router = express.Router();
 
 // All user routes are protected
@@ -47,11 +49,11 @@ router.post(
 // Submit KYC API
 router.post(
   '/kyc',
+  upload.single('licenceImage'),
   [
     body('userType').isIn(['Retailer and Distributor']).withMessage('Invalid user type'),
     body('shopName').trim().notEmpty().withMessage('Shop name is required'),
-    body('gstNumber').trim().notEmpty().withMessage('GST number is required'),
-    body('licenceImage').trim().notEmpty().withMessage('Licence image is required')
+    body('gstNumber').trim().notEmpty().withMessage('GST number is required')
   ],
   validate,
   userController.submitKyc

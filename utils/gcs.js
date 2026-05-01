@@ -95,6 +95,23 @@ const processAndUploadProductImage = async (fileBuffer, originalName, productId)
 };
 
 /**
+ * Processes and uploads a KYC document (licence/identity) as WebP
+ */
+const processAndUploadKycDocument = async (fileBuffer, originalName, userId) => {
+  const timestamp = Date.now();
+  const folder = `kyc/${userId}`;
+  const extension = path.extname(originalName);
+  const baseName = path.basename(originalName, extension);
+  
+  const processedBuffer = await sharp(fileBuffer)
+    .webp({ quality: 85 })
+    .toBuffer();
+
+  const destination = `${folder}/${baseName}_${timestamp}.webp`;
+  return uploadToGCS(processedBuffer, destination, 'image/webp');
+};
+
+/**
  * Deletes a file from Google Cloud Storage
  */
 const deleteFromGCS = async (fileUrl) => {
@@ -112,5 +129,6 @@ const deleteFromGCS = async (fileUrl) => {
 module.exports = {
   uploadToGCS,
   processAndUploadProductImage,
+  processAndUploadKycDocument,
   deleteFromGCS,
 };
