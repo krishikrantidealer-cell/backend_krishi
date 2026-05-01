@@ -90,7 +90,7 @@ class UserService {
           shopName,
           gstNumber,
           licenceImage,
-          kycStatus: 'submitted',
+          kycStatus: 'verified',
           isKycComplete: true
         }
       },

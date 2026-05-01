@@ -60,6 +60,8 @@ class AuthController {
           id: user._id,
           phoneNumber: user.phoneNumber,
           isVerified: user.isVerified,
+          isProfileComplete: user.isProfileComplete,
+          isKycComplete: user.isKycComplete,
           role: user.role
         },
         ...tokens
