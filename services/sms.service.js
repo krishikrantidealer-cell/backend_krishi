@@ -13,6 +13,7 @@ class SmsService {
   async sendOTP(phoneNumber, otp) {
     const cooldownKey = `sms_cooldown:${phoneNumber}`;
     const dailyKey = `sms_daily_count:${phoneNumber}`;
+    let dailyCount;
 
     // 0. Whitelist for Testing
     const testNumber = '9999999999';
@@ -27,7 +28,7 @@ class SmsService {
       }
 
       // 2. Check Daily Limit
-      const dailyCount = await redisClient.get(dailyKey);
+      dailyCount = await redisClient.get(dailyKey);
       if (dailyCount && parseInt(dailyCount) >= SMS_DAILY_LIMIT) {
         throw new Error('Daily OTP limit reached. Please try again after 24 hours.');
       }
@@ -44,7 +45,8 @@ class SmsService {
       // 4. Update Redis Guards on success
       await redisClient.set(cooldownKey, '1', { EX: SMS_COOLDOWN });
 
-      if (phoneNumber === testNumber) return; // Don't increment for test number
+      if (phoneNumber === testNumber) return true; // Don't increment for test number
+      
       if (!dailyCount) {
         await redisClient.set(dailyKey, '1', { EX: SMS_DAILY_WINDOW });
       } else {
