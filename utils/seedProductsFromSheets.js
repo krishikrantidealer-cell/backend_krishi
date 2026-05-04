@@ -68,7 +68,7 @@ async function seedData() {
             brandName: brandName,
             technicalName: technicalName,
             title: cleanRow['Product Title'] || brandName,
-            body: cleanRow['Product Body'] || '',
+            description: cleanRow['Product Body'] || '',
             vendor: cleanRow['Vendor'] || 'Krishikranti',
             _tempCategoryName: guessCategory(
               cleanRow['Category'], 
@@ -77,6 +77,7 @@ async function seedData() {
             ),
             _tempSubCategoryName: cleanRow['Sub-Category'] || 'Chemical',
             images: cleanRow['Product Image'] ? [cleanRow['Product Image'].trim()] : [],
+            thumbnail: cleanRow['Product Image'] ? cleanRow['Product Image'].trim() : '',
             variants: [],
             availabilityStatus: cleanRow['Availability'] || 'In Stock',
             assignedCollections: cleanRow['Assigned Collections'] ? cleanRow['Assigned Collections'].split(',').map(c => c.trim()) : [],
@@ -145,15 +146,19 @@ async function seedData() {
           }
         });
 
-        console.log(`Creating ${uniqueCollectionNames.size} collections...`);
+        console.log(`Checking/Creating ${uniqueCollectionNames.size} collections...`);
         for (const name of uniqueCollectionNames) {
           const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-          await Collection.create({
-            name,
-            slug,
-            isActive: true,
-            priority: 0
-          });
+          const existing = await Collection.findOne({ name });
+          if (!existing) {
+            await Collection.create({
+              name,
+              slug,
+              isActive: true,
+              priority: 0
+            });
+            console.log(`Created new collection: ${name}`);
+          }
         }
 
         // Ensure all products have at least one variant so they aren't lost

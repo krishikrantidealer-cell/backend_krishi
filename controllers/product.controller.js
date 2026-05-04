@@ -1,6 +1,8 @@
 const productService = require('../services/product.service');
 const { processAndUploadProductImage } = require('../utils/gcs');
 const mongoose = require('mongoose');
+const Collection = require('../models/Collection');
+const Product = require('../models/Product');
 
 // Get all products with cursor-based pagination
 exports.getProducts = async (req, res, next) => {
@@ -58,6 +60,53 @@ exports.getCategories = async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Failed to fetch categories' });
+  }
+};
+
+// Consolidated Discovery API for Home Screen (BFF Pattern)
+exports.getHomeDiscovery = async (req, res, next) => {
+  try {
+    // 1. Fetch Categories
+    const categoriesPromise = productService.getCategoriesHierarchy();
+    
+    // 2. Fetch Featured Products (Top 10)
+    const featuredPromise = productService.getProducts({ isFeatured: true }, { limit: 10 });
+    
+    // 3. Fetch Collections
+    const collectionsPromise = Collection.find({ isActive: true })
+      .sort({ priority: -1, name: 1 })
+      .lean();
+
+    const [categories, featuredResult, collections] = await Promise.all([
+      categoriesPromise,
+      featuredPromise,
+      collectionsPromise
+    ]);
+
+    // 4. Populate collections with products
+    const collectionsWithProducts = await Promise.all(collections.map(async (col) => {
+      const products = await Product.find({ 
+        assignedCollections: col.name,
+        availabilityStatus: { $ne: 'Out of Stock' } 
+      })
+      .select('title brandName technicalName thumbnail variants minPrice maxPrice availabilityStatus averageRating')
+      .limit(10)
+      .lean();
+
+      return {
+        ...col,
+        products
+      };
+    }));
+
+    res.json({
+      success: true,
+      categories,
+      featuredProducts: featuredResult.products,
+      collections: collectionsWithProducts.filter(c => c.products.length > 0)
+    });
+  } catch (error) {
+    next(error);
   }
 };
 

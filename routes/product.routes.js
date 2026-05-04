@@ -9,6 +9,9 @@ const router = express.Router();
  * Public Catalog Routes
  */
 
+// Home Discovery API (Consolidated)
+router.get('/discovery', productController.getHomeDiscovery);
+
 // Get all categories and sub-categories
 router.get('/categories', productController.getCategories);
 

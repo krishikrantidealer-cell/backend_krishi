@@ -72,6 +72,14 @@ const productSchema = new mongoose.Schema({
   isFeatured: {
     type: Boolean,
     default: false
+  },
+  description: {
+    type: String,
+    trim: true
+  },
+  specifications: {
+    type: Map,
+    of: String
   }
 }, {
   timestamps: true
