@@ -1,5 +1,4 @@
 const Product = require('../models/Product');
-const ProductDetail = require('../models/ProductDetail');
 const Category = require('../models/Category');
 const cacheService = require('../utils/cache');
 
@@ -18,17 +17,8 @@ class ProductService {
       thumbnail: productData.thumbnail || (productData.images && productData.images.length > 0 ? productData.images[0] : null)
     });
 
-    // 2. Create the heavy ProductDetail
-    await ProductDetail.create({
-      productId: product._id,
-      description: productData.description || productData.body || '',
-      images: {
-        medium: productData.mediumImages || [],
-        original: productData.originalImages || []
-      },
-      specifications: productData.specifications || {}
-    });
-
+    // Description and specifications are now embedded in the Product model via productData
+    
     // Invalidate product listing cache
     await cacheService.delByPattern('products:*');
 
@@ -89,12 +79,7 @@ class ProductService {
     const product = await Product.findById(id).lean();
     if (!product) throw new Error('Product not found');
 
-    const details = await ProductDetail.findOne({ productId: id }).lean();
-
-    return {
-      ...product,
-      details: details || {}
-    };
+    return product;
   }
 
   async getCategoriesHierarchy() {
@@ -124,9 +109,6 @@ class ProductService {
   async deleteProduct(id) {
     const product = await Product.findByIdAndDelete(id);
     if (!product) throw new Error('Product not found');
-
-    // Also delete associated details
-    await ProductDetail.deleteOne({ productId: id });
 
     // Invalidate product listing cache
     await cacheService.delByPattern('products:*');
