@@ -92,6 +92,8 @@ productSchema.pre('save', function(next) {
 
 // Optimized Indexes for scalable loading
 productSchema.index({ availabilityStatus: 1 });
+productSchema.index({ isFeatured: 1 });
+productSchema.index({ assignedCollections: 1 });
 productSchema.index({ createdAt: -1 });
 // Search index for title, brandName, technicalName, vendor
 productSchema.index({ title: 'text', brandName: 'text', technicalName: 'text', vendor: 'text' });

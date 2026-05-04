@@ -5,11 +5,13 @@ const mongoose = require('mongoose');
 // Get all products with cursor-based pagination
 exports.getProducts = async (req, res, next) => {
   try {
-    const { cursor, limit, search, categoryId, subCategoryId, minPrice, maxPrice } = req.query;
+    const { cursor, limit, search, categoryId, subCategoryId, minPrice, maxPrice, isFeatured, collection } = req.query;
     
     const filters = {};
     if (categoryId) filters.categoryId = categoryId;
     if (subCategoryId) filters.subCategoryId = subCategoryId;
+    if (isFeatured !== undefined) filters.isFeatured = isFeatured === 'true';
+    if (collection) filters.assignedCollections = collection;
     
     if (minPrice) {
       filters.minPrice = { $gte: Number(minPrice) };

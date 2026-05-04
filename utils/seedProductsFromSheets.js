@@ -1,21 +1,34 @@
-require('dotenv').config();
+require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
 const axios = require('axios');
 const csv = require('csv-parser');
 const mongoose = require('mongoose');
 const Product = require('../models/Product');
 const Category = require('../models/Category');
+const Collection = require('../models/Collection');
 
 const MONGO_URI = process.env.MONGODB_URI;
 const SHEET_URL = 'https://docs.google.com/spreadsheets/d/15XLeb_EkYW6Mn0Vohj9RxTMoXyWk8aLk2IMJg9tTJnU/export?format=csv&gid=0';
 
-function guessCategory(catStr) {
-  const str = (catStr || '').toLowerCase();
-  if (str.includes('insecticide')) return 'Insecticides';
-  if (str.includes('fungicide')) return 'Fungicides';
-  if (str.includes('fertilizer')) return 'Fertilizers';
-  if (str.includes('pgr') || str.includes('growth')) return 'PGRs';
-  if (str.includes('bio')) return 'Bio-Products';
-  if (str.includes('herbicide')) return 'Herbicides';
+function guessCategory(catStr, title = '', body = '') {
+  const s = (catStr || '').trim().toLowerCase();
+  
+  // 1. Check the explicit Category column first
+  if (s.includes('herbicide')) return 'Herbicides';
+  if (s.includes('insecticide')) return 'Insecticides';
+  if (s.includes('fungicide')) return 'Fungicides';
+  if (s.includes('fertilizer')) return 'Fertilizers';
+  if (s.includes('pgr') || s.includes('growth')) return 'PGRs';
+  if (s.includes('bio')) return 'Bio-Products';
+
+  // 2. If the sheet is ambiguous (TBD/Empty), guess from the title and body
+  const combined = `${title} ${body}`.toLowerCase();
+  if (combined.includes('herbicide')) return 'Herbicides';
+  if (combined.includes('insecticide')) return 'Insecticides';
+  if (combined.includes('fungicide')) return 'Fungicides';
+  if (combined.includes('fertilizer')) return 'Fertilizers';
+  if (combined.includes('pgr') || combined.includes('growth')) return 'PGRs';
+  if (combined.includes('bio')) return 'Bio-Products';
+
   return 'Fertilizers';
 }
 
@@ -28,7 +41,8 @@ async function seedData() {
     console.log('Clearing old products and categories...');
     await Product.deleteMany({});
     await Category.deleteMany({});
-    console.log('Old data cleared.');
+    // We don't delete Collections here to preserve manually created ones
+    console.log('Old product and category data cleared.');
 
     console.log('Fetching data from Google Sheets...');
     const response = await axios.get(SHEET_URL, { responseType: 'stream' });
@@ -56,7 +70,11 @@ async function seedData() {
             title: cleanRow['Product Title'] || brandName,
             body: cleanRow['Product Body'] || '',
             vendor: cleanRow['Vendor'] || 'Krishikranti',
-            _tempCategoryName: guessCategory(cleanRow['Category']),
+            _tempCategoryName: guessCategory(
+              cleanRow['Category'], 
+              cleanRow['Product Title'] || brandName, 
+              cleanRow['Product Body'] || ''
+            ),
             _tempSubCategoryName: cleanRow['Sub-Category'] || 'Chemical',
             images: cleanRow['Product Image'] ? [cleanRow['Product Image'].trim()] : [],
             variants: [],
@@ -119,8 +137,37 @@ async function seedData() {
       .on('end', async () => {
         console.log('Finished parsing Google Sheet data.');
 
-        // Remove products with no variants
-        const finalProducts = productsArray.filter(p => p.variants.length > 0);
+        // Extract and create unique collections
+        const uniqueCollectionNames = new Set();
+        productsArray.forEach(p => {
+          if (p.assignedCollections) {
+            p.assignedCollections.forEach(c => uniqueCollectionNames.add(c));
+          }
+        });
+
+        console.log(`Creating ${uniqueCollectionNames.size} collections...`);
+        for (const name of uniqueCollectionNames) {
+          const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+          await Collection.create({
+            name,
+            slug,
+            isActive: true,
+            priority: 0
+          });
+        }
+
+        // Ensure all products have at least one variant so they aren't lost
+        productsArray.forEach(p => {
+          if (p.variants.length === 0) {
+            p.variants.push({
+              size: 'Standard',
+              price: 0,
+              stock: 10
+            });
+          }
+        });
+
+        const finalProducts = productsArray;
         console.log(`Processing ${finalProducts.length} products...`);
 
         const categoryMap = {};
