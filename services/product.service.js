@@ -64,7 +64,7 @@ class ProductService {
 
     // 2. Fallback to MongoDB
     const products = await Product.find(query)
-      .select('title brandName technicalName vendor thumbnail variants availabilityStatus averageRating numReviews')
+      .select('title brandName technicalName vendor thumbnail variants images availabilityStatus averageRating numReviews minPrice maxPrice')
       .sort({ _id: 1 })
       .limit(limit);
 

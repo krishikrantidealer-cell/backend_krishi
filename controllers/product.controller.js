@@ -11,10 +11,11 @@ exports.getProducts = async (req, res, next) => {
     if (categoryId) filters.categoryId = categoryId;
     if (subCategoryId) filters.subCategoryId = subCategoryId;
     
-    if (minPrice || maxPrice) {
-      filters['variants.price'] = {};
-      if (minPrice) filters['variants.price'].$gte = Number(minPrice);
-      if (maxPrice) filters['variants.price'].$lte = Number(maxPrice);
+    if (minPrice) {
+      filters.minPrice = { $gte: Number(minPrice) };
+    }
+    if (maxPrice) {
+      filters.maxPrice = { $lte: Number(maxPrice) };
     }
 
     const result = await productService.getProducts(filters, {

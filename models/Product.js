@@ -56,9 +56,30 @@ const productSchema = new mongoose.Schema({
   numReviews: {
     type: Number,
     default: 0
+  },
+  minPrice: {
+    type: Number,
+    index: true
+  },
+  maxPrice: {
+    type: Number,
+    index: true
   }
 }, {
   timestamps: true
+});
+
+// Automatically calculate min/max price before saving
+productSchema.pre('save', function(next) {
+  if (this.variants && this.variants.length > 0) {
+    const prices = this.variants.map(v => v.price);
+    this.minPrice = Math.min(...prices);
+    this.maxPrice = Math.max(...prices);
+  } else {
+    this.minPrice = 0;
+    this.maxPrice = 0;
+  }
+  next();
 });
 
 // Optimized Indexes for scalable loading

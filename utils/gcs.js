@@ -77,7 +77,10 @@ const processAndUploadProductImage = async (fileBuffer, originalName, productId)
     if (size.width) {
       // Resize for thumb and medium
       processedBuffer = await sharp(fileBuffer)
-        .resize(size.width, size.height, { fit: 'cover' })
+        .resize(size.width, size.height, {
+          fit: 'contain',
+          background: { r: 255, g: 255, b: 255, alpha: 1 }
+        })
         .webp({ quality: 80 })
         .toBuffer();
     } else {
