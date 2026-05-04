@@ -60,7 +60,9 @@ async function seedData() {
             _tempSubCategoryName: cleanRow['Sub-Category'] || 'Chemical',
             images: cleanRow['Product Image'] ? [cleanRow['Product Image'].trim()] : [],
             variants: [],
-            availabilityStatus: cleanRow['Availability'] || 'In Stock'
+            availabilityStatus: cleanRow['Availability'] || 'In Stock',
+            assignedCollections: cleanRow['Assigned Collections'] ? cleanRow['Assigned Collections'].split(',').map(c => c.trim()) : [],
+            isFeatured: (cleanRow['Featured Product'] || '').toLowerCase() === 'yes'
           };
           productsArray.push(currentProduct);
         }

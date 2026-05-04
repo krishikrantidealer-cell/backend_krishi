@@ -64,6 +64,14 @@ const productSchema = new mongoose.Schema({
   maxPrice: {
     type: Number,
     index: true
+  },
+  assignedCollections: [{
+    type: String,
+    trim: true
+  }],
+  isFeatured: {
+    type: Boolean,
+    default: false
   }
 }, {
   timestamps: true
