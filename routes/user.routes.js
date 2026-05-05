@@ -59,4 +59,21 @@ router.post(
   userController.submitKyc
 );
 
+// Shipping Address Management
+router.post(
+  '/addresses',
+  [
+    body('name').trim().notEmpty().withMessage('Address name is required'),
+    body('villageArea').trim().notEmpty().withMessage('Village/Area is required'),
+    body('cityTehsil').trim().notEmpty().withMessage('City/Tehsil is required'),
+    body('pincode').isLength({ min: 6, max: 6 }).withMessage('Pincode must be 6 digits'),
+    body('phoneNumber').trim().notEmpty().withMessage('Phone number is required')
+  ],
+  validate,
+  userController.addShippingAddress
+);
+
+router.delete('/addresses/:addressId', userController.deleteShippingAddress);
+router.patch('/addresses/:addressId/default', userController.setDefaultAddress);
+
 module.exports = router;

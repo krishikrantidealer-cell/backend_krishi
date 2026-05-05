@@ -103,6 +103,53 @@ class UserService {
 
     return user;
   }
+  async addShippingAddress(userId, addressData) {
+    const user = await User.findById(userId);
+    if (!user) throw new Error('User not found');
+
+    // If this is the first address, make it default
+    if (user.shippingAddresses.length === 0) {
+      addressData.isDefault = true;
+    } else if (addressData.isDefault) {
+      // If setting a new default, unset others
+      user.shippingAddresses.forEach(addr => addr.isDefault = false);
+    }
+
+    user.shippingAddresses.push(addressData);
+    await user.save();
+    return user;
+  }
+
+  async deleteShippingAddress(userId, addressId) {
+    const user = await User.findById(userId);
+    if (!user) throw new Error('User not found');
+
+    const addressIndex = user.shippingAddresses.findIndex(addr => addr._id.toString() === addressId);
+    if (addressIndex === -1) throw new Error('Address not found');
+
+    const wasDefault = user.shippingAddresses[addressIndex].isDefault;
+    user.shippingAddresses.splice(addressIndex, 1);
+
+    // If we deleted the default address, make the first remaining one default
+    if (wasDefault && user.shippingAddresses.length > 0) {
+      user.shippingAddresses[0].isDefault = true;
+    }
+
+    await user.save();
+    return user;
+  }
+
+  async setDefaultAddress(userId, addressId) {
+    const user = await User.findById(userId);
+    if (!user) throw new Error('User not found');
+
+    user.shippingAddresses.forEach(addr => {
+      addr.isDefault = addr._id.toString() === addressId;
+    });
+
+    await user.save();
+    return user;
+  }
 }
 
 module.exports = new UserService();

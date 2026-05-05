@@ -81,7 +81,16 @@ const userSchema = new mongoose.Schema({
   isKycComplete: {
     type: Boolean,
     default: false
-  }
+  },
+  shippingAddresses: [{
+    name: { type: String, required: true, trim: true },
+    villageArea: { type: String, required: true, trim: true },
+    cityTehsil: { type: String, required: true, trim: true },
+    state: { type: String, trim: true },
+    pincode: { type: String, required: true, trim: true },
+    phoneNumber: { type: String, required: true, trim: true },
+    isDefault: { type: Boolean, default: false }
+  }]
 }, {
   timestamps: true
 });

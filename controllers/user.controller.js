@@ -68,3 +68,44 @@ exports.submitKyc = async (req, res, next) => {
     next(error);
   }
 };
+
+exports.addShippingAddress = async (req, res, next) => {
+  try {
+    const user = await userService.addShippingAddress(req.user._id, req.body);
+    res.json({
+      success: true,
+      message: 'Address added successfully',
+      addresses: user.shippingAddresses
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.deleteShippingAddress = async (req, res, next) => {
+  try {
+    const { addressId } = req.params;
+    const user = await userService.deleteShippingAddress(req.user._id, addressId);
+    res.json({
+      success: true,
+      message: 'Address deleted successfully',
+      addresses: user.shippingAddresses
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.setDefaultAddress = async (req, res, next) => {
+  try {
+    const { addressId } = req.params;
+    const user = await userService.setDefaultAddress(req.user._id, addressId);
+    res.json({
+      success: true,
+      message: 'Default address updated',
+      addresses: user.shippingAddresses
+    });
+  } catch (error) {
+    next(error);
+  }
+};
