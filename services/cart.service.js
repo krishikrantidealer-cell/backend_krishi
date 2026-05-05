@@ -4,7 +4,7 @@ const couponService = require('./coupon.service');
 
 class CartService {
   async getCart(userId) {
-    let cart = await Cart.findOne({ user: userId }).populate('items.product', 'title vendor images');
+    let cart = await Cart.findOne({ user: userId }).populate('items.product', 'title brandName technicalName vendor images variants');
     if (!cart) {
       cart = await Cart.create({ user: userId, items: [], totalAmount: 0 });
     }
