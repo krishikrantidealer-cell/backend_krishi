@@ -30,7 +30,11 @@ class CartService {
       );
 
       if (existingItemIndex > -1) {
-        cart.items[existingItemIndex].quantity += (v.quantity || 1);
+        if (v.isReplace) {
+          cart.items[existingItemIndex].quantity = (v.quantity || 1);
+        } else {
+          cart.items[existingItemIndex].quantity += (v.quantity || 1);
+        }
       } else {
         cart.items.push({
           product: productId,
