@@ -43,3 +43,15 @@ exports.getFavourites = async (req, res, next) => {
     next(error);
   }
 };
+
+exports.clearFavourites = async (req, res, next) => {
+  try {
+    await favouriteService.clearFavourites(req.user._id);
+    res.json({
+      success: true,
+      message: 'All favourites cleared successfully'
+    });
+  } catch (error) {
+    next(error);
+  }
+};

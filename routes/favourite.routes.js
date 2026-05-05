@@ -32,4 +32,7 @@ router.delete(
   favouriteController.removeFavourite
 );
 
+// Clear all favourites
+router.delete('/', favouriteController.clearFavourites);
+
 module.exports = router;

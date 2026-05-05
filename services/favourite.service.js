@@ -40,6 +40,10 @@ class FavouriteService {
       .populate('product', 'title vendor images variants availabilityStatus averageRating')
       .sort({ createdAt: -1 });
   }
+
+  async clearFavourites(userId) {
+    return await Favourite.deleteMany({ user: userId });
+  }
 }
 
 module.exports = new FavouriteService();
