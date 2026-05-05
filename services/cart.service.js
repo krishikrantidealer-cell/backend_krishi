@@ -119,6 +119,8 @@ class CartService {
       cart.freeItems = result.freeProductAdded ? [{ 
         name: result.freeProductAdded, 
         imageUrl: result.freeProductImage || null,
+        technicalName: result.freeProductTechnicalName || null,
+        variant: result.freeProductVariant || null,
         quantity: result.freeProductQuantity || 1,
         isFree: true 
       }] : [];

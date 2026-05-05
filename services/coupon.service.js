@@ -41,6 +41,8 @@ class CouponService {
     let discountAmount = 0;
     let freeProductAdded = null;
     let freeProductImage = null;
+    let freeProductTechnicalName = null;
+    let freeProductVariant = null;
 
     if (coupon.discountType === 'Percentage') {
       discountAmount = (currentTotal * coupon.discountValue) / 100;
@@ -50,7 +52,13 @@ class CouponService {
       const freeProduct = await Product.findById(coupon.freeProductId);
       if (freeProduct) {
         freeProductAdded = freeProduct.title;
-        freeProductImage = freeProduct.images && freeProduct.images.length > 0 ? freeProduct.images[0] : null;
+        freeProductImage = (freeProduct.images && freeProduct.images.length > 0) ? freeProduct.images[0] : null;
+        freeProductTechnicalName = freeProduct.technicalName || null;
+        
+        // If the product has variants, use the first one as default for the free gift
+        if (freeProduct.variants && freeProduct.variants.length > 0) {
+          freeProductVariant = freeProduct.variants[0].size || null;
+        }
       }
     }
 
@@ -69,6 +77,8 @@ class CouponService {
       finalAmount: finalAmount,
       freeProductAdded: freeProductAdded,
       freeProductImage: freeProductImage,
+      freeProductTechnicalName: freeProductTechnicalName,
+      freeProductVariant: freeProductVariant,
       freeProductQuantity: coupon.freeProductQuantity || 1,
       message: 'Coupon applied successfully'
     };
