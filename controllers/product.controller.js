@@ -79,7 +79,7 @@ exports.getHomeDiscovery = async (req, res, next) => {
       .lean();
 
     // 4. Fetch Banners
-    const bannersDocs = await Banner.find({ isActive: true, type: 'home' })
+    const bannersDocs = await Banner.find({ isActive: true, type: { $in: ['home', 'category', 'category_card'] } })
       .sort({ priority: 1 })
       .lean();
 
@@ -91,12 +91,14 @@ exports.getHomeDiscovery = async (req, res, next) => {
     ]);
 
     // Format banners to handle both single-doc arrays and multi-doc structures
-    let formattedBanners = [];
+    let formattedHomeBanners = [];
+    let formattedCategoryBanners = [];
+    let formattedCategoryCardBanners = [];
     bannersList.forEach(doc => {
       if (doc.homebanners && Array.isArray(doc.homebanners)) {
         doc.homebanners.forEach((url, index) => {
-          formattedBanners.push({
-            _id: `${doc._id}_${index}`,
+          formattedHomeBanners.push({
+            _id: `${doc._id}_home_${index}`,
             title: `Home Banner ${index + 1}`,
             imageUrl: url,
             priority: index,
@@ -105,8 +107,42 @@ exports.getHomeDiscovery = async (req, res, next) => {
             isActive: true
           });
         });
-      } else if (doc.imageUrl) {
-        formattedBanners.push(doc);
+      }
+      if (doc.categorybanners && Array.isArray(doc.categorybanners)) {
+        doc.categorybanners.forEach((url, index) => {
+          formattedCategoryBanners.push({
+            _id: `${doc._id}_category_${index}`,
+            title: `Category Banner ${index + 1}`,
+            imageUrl: url,
+            priority: index,
+            type: 'category',
+            redirectType: 'none',
+            isActive: true
+          });
+        });
+      }
+      if (doc.categorycardbanners && Array.isArray(doc.categorycardbanners)) {
+        doc.categorycardbanners.forEach((url, index) => {
+          formattedCategoryCardBanners.push({
+            _id: `${doc._id}_card_${index}`,
+            title: `Category Card Banner ${index + 1}`,
+            imageUrl: url,
+            priority: index,
+            type: 'category_card',
+            redirectType: 'none',
+            isActive: true
+          });
+        });
+      }
+      
+      if (doc.imageUrl) {
+        if (doc.type === 'home') {
+          formattedHomeBanners.push(doc);
+        } else if (doc.type === 'category') {
+          formattedCategoryBanners.push(doc);
+        } else if (doc.type === 'category_card') {
+          formattedCategoryCardBanners.push(doc);
+        }
       }
     });
 
@@ -128,7 +164,9 @@ exports.getHomeDiscovery = async (req, res, next) => {
 
     res.json({
       success: true,
-      banners: formattedBanners,
+      banners: formattedHomeBanners,
+      categoryBanners: formattedCategoryBanners,
+      categoryCardBanners: formattedCategoryCardBanners,
       categories,
       featuredProducts: featuredResult.products,
       collections: collectionsWithProducts.filter(c => c.products.length > 0)
