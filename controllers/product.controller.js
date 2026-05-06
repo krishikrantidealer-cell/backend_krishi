@@ -78,8 +78,8 @@ exports.getHomeDiscovery = async (req, res, next) => {
       .sort({ priority: -1, name: 1 })
       .lean();
 
-    // 4. Fetch Banners (including custom_collections)
-    const bannersDocs = await Banner.find({ isActive: true, type: { $in: ['home', 'category', 'category_card', 'custom_collections'] } })
+    // 4. Fetch Banners (including custom_collections, best_offers)
+    const bannersDocs = await Banner.find({ isActive: true, type: { $in: ['home', 'category', 'category_card', 'custom_collections', 'best_offers'] } })
       .sort({ priority: 1 })
       .lean();
 
@@ -97,6 +97,7 @@ exports.getHomeDiscovery = async (req, res, next) => {
     let formattedHomeBanners = [];
     let formattedCategoryBanners = [];
     let formattedCategoryCardBanners = [];
+    let bestOffersBanners = [];
     bannersList.forEach(doc => {
       if (doc.homebanners && Array.isArray(doc.homebanners)) {
         doc.homebanners.forEach((url, index) => {
@@ -137,6 +138,19 @@ exports.getHomeDiscovery = async (req, res, next) => {
           });
         });
       }
+      if (doc.bestoffersbanners && Array.isArray(doc.bestoffersbanners)) {
+        doc.bestoffersbanners.forEach((url, index) => {
+          bestOffersBanners.push({
+            _id: `${doc._id}_best_offer_${index}`,
+            title: `Best Offer Banner ${index + 1}`,
+            imageUrl: url,
+            priority: index,
+            type: 'best_offers',
+            redirectType: 'none',
+            isActive: true
+          });
+        });
+      }
       
       if (doc.imageUrl) {
         if (doc.type === 'home') {
@@ -145,6 +159,8 @@ exports.getHomeDiscovery = async (req, res, next) => {
           formattedCategoryBanners.push(doc);
         } else if (doc.type === 'category_card') {
           formattedCategoryCardBanners.push(doc);
+        } else if (doc.type === 'best_offers') {
+          bestOffersBanners.push(doc);
         }
       }
     });
