@@ -3,6 +3,7 @@ const { processAndUploadProductImage } = require('../utils/gcs');
 const mongoose = require('mongoose');
 const Collection = require('../models/Collection');
 const Product = require('../models/Product');
+const Banner = require('../models/Banner');
 
 // Get all products with cursor-based pagination
 exports.getProducts = async (req, res, next) => {
@@ -77,11 +78,37 @@ exports.getHomeDiscovery = async (req, res, next) => {
       .sort({ priority: -1, name: 1 })
       .lean();
 
-    const [categories, featuredResult, collections] = await Promise.all([
+    // 4. Fetch Banners
+    const bannersDocs = await Banner.find({ isActive: true, type: 'home' })
+      .sort({ priority: 1 })
+      .lean();
+
+    const [categories, featuredResult, collections, bannersList] = await Promise.all([
       categoriesPromise,
       featuredPromise,
-      collectionsPromise
+      collectionsPromise,
+      bannersDocs
     ]);
+
+    // Format banners to handle both single-doc arrays and multi-doc structures
+    let formattedBanners = [];
+    bannersList.forEach(doc => {
+      if (doc.homebanners && Array.isArray(doc.homebanners)) {
+        doc.homebanners.forEach((url, index) => {
+          formattedBanners.push({
+            _id: `${doc._id}_${index}`,
+            title: `Home Banner ${index + 1}`,
+            imageUrl: url,
+            priority: index,
+            type: 'home',
+            redirectType: 'none',
+            isActive: true
+          });
+        });
+      } else if (doc.imageUrl) {
+        formattedBanners.push(doc);
+      }
+    });
 
     // 4. Populate collections with products
     const collectionsWithProducts = await Promise.all(collections.map(async (col) => {
@@ -101,6 +128,7 @@ exports.getHomeDiscovery = async (req, res, next) => {
 
     res.json({
       success: true,
+      banners: formattedBanners,
       categories,
       featuredProducts: featuredResult.products,
       collections: collectionsWithProducts.filter(c => c.products.length > 0)

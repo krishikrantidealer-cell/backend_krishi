@@ -20,9 +20,14 @@ if (process.env.GCS_KEY_JSON) {
 } else if (process.env.NODE_ENV !== 'production') {
   // Option B: Load from File (ONLY for Local Development)
   try {
+    let keyPath = process.env.GCS_KEY_FILE_PATH || './config/gcs-key.json';
+    if (!path.isAbsolute(keyPath)) {
+      // Resolve relative to the backend root (which is one directory up from utils/)
+      keyPath = path.join(__dirname, '..', keyPath);
+    }
     storage = new Storage({
       projectId: process.env.GCS_PROJECT_ID || 'placeholder',
-      keyFilename: process.env.GCS_KEY_FILE_PATH || './config/gcs-key.json',
+      keyFilename: keyPath,
     });
   } catch (err) {
     console.error('Local GCS Key file not found:', err.message);

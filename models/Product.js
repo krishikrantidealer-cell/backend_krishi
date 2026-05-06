@@ -43,6 +43,12 @@ const productSchema = new mongoose.Schema({
   images: [{
     type: String
   }],
+  mediumImages: [{
+    type: String
+  }],
+  originalImages: [{
+    type: String
+  }],
   availabilityStatus: {
     type: String,
     enum: ['In Stock', 'Out of Stock', 'Limited Stock'],
@@ -86,7 +92,7 @@ const productSchema = new mongoose.Schema({
 });
 
 // Automatically calculate min/max price before saving
-productSchema.pre('save', function(next) {
+productSchema.pre('save', function() {
   if (this.variants && this.variants.length > 0) {
     const prices = this.variants.map(v => v.price);
     this.minPrice = Math.min(...prices);
@@ -95,7 +101,6 @@ productSchema.pre('save', function(next) {
     this.minPrice = 0;
     this.maxPrice = 0;
   }
-  next();
 });
 
 // Optimized Indexes for scalable loading

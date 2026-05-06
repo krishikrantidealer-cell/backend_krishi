@@ -51,6 +51,8 @@ const cartSchema = new mongoose.Schema({
   freeItems: [{
     name: { type: String, trim: true },
     imageUrl: { type: String, trim: true },
+    technicalName: { type: String, trim: true },
+    variant: { type: String, trim: true },
     quantity: { type: Number, default: 1 },
     isFree: { type: Boolean, default: true }
   }]
