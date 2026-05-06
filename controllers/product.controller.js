@@ -78,8 +78,8 @@ exports.getHomeDiscovery = async (req, res, next) => {
       .sort({ priority: -1, name: 1 })
       .lean();
 
-    // 4. Fetch Banners
-    const bannersDocs = await Banner.find({ isActive: true, type: { $in: ['home', 'category', 'category_card'] } })
+    // 4. Fetch Banners (including custom_collections)
+    const bannersDocs = await Banner.find({ isActive: true, type: { $in: ['home', 'category', 'category_card', 'custom_collections'] } })
       .sort({ priority: 1 })
       .lean();
 
@@ -89,6 +89,9 @@ exports.getHomeDiscovery = async (req, res, next) => {
       collectionsPromise,
       bannersDocs
     ]);
+
+    // Filter custom collections banners
+    const customCollectionBanners = bannersList.filter(b => b.type === 'custom_collections');
 
     // Format banners to handle both single-doc arrays and multi-doc structures
     let formattedHomeBanners = [];
@@ -146,7 +149,7 @@ exports.getHomeDiscovery = async (req, res, next) => {
       }
     });
 
-    // 4. Populate collections with products
+    // 5. Populate collections with products and map custom collection banners
     const collectionsWithProducts = await Promise.all(collections.map(async (col) => {
       const products = await Product.find({ 
         assignedCollections: col.name,
@@ -156,8 +159,29 @@ exports.getHomeDiscovery = async (req, res, next) => {
       .limit(10)
       .lean();
 
+      // Find matching custom collection banner to set as the shopbycrop/collection bannerImage
+      let bannerImage = col.bannerImage;
+      if ((!bannerImage || bannerImage === 'undefined' || bannerImage === 'null') && customCollectionBanners.length > 0) {
+        const colNameLower = col.name.trim().toLowerCase();
+        const matchingBanner = customCollectionBanners.find(b => {
+          const titleLower = (b.title || '').toLowerCase();
+          const targetLower = (b.redirectTarget || '').toLowerCase();
+          const urlLower = (b.imageUrl || '').toLowerCase();
+          return titleLower.includes(colNameLower) || 
+                 targetLower === colNameLower || 
+                 urlLower.includes(`/${colNameLower}.`) || 
+                 urlLower.includes(`/${colNameLower}%`) ||
+                 urlLower.includes(`_${colNameLower}`) ||
+                 urlLower.includes(colNameLower);
+        });
+        if (matchingBanner) {
+          bannerImage = matchingBanner.imageUrl;
+        }
+      }
+
       return {
         ...col,
+        bannerImage,
         products
       };
     }));
@@ -167,6 +191,7 @@ exports.getHomeDiscovery = async (req, res, next) => {
       banners: formattedHomeBanners,
       categoryBanners: formattedCategoryBanners,
       categoryCardBanners: formattedCategoryCardBanners,
+      bestOffersBanners,
       categories,
       featuredProducts: featuredResult.products,
       collections: collectionsWithProducts.filter(c => c.products.length > 0)
