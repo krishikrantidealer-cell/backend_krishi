@@ -38,9 +38,11 @@ class ProductService {
     // Create a unique cache key based on filters and options
     const cacheKey = `products:${JSON.stringify(filters)}:${cursor}:${limit}:${search}`;
 
-    // 1. Try to get from cache
-    const cachedData = await cacheService.get(cacheKey);
-    if (cachedData) return cachedData;
+    // 1. Try to get from cache (skip for search queries — regex results shouldn't be cached)
+    if (!search) {
+      const cachedData = await cacheService.get(cacheKey);
+      if (cachedData) return cachedData;
+    }
 
     const query = { ...filters };
 
@@ -49,13 +51,35 @@ class ProductService {
     }
 
     if (search) {
-      query.$text = { $search: search };
+      // Sanitize input to prevent ReDoS attacks by escaping regex special chars
+      const sanitize = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+      // Split into tokens and strip empty strings (handles multiple spaces)
+      const tokens = search.trim().split(/\s+/).filter(Boolean).map(sanitize);
+
+      // AND logic: every token must match at least one searchable field
+      const tokenConditions = tokens.map((token) => {
+        const re = new RegExp(token, 'i');
+        return {
+          $or: [
+            { title: re },
+            { brandName: re },
+            { technicalName: re },
+            { vendor: re },
+          ],
+        };
+      });
+
+      query.$and = [...(query.$and || []), ...tokenConditions];
     }
+
+    // Sort by title alphabetically for search results; by _id for regular listing
+    const sortOrder = search ? { title: 1 } : { _id: 1 };
 
     // 2. Fallback to MongoDB
     const products = await Product.find(query)
       .select('title brandName technicalName vendor thumbnail variants images availabilityStatus averageRating numReviews minPrice maxPrice')
-      .sort({ _id: 1 })
+      .sort(sortOrder)
       .limit(limit);
 
     const nextCursor = products.length > 0 ? products[products.length - 1]._id : null;
@@ -66,8 +90,10 @@ class ProductService {
       limit
     };
 
-    // 3. Store in cache for 5 minutes
-    await cacheService.set(cacheKey, result, 300);
+    // 3. Store in cache for 5 minutes (skip for search queries)
+    if (!search) {
+      await cacheService.set(cacheKey, result, 300);
+    }
 
     return result;
   }
