@@ -150,6 +150,16 @@ class UserService {
     await user.save();
     return user;
   }
+
+  async updateFcmToken(userId, fcmToken) {
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { $set: { fcmToken } },
+      { new: true }
+    );
+    if (!user) throw new Error('User not found');
+    return user;
+  }
 }
 
 module.exports = new UserService();

@@ -1,10 +1,19 @@
 const orderService = require('../services/order.service');
+const notificationService = require('../services/notification.service');
 
 exports.createOrder = async (req, res, next) => {
   try {
     const { paymentMethod, shippingAddress } = req.body;
     const order = await orderService.createOrderFromCart(req.user._id, paymentMethod, shippingAddress);
     
+    // Trigger Utility Notification Automatically
+    await notificationService.sendUtilityNotification(
+      req.user._id,
+      "Order Confirmed! 🎉",
+      `Your order #${order._id.toString().substring(0, 6)} has been placed successfully.`,
+      "/dashboard" 
+    );
+
     res.status(201).json({ 
       success: true, 
       message: 'Order placed successfully', 

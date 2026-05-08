@@ -90,7 +90,11 @@ const userSchema = new mongoose.Schema({
     pincode: { type: String, required: true, trim: true },
     phoneNumber: { type: String, required: true, trim: true },
     isDefault: { type: Boolean, default: false }
-  }]
+  }],
+  fcmToken: {
+    type: String,
+    trim: true
+  }
 }, {
   timestamps: true
 });

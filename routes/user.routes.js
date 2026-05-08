@@ -11,6 +11,12 @@ const router = express.Router();
 // All user routes are protected
 router.use(protect);
 
+// Save FCM Token for notifications
+router.post('/fcm-token', userController.updateFcmToken);
+
+// Fetch persistent notification history
+router.get('/notifications', userController.getMyNotifications);
+
 router.get('/profile', userController.getProfile);
 
 // Edit Profile API

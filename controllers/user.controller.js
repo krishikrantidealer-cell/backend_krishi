@@ -1,5 +1,6 @@
 const userService = require('../services/user.service');
 const { processAndUploadKycDocument } = require('../utils/gcs');
+const Notification = require('../models/Notification');
 
 exports.getProfile = async (req, res, next) => {
   try {
@@ -105,6 +106,31 @@ exports.setDefaultAddress = async (req, res, next) => {
       message: 'Default address updated',
       addresses: user.shippingAddresses
     });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.updateFcmToken = async (req, res, next) => {
+  try {
+    const { fcmToken } = req.body;
+    if (!fcmToken) {
+      return res.status(400).json({ success: false, message: 'fcmToken is required' });
+    }
+    await userService.updateFcmToken(req.user._id, fcmToken);
+    res.json({ success: true, message: 'FCM Token updated successfully' });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.getMyNotifications = async (req, res, next) => {
+  try {
+    const notifications = await Notification.find({ user: req.user._id })
+      .sort({ createdAt: -1 })
+      .limit(50);
+      
+    res.json({ success: true, notifications });
   } catch (error) {
     next(error);
   }
