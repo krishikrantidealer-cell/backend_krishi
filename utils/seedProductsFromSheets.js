@@ -9,9 +9,25 @@ const Collection = require('../models/Collection');
 const MONGO_URI = process.env.MONGODB_URI;
 const SHEET_URL = 'https://docs.google.com/spreadsheets/d/15XLeb_EkYW6Mn0Vohj9RxTMoXyWk8aLk2IMJg9tTJnU/export?format=csv&gid=0';
 
+function getMultiplier(sizeStr) {
+  const clean = sizeStr.toLowerCase().replace(/\s+/g, '');
+
+  // Match number followed by unit (ml, lit, litre, l, gm, gram, g, kg, kilogram, k)
+  const match = clean.match(/^([\d.]+)(ml|lit|litre|l|gm|gram|g|kg|kilogram|k)$/);
+  if (!match) return 1.0;
+
+  const value = parseFloat(match[1]);
+  const unit = match[2];
+
+  if (unit === 'ml' || unit === 'gm' || unit === 'gram' || unit === 'g') {
+    return value / 1000.0;
+  }
+  return value; // litre, kg, etc. has multiplier = value
+}
+
 function guessCategory(catStr, title = '', body = '') {
   const s = (catStr || '').trim().toLowerCase();
-  
+
   // 1. Check the explicit Category column first
   if (s.includes('herbicide')) return 'Herbicides';
   if (s.includes('insecticide')) return 'Insecticides';
@@ -71,8 +87,8 @@ async function seedData() {
             description: cleanRow['Product Body'] || '',
             vendor: cleanRow['Vendor'] || 'Krishikranti',
             _tempCategoryName: guessCategory(
-              cleanRow['Category'], 
-              cleanRow['Product Title'] || brandName, 
+              cleanRow['Category'],
+              cleanRow['Product Title'] || brandName,
               cleanRow['Product Body'] || ''
             ),
             _tempSubCategoryName: cleanRow['Sub-Category'] || 'Chemical',
@@ -104,30 +120,36 @@ async function seedData() {
                 const priceMatch = priceStr.match(/[\d.]+/);
                 const mrpMatch = mrpStr.match(/[\d.]+/);
 
-                const price = priceMatch ? parseFloat(priceMatch[0]) : 0;
-                const compareAtPrice = mrpMatch ? parseFloat(mrpMatch[0]) : 0;
+                const rawPrice = priceMatch ? parseFloat(priceMatch[0]) : 0;
+                const rawCompareAtPrice = mrpMatch ? parseFloat(mrpMatch[0]) : 0;
 
-                if (price > 0) {
-                  // We need to associate the size correctly. 
-                  // In this sheet, it seems each row has one 'Packing Size' and then multiple 'Variant X' columns?
-                  // Wait, looking at the header: 'Packing Sizes', 'Variant 1 (Selling Price) 10litre', 'Variant 1 (MRP)'
-                  // It seems 'Packing Sizes' column might be redundant if the variant column itself has the size?
-                  // Or maybe Variant 1 always corresponds to the first size, Variant 2 to the second?
-                  // Let's assume for now that if multiple variants exist in one row, they might use the same size or different ones.
-                  // But usually, one row = one size, and then different price tiers? No, that doesn't make sense.
-                  // Most likely: One row can have multiple variants (sizes/prices).
-
-                  // Let's try to extract size from the header if possible
-                  let variantSize = size;
-                  const sizeInHeaderMatch = sellingPriceKey.match(/\d+\s*(?:litre|ml|kg|gm|gram|packet)/i);
+                if (rawPrice > 0) {
+                  // 1. Extract the tier description from the header (e.g. "10litre", "30litre", "50kg")
+                  let tierName = '';
+                  const sizeInHeaderMatch = sellingPriceKey.match(/\d+\s*(?:litre|ml|kg|gm|gram|packet|l)/i);
                   if (sizeInHeaderMatch) {
-                    variantSize = sizeInHeaderMatch[0];
+                    tierName = sizeInHeaderMatch[0];
                   }
+
+                  // Clean up tier units if product is solid (replace litre/l with kg)
+                  const isSolid = /gm|gram|g|kg|kilogram|k/i.test(size);
+                  if (isSolid && tierName) {
+                    tierName = tierName.replace(/litre|lit|l/gi, 'kg');
+                  }
+
+                  // 2. Compose a unique size representation: "100ml (10kg)"
+                  const variantSize = tierName ? `${size} (${tierName})` : size;
+
+                  // 3. Keep the exact raw rate as the price per Liter/Kg (e.g. 1020 and 2700)
+                  const calculatedPrice = rawPrice;
+                  const calculatedCompareAtPrice = rawCompareAtPrice > 0 ? rawCompareAtPrice : undefined;
 
                   currentProduct.variants.push({
                     size: variantSize,
-                    price: price,
-                    compareAtPrice: compareAtPrice > price ? compareAtPrice : undefined
+                    price: calculatedPrice,
+                    compareAtPrice: calculatedCompareAtPrice && calculatedCompareAtPrice > calculatedPrice
+                      ? calculatedCompareAtPrice
+                      : undefined
                   });
                 }
               }

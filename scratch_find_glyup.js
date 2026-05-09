@@ -6,10 +6,10 @@ async function findGlyup() {
   try {
     const response = await axios.get(SHEET_URL);
     const lines = response.data.split('\n');
-    console.log('Searching for GLYUP...');
+    console.log('Searching for Grow Genius...');
     for (let i = 0; i < lines.length; i++) {
-      if (lines[i].includes('GLYUP')) {
-        console.log(`Found GLYUP at line ${i}:`);
+      if (lines[i].toLowerCase().includes('grow genius')) {
+        console.log(`Found Grow Genius at line ${i}:`);
         console.log(lines[i]);
       }
     }

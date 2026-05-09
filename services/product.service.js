@@ -102,7 +102,7 @@ class ProductService {
    * Get Full Product Details (Combined)
    */
   async getProductById(id) {
-    const product = await Product.findById(id).lean();
+    const product = await Product.findById(id);
     if (!product) throw new Error('Product not found');
 
     return product;

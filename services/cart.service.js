@@ -7,7 +7,27 @@ class CartService {
     let cart = await Cart.findOne({ user: userId }).populate('items.product', 'title brandName technicalName vendor images variants');
     if (!cart) {
       cart = await Cart.create({ user: userId, items: [], totalAmount: 0 });
+      return cart;
     }
+
+    // Safeguard: Sync cart item prices with the latest product variant prices in case of updates
+    let updated = false;
+    for (const item of cart.items) {
+      if (item.product && item.product.variants) {
+        const variant = item.product.variants.id(item.variantId);
+        if (variant && item.price !== variant.price) {
+          item.price = variant.price;
+          updated = true;
+        }
+      }
+    }
+
+    if (updated) {
+      this.calculateTotal(cart);
+      await this.recalculateCoupon(cart, userId);
+      await cart.save();
+    }
+
     return cart;
   }
 
@@ -116,13 +136,13 @@ class CartService {
       const result = await couponService.applyCoupon(userId, cart.appliedCoupon, cart.totalAmount);
       cart.discountAmount = result.discountAmount;
       cart.finalAmount = result.finalAmount;
-      cart.freeItems = result.freeProductAdded ? [{ 
-        name: result.freeProductAdded, 
+      cart.freeItems = result.freeProductAdded ? [{
+        name: result.freeProductAdded,
         imageUrl: result.freeProductImage || null,
         technicalName: result.freeProductTechnicalName || null,
         variant: result.freeProductVariant || null,
         quantity: result.freeProductQuantity || 1,
-        isFree: true 
+        isFree: true
       }] : [];
     } catch (error) {
       // If the cart no longer meets the coupon requirements (e.g. minimum purchase), remove it
@@ -143,7 +163,7 @@ class CartService {
     cart.appliedCoupon = code.toUpperCase();
     await this.recalculateCoupon(cart, userId);
     await cart.save();
-    
+
     return await this.getCart(userId);
   }
 

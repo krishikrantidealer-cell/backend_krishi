@@ -1,10 +1,41 @@
 const mongoose = require('mongoose');
 
+function getMultiplier(sizeStr) {
+  if (!sizeStr) return 1.0;
+  // Extract the booking tier volume inside parentheses, e.g. "10" from "100ml (10litre)"
+  const match = sizeStr.match(/\(([\d.]+)\s*(?:litre|lit|l|kg|gm|gram|g|k)\)/i);
+  if (match) {
+    return parseFloat(match[1]);
+  }
+  return 1.0;
+}
+
 const variantSchema = new mongoose.Schema({
   size: { type: String, required: true },
-  price: { type: Number, required: true, min: 0 },
-  compareAtPrice: { type: Number, min: 0 },
+  price: { 
+    type: Number, 
+    required: true, 
+    min: 0,
+    get: function(v) {
+      if (!this || !this.size) return v;
+      const multiplier = getMultiplier(this.size);
+      return parseFloat((v * multiplier).toFixed(2));
+    }
+  },
+  compareAtPrice: { 
+    type: Number, 
+    min: 0,
+    get: function(v) {
+      if (!v) return v;
+      if (!this || !this.size) return v;
+      const multiplier = getMultiplier(this.size);
+      return parseFloat((v * multiplier).toFixed(2));
+    }
+  },
   weight: { type: Number } // in kg or as specified
+}, {
+  toJSON: { getters: true },
+  toObject: { getters: true }
 });
 
 const productSchema = new mongoose.Schema({
@@ -88,7 +119,9 @@ const productSchema = new mongoose.Schema({
     of: String
   }
 }, {
-  timestamps: true
+  timestamps: true,
+  toJSON: { getters: true },
+  toObject: { getters: true }
 });
 
 // Automatically calculate min/max price before saving
