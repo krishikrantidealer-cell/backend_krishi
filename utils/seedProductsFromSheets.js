@@ -107,51 +107,45 @@ async function seedData() {
           const size = cleanRow['Packing Sizes'] ? cleanRow['Packing Sizes'].trim() : '';
           if (size && size !== 'Packing Sizes') {
             const keys = Object.keys(cleanRow);
+            const sellingPriceKey = keys.find(k => k.trim().includes('Variant (Selling Price)'));
+            const mrpKey = keys.find(k => k.trim().includes('Variant (MRP)'));
 
-            // Check all potential variants (1 to 4)
-            for (let i = 1; i <= 4; i++) {
-              const sellingPriceKey = keys.find(k => k.includes(`Variant ${i}`) && k.toLowerCase().includes('selling'));
-              const mrpKey = keys.find(k => k.includes(`Variant ${i}`) && k.toLowerCase().includes('mrp'));
+            if (sellingPriceKey) {
+              const priceStr = cleanRow[sellingPriceKey] || '';
+              const mrpStr = mrpKey ? cleanRow[mrpKey] : '';
 
-              if (sellingPriceKey) {
-                const priceStr = cleanRow[sellingPriceKey] || '';
-                const mrpStr = mrpKey ? cleanRow[mrpKey] : '';
+              const priceMatch = priceStr.match(/[\d.]+/);
+              const mrpMatch = mrpStr.match(/[\d.]+/);
 
-                const priceMatch = priceStr.match(/[\d.]+/);
-                const mrpMatch = mrpStr.match(/[\d.]+/);
+              const rawPrice = priceMatch ? parseFloat(priceMatch[0]) : 0;
+              const rawCompareAtPrice = mrpMatch ? parseFloat(mrpMatch[0]) : 0;
 
-                const rawPrice = priceMatch ? parseFloat(priceMatch[0]) : 0;
-                const rawCompareAtPrice = mrpMatch ? parseFloat(mrpMatch[0]) : 0;
+              if (rawPrice > 0) {
+                // 1. Extract the tier description from the header (e.g. "10litre", "10kg")
+                let tierName = '';
+                const tierNumMatch = sellingPriceKey.match(/(\d+)\s*(?:Litre|Kg)/i);
+                const tierNum = tierNumMatch ? tierNumMatch[1] : '10';
 
-                if (rawPrice > 0) {
-                  // 1. Extract the tier description from the header (e.g. "10litre", "30litre", "50kg")
-                  let tierName = '';
-                  const sizeInHeaderMatch = sellingPriceKey.match(/\d+\s*(?:litre|ml|kg|gm|gram|packet|l)/i);
-                  if (sizeInHeaderMatch) {
-                    tierName = sizeInHeaderMatch[0];
-                  }
-
-                  // Clean up tier units if product is solid (replace litre/l with kg)
-                  const isSolid = /gm|gram|g|kg|kilogram|k/i.test(size);
-                  if (isSolid && tierName) {
-                    tierName = tierName.replace(/litre|lit|l/gi, 'kg');
-                  }
-
-                  // 2. Compose a unique size representation: "100ml (10kg)"
-                  const variantSize = tierName ? `${size} (${tierName})` : size;
-
-                  // 3. Keep the exact raw rate as the price per Liter/Kg (e.g. 1020 and 2700)
-                  const calculatedPrice = rawPrice;
-                  const calculatedCompareAtPrice = rawCompareAtPrice > 0 ? rawCompareAtPrice : undefined;
-
-                  currentProduct.variants.push({
-                    size: variantSize,
-                    price: calculatedPrice,
-                    compareAtPrice: calculatedCompareAtPrice && calculatedCompareAtPrice > calculatedPrice
-                      ? calculatedCompareAtPrice
-                      : undefined
-                  });
+                const isSolid = /kg|gm|gram|g/i.test(priceStr) || /gm|gram|g|kg/i.test(size);
+                if (isSolid) {
+                  tierName = `${tierNum}kg`;
+                } else {
+                  tierName = `${tierNum}litre`;
                 }
+
+                // 2. Compose a unique size representation: "100ml (10litre)"
+                const variantSize = tierName ? `${size} (${tierName})` : size;
+
+                const calculatedPrice = rawPrice;
+                const calculatedCompareAtPrice = rawCompareAtPrice > 0 ? rawCompareAtPrice : undefined;
+
+                currentProduct.variants.push({
+                  size: variantSize,
+                  price: calculatedPrice,
+                  compareAtPrice: calculatedCompareAtPrice && calculatedCompareAtPrice > calculatedPrice
+                    ? calculatedCompareAtPrice
+                    : undefined
+                });
               }
             }
           }
