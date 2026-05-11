@@ -60,9 +60,10 @@ class CartService {
         if (!variant) continue; // Skip if invalid variant ID
 
         // Check if item already exists in cart with same variant
-        const existingItemIndex = cart.items.findIndex(
-          item => item.product._id.toString() === productId && item.variantId.toString() === v.variantId
-        );
+        const existingItemIndex = cart.items.findIndex(item => {
+          const itemProdId = item.product && item.product._id ? item.product._id.toString() : (item.product ? item.product.toString() : '');
+          return itemProdId === productId && item.variantId.toString() === v.variantId;
+        });
 
         if (existingItemIndex > -1) {
           if (v.isReplace) {
