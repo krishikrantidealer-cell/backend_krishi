@@ -107,46 +107,44 @@ async function seedData() {
           const size = cleanRow['Packing Sizes'] ? cleanRow['Packing Sizes'].trim() : '';
           if (size && size !== 'Packing Sizes') {
             const keys = Object.keys(cleanRow);
-            const sellingPriceKey = keys.find(k => k.trim().includes('Variant (Selling Price)'));
-            const mrpKey = keys.find(k => k.trim().includes('Variant (MRP)'));
+            const v1Key = keys.find(k => k.includes('Variant 1 (Selling Price)'));
+            const v2Key = keys.find(k => k.includes('Variant 2 (Selling Price)'));
+            const v3Key = keys.find(k => k.includes('Variant 3 (Selling Price)'));
+            const mrpKey = keys.find(k => k.includes('Variant (MRP)'));
 
-            if (sellingPriceKey) {
-              const priceStr = cleanRow[sellingPriceKey] || '';
-              const mrpStr = mrpKey ? cleanRow[mrpKey] : '';
+            const v1Str = v1Key ? cleanRow[v1Key] : '';
+            const v2Str = v2Key ? cleanRow[v2Key] : '';
+            const v3Str = v3Key ? cleanRow[v3Key] : '';
+            const mrpStr = mrpKey ? cleanRow[mrpKey] : '';
 
-              const priceMatch = priceStr.match(/[\d.]+/);
-              const mrpMatch = mrpStr.match(/[\d.]+/);
+            const v1Match = v1Str ? v1Str.match(/[\d.]+/) : null;
+            const v2Match = v2Str ? v2Str.match(/[\d.]+/) : null;
+            const v3Match = v3Str ? v3Str.match(/[\d.]+/) : null;
+            const mrpMatch = mrpStr ? mrpStr.match(/[\d.]+/) : null;
 
-              const rawPrice = priceMatch ? parseFloat(priceMatch[0]) : 0;
-              const rawCompareAtPrice = mrpMatch ? parseFloat(mrpMatch[0]) : 0;
+            const v1PriceLitre = v1Match ? parseFloat(v1Match[0]) : 0;
+            // Fallback tiers if subsequent are empty
+            const v2PriceLitre = v2Match ? parseFloat(v2Match[0]) : v1PriceLitre;
+            const v3PriceLitre = v3Match ? parseFloat(v3Match[0]) : v2PriceLitre;
+            const mrpLitre = mrpMatch ? parseFloat(mrpMatch[0]) : 0;
 
-              if (rawPrice > 0) {
-                // 1. Extract the tier description from the header (e.g. "10litre", "10kg")
-                let tierName = '';
-                const tierNumMatch = sellingPriceKey.match(/(\d+)\s*(?:Litre|Kg)/i);
-                const tierNum = tierNumMatch ? tierNumMatch[1] : '10';
+            if (v1PriceLitre > 0) {
+              const packVolume = getMultiplier(size);
+              const price10_30 = parseFloat((v1PriceLitre * packVolume).toFixed(2));
+              const price30_50 = parseFloat((v2PriceLitre * packVolume).toFixed(2));
+              const price50_plus = parseFloat((v3PriceLitre * packVolume).toFixed(2));
+              const price = price10_30; // default baseline price
+              const compareAtPrice = mrpLitre > 0 ? parseFloat((mrpLitre * packVolume).toFixed(2)) : undefined;
 
-                const isSolid = /kg|gm|gram|g/i.test(priceStr) || /gm|gram|g|kg/i.test(size);
-                if (isSolid) {
-                  tierName = `${tierNum}kg`;
-                } else {
-                  tierName = `${tierNum}litre`;
-                }
-
-                // 2. Compose a unique size representation: "100ml (10litre)"
-                const variantSize = tierName ? `${size} (${tierName})` : size;
-
-                const calculatedPrice = rawPrice;
-                const calculatedCompareAtPrice = rawCompareAtPrice > 0 ? rawCompareAtPrice : undefined;
-
-                currentProduct.variants.push({
-                  size: variantSize,
-                  price: calculatedPrice,
-                  compareAtPrice: calculatedCompareAtPrice && calculatedCompareAtPrice > calculatedPrice
-                    ? calculatedCompareAtPrice
-                    : undefined
-                });
-              }
+              currentProduct.variants.push({
+                size: size, // Clean variant size e.g. "100ml" (no trailing parentheses)
+                price: price,
+                compareAtPrice: compareAtPrice && compareAtPrice > price ? compareAtPrice : undefined,
+                price10_30: price10_30,
+                price30_50: price30_50,
+                price50_plus: price50_plus,
+                packVolume: packVolume
+              });
             }
           }
         }
