@@ -96,7 +96,8 @@ class CartService {
       this.calculateTotal(cart);
       await this.recalculateCoupon(cart, userId);
       await cart.save();
-      return await this.getCart(userId);
+      await cart.populate('items.product', 'title brandName technicalName vendor images variants');
+      return cart;
     });
   }
 
@@ -113,11 +114,11 @@ class CartService {
       } else {
         cart.items[itemIndex].quantity = quantity;
       }
-
       this.calculateTotal(cart);
       await this.recalculateCoupon(cart, userId);
       await cart.save();
-      return await this.getCart(userId);
+      await cart.populate('items.product', 'title brandName technicalName vendor images variants');
+      return cart;
     });
   }
 
@@ -134,7 +135,8 @@ class CartService {
       this.calculateTotal(cart);
       await this.recalculateCoupon(cart, userId);
       await cart.save();
-      return await this.getCart(userId);
+      await cart.populate('items.product', 'title brandName technicalName vendor images variants');
+      return cart;
     });
   }
 
@@ -168,7 +170,7 @@ class CartService {
 
     try {
       // Re-validate coupon against the NEW cart total
-      const result = await couponService.applyCoupon(userId, cart.appliedCoupon, cart.totalAmount);
+      const result = await couponService.applyCoupon(userId, cart.appliedCoupon, cart.totalAmount, cart);
       cart.discountAmount = result.discountAmount;
       cart.finalAmount = result.finalAmount;
       cart.freeItems = result.freeProductAdded ? [{
@@ -194,13 +196,13 @@ class CartService {
       if (!cart || cart.items.length === 0) throw new Error('Cart is empty');
 
       // Test if coupon is valid before saving
-      await couponService.applyCoupon(userId, code, cart.totalAmount);
+      await couponService.applyCoupon(userId, code, cart.totalAmount, cart);
 
       cart.appliedCoupon = code.toUpperCase();
       await this.recalculateCoupon(cart, userId);
       await cart.save();
-
-      return await this.getCart(userId);
+      await cart.populate('items.product', 'title brandName technicalName vendor images variants');
+      return cart;
     });
   }
 
@@ -214,8 +216,8 @@ class CartService {
       cart.finalAmount = cart.totalAmount;
       cart.freeItems = [];
       await cart.save();
-
-      return await this.getCart(userId);
+      await cart.populate('items.product', 'title brandName technicalName vendor images variants');
+      return cart;
     });
   }
 }

@@ -9,15 +9,15 @@ class CouponService {
     return await Coupon.find({ isActive: true });
   }
 
-  async applyCoupon(userId, code, cartTotalOverride = null) {
+  async applyCoupon(userId, code, cartTotalOverride = null, existingCart = null) {
     const coupon = await Coupon.findOne({ code: code.toUpperCase(), isActive: true });
     
     if (!coupon) {
       throw new Error('Invalid or expired coupon code');
     }
 
-    // 1. Get the user's cart
-    const cart = await Cart.findOne({ user: userId }).populate('items.product');
+    // 1. Get the user's cart (use existingCart if available, and don't populate items.product as it is not needed here)
+    const cart = existingCart || await Cart.findOne({ user: userId });
     if (!cart || cart.items.length === 0) {
       throw new Error('Your cart is empty');
     }
