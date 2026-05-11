@@ -153,15 +153,15 @@ class CartService {
           const packVolume = variant.packVolume || 1.0;
           const totalVolume = packVolume * item.quantity;
           let correctPrice = variant.price;
-          
-          if (totalVolume >= 50.0) {
+
+          if (totalVolume > 50.0) {
             correctPrice = variant.price50_plus || variant.price;
-          } else if (totalVolume >= 30.0) {
+          } else if (totalVolume > 30.0) {
             correctPrice = variant.price30_50 || variant.price;
           } else if (totalVolume >= 10.0) {
             correctPrice = variant.price10_30 || variant.price;
           }
-          
+
           item.price = correctPrice * packVolume;
         }
       }
