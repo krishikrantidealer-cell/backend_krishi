@@ -75,20 +75,28 @@ async function seedData() {
           cleanRow[key.trim()] = row[key];
         });
 
-        const brandName = cleanRow['Product Brand Name'] ? cleanRow['Product Brand Name'].trim() : '';
+        const keys = Object.keys(cleanRow);
+        const firstKey = keys[0];
+        
+        // Support flexible brand name columns (Product Brand Name, "7", or the very first column)
+        const brandNameRaw = cleanRow['Product Brand Name'] || cleanRow['7'] || (firstKey ? cleanRow[firstKey] : '');
+        const brandName = brandNameRaw ? brandNameRaw.trim() : '';
         const technicalName = cleanRow['Product Technical Name'] ? cleanRow['Product Technical Name'].trim() : '';
 
+        // Support Product Complete Title or Product Title
+        const productTitle = cleanRow['Product Complete Title'] || cleanRow['Product Title'] || brandName;
+
         // If brandName is present, it's a new product row
-        if (brandName && brandName !== 'Product Brand Name') {
+        if (brandName && brandName !== 'Product Brand Name' && brandName !== 'Product Brand Name') {
           currentProduct = {
             brandName: brandName,
             technicalName: technicalName,
-            title: cleanRow['Product Title'] || brandName,
+            title: productTitle,
             description: cleanRow['Product Body'] || '',
             vendor: cleanRow['Vendor'] || 'Krishikranti',
             _tempCategoryName: guessCategory(
               cleanRow['Category'],
-              cleanRow['Product Title'] || brandName,
+              productTitle,
               cleanRow['Product Body'] || ''
             ),
             _tempSubCategoryName: cleanRow['Sub-Category'] || 'Chemical',
@@ -122,19 +130,25 @@ async function seedData() {
             const v3Match = v3Str ? v3Str.match(/[\d.]+/) : null;
             const mrpMatch = mrpStr ? mrpStr.match(/[\d.]+/) : null;
 
-            const v1PriceLitre = v1Match ? parseFloat(v1Match[0]) : 0;
+            const v1Price = v1Match ? parseFloat(v1Match[0]) : 0;
             // Fallback tiers if subsequent are empty
-            const v2PriceLitre = v2Match ? parseFloat(v2Match[0]) : v1PriceLitre;
-            const v3PriceLitre = v3Match ? parseFloat(v3Match[0]) : v2PriceLitre;
-            const mrpLitre = mrpMatch ? parseFloat(mrpMatch[0]) : 0;
+            const v2Price = v2Match ? parseFloat(v2Match[0]) : v1Price;
+            const v3Price = v3Match ? parseFloat(v3Match[0]) : v2Price;
+            const mrpPrice = mrpMatch ? parseFloat(mrpMatch[0]) : 0;
 
-            if (v1PriceLitre > 0) {
-              const packVolume = getMultiplier(size);
-              const price10_30 = parseFloat((v1PriceLitre * packVolume).toFixed(2));
-              const price30_50 = parseFloat((v2PriceLitre * packVolume).toFixed(2));
-              const price50_plus = parseFloat((v3PriceLitre * packVolume).toFixed(2));
+            if (v1Price > 0) {
+              // Parse packVolume from Base Packing column, fallback to multiplier of pack size
+              const basePackingStr = cleanRow['Base Packing'] ? cleanRow['Base Packing'].trim() : '';
+              const packVolume = basePackingStr ? getMultiplier(basePackingStr) : getMultiplier(size);
+
+              // Use direct parsed sheet prices (do not multiply by getMultiplier(size))
+              const price10_30 = parseFloat(v1Price.toFixed(2));
+              const price30_50 = parseFloat(v2Price.toFixed(2));
+              const price50_plus = parseFloat(v3Price.toFixed(2));
               const price = price10_30; // default baseline price
-              const compareAtPrice = mrpLitre > 0 ? parseFloat((mrpLitre * packVolume).toFixed(2)) : undefined;
+              
+              // Compare At Price / MRP
+              const compareAtPrice = mrpPrice > 0 ? parseFloat(mrpPrice.toFixed(2)) : undefined;
 
               currentProduct.variants.push({
                 size: size, // Clean variant size e.g. "100ml" (no trailing parentheses)

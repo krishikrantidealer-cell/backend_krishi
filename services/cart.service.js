@@ -37,23 +37,10 @@ class CartService {
       return cart;
     }
 
-    // Safeguard: Sync cart item prices with the latest product variant prices in case of updates
-    let updated = false;
-    for (const item of cart.items) {
-      if (item.product && item.product.variants) {
-        const variant = item.product.variants.id(item.variantId);
-        if (variant && item.price !== variant.price) {
-          item.price = variant.price;
-          updated = true;
-        }
-      }
-    }
-
-    if (updated) {
-      this.calculateTotal(cart);
-      await this.recalculateCoupon(cart, userId);
-      await cart.save();
-    }
+    // Always recalculate dynamic tier prices on fetch to ensure accuracy
+    this.calculateTotal(cart);
+    await this.recalculateCoupon(cart, userId);
+    await cart.save();
 
     return cart;
   }
@@ -63,7 +50,7 @@ class CartService {
       const product = await Product.findById(productId);
       if (!product) throw new Error('Product not found');
 
-      let cart = await Cart.findOne({ user: userId });
+      let cart = await Cart.findOne({ user: userId }).populate('items.product', 'title brandName technicalName vendor images variants');
       if (!cart) {
         cart = new Cart({ user: userId, items: [], totalAmount: 0 });
       }
@@ -74,7 +61,7 @@ class CartService {
 
         // Check if item already exists in cart with same variant
         const existingItemIndex = cart.items.findIndex(
-          item => item.product.toString() === productId && item.variantId.toString() === v.variantId
+          item => item.product._id.toString() === productId && item.variantId.toString() === v.variantId
         );
 
         if (existingItemIndex > -1) {
@@ -93,17 +80,19 @@ class CartService {
         }
       }
 
+      // Repopulate newly added products so calculateTotal can read variants
+      await cart.populate('items.product', 'title brandName technicalName vendor images variants');
+
       this.calculateTotal(cart);
       await this.recalculateCoupon(cart, userId);
       await cart.save();
-      await cart.populate('items.product', 'title brandName technicalName vendor images variants');
       return cart;
     });
   }
 
   async updateItemQuantity(userId, itemId, quantity) {
     return runLocked(userId, async () => {
-      const cart = await Cart.findOne({ user: userId });
+      const cart = await Cart.findOne({ user: userId }).populate('items.product', 'title brandName technicalName vendor images variants');
       if (!cart) throw new Error('Cart not found');
 
       const itemIndex = cart.items.findIndex(item => item._id.toString() === itemId);
@@ -117,14 +106,13 @@ class CartService {
       this.calculateTotal(cart);
       await this.recalculateCoupon(cart, userId);
       await cart.save();
-      await cart.populate('items.product', 'title brandName technicalName vendor images variants');
       return cart;
     });
   }
 
   async removeItemFromCart(userId, itemId) {
     return runLocked(userId, async () => {
-      const cart = await Cart.findOne({ user: userId });
+      const cart = await Cart.findOne({ user: userId }).populate('items.product', 'title brandName technicalName vendor images variants');
       if (!cart) throw new Error('Cart not found');
 
       const itemIndex = cart.items.findIndex(item => item._id.toString() === itemId);
@@ -135,7 +123,6 @@ class CartService {
       this.calculateTotal(cart);
       await this.recalculateCoupon(cart, userId);
       await cart.save();
-      await cart.populate('items.product', 'title brandName technicalName vendor images variants');
       return cart;
     });
   }
@@ -157,7 +144,29 @@ class CartService {
   }
 
   calculateTotal(cart) {
-    cart.totalAmount = cart.items.reduce((total, item) => total + (item.price * item.quantity), 0);
+    let total = 0;
+    for (const item of cart.items) {
+      if (item.product && item.product.variants) {
+        const variant = item.product.variants.id(item.variantId);
+        if (variant) {
+          const packVolume = variant.packVolume || 1.0;
+          const totalVolume = packVolume * item.quantity;
+          let correctPrice = variant.price;
+          
+          if (totalVolume >= 50.0) {
+            correctPrice = variant.price50_plus || variant.price;
+          } else if (totalVolume >= 30.0) {
+            correctPrice = variant.price30_50 || variant.price;
+          } else if (totalVolume >= 10.0) {
+            correctPrice = variant.price10_30 || variant.price;
+          }
+          
+          item.price = correctPrice * packVolume;
+        }
+      }
+      total += item.price * item.quantity;
+    }
+    cart.totalAmount = total;
   }
 
   async recalculateCoupon(cart, userId) {
