@@ -44,13 +44,13 @@ exports.createOrder = async (req, res, next) => {
       }
     );
 
-    // Trigger Utility Notification Automatically
-    await notificationService.sendUtilityNotification(
+    // Trigger Utility Notification Automatically (Non-blocking background task)
+    notificationService.sendUtilityNotification(
       req.user._id,
       "Order Confirmed! 🎉",
       `Your order #${order._id.toString().substring(0, 6)} has been placed successfully.`,
       "/dashboard"
-    );
+    ).catch(err => console.error("Error sending order notification in background:", err));
 
     res.status(201).json({
       success: true,
