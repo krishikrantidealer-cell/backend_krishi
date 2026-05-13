@@ -1,28 +1,61 @@
 const orderService = require('../services/order.service');
 const notificationService = require('../services/notification.service');
 
+exports.initializePayment = async (req, res, next) => {
+  try {
+    const { paymentMethod, partialPercent } = req.body;
+    const razorpayOrder = await orderService.initializeRazorpayPayment(
+      req.user._id,
+      paymentMethod,
+      partialPercent
+    );
+
+    res.json({
+      success: true,
+      razorpayOrder
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
 exports.createOrder = async (req, res, next) => {
   try {
-    const { paymentMethod, shippingAddress, razorpayPaymentId, advanceAmount, remainingAmount } = req.body;
+    const {
+      paymentMethod,
+      shippingAddress,
+      razorpayPaymentId,
+      razorpayOrderId,
+      razorpaySignature,
+      advanceAmount,
+      remainingAmount
+    } = req.body;
+
     const order = await orderService.createOrderFromCart(
       req.user._id,
       paymentMethod,
       shippingAddress,
-      { razorpayPaymentId, advanceAmount, remainingAmount }
+      {
+        razorpayPaymentId,
+        razorpayOrderId,
+        razorpaySignature,
+        advanceAmount,
+        remainingAmount
+      }
     );
-    
+
     // Trigger Utility Notification Automatically
     await notificationService.sendUtilityNotification(
       req.user._id,
       "Order Confirmed! 🎉",
       `Your order #${order._id.toString().substring(0, 6)} has been placed successfully.`,
-      "/dashboard" 
+      "/dashboard"
     );
 
-    res.status(201).json({ 
-      success: true, 
-      message: 'Order placed successfully', 
-      order 
+    res.status(201).json({
+      success: true,
+      message: 'Order placed successfully',
+      order
     });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });

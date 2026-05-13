@@ -5,6 +5,26 @@ const couponService = require('./coupon.service');
 
 class OrderService {
   async createOrderFromCart(userId, paymentMethod = 'Online', shippingAddress = null, paymentData = {}) {
+    // 0. Secure Signature Verification (Prevents Fraud)
+    const keySecret = process.env.RAZORPAY_KEY_SECRET;
+    if (
+      (paymentMethod === 'Online' || paymentMethod === 'Partial') &&
+      keySecret &&
+      !keySecret.includes('YOUR_RAZORPAY_KEY_SECRET') &&
+      paymentData.razorpayOrderId &&
+      paymentData.razorpayPaymentId &&
+      paymentData.razorpaySignature
+    ) {
+      const crypto = require('crypto');
+      const expectedSignature = crypto
+        .createHmac('sha256', keySecret)
+        .update(paymentData.razorpayOrderId + '|' + paymentData.razorpayPaymentId)
+        .digest('hex');
+      if (expectedSignature !== paymentData.razorpaySignature) {
+        throw new Error('Security Alert: Razorpay signature verification failed. Payment is not authentic!');
+      }
+    }
+
     // 1. Get the user's cart
     const cart = await Cart.findOne({ user: userId }).populate('items.product');
 
@@ -87,8 +107,70 @@ class OrderService {
     cart.finalAmount = 0;
     cart.freeItems = [];
     await cart.save();
-
     return order;
+  }
+
+  async initializeRazorpayPayment(userId, paymentMethod = 'Online', partialPercent = null) {
+    const Cart = require('../models/Cart');
+    const axios = require('axios');
+
+    // 1. Get the user's cart
+    const cart = await Cart.findOne({ user: userId }).populate('items.product');
+
+    if (!cart || cart.items.length === 0) {
+      throw new Error('Your cart is empty');
+    }
+
+    // 2. Calculate final price with Coupon
+    let finalAmount = cart.totalAmount;
+
+    if (cart.appliedCoupon) {
+      const couponResult = await couponService.applyCoupon(userId, cart.appliedCoupon, cart.totalAmount);
+      finalAmount = couponResult.finalAmount;
+    }
+
+    // 3. Determine actual amount to pay in paise
+    let amountToPay = finalAmount;
+    if (paymentMethod === 'Partial' && partialPercent) {
+      amountToPay = finalAmount * (partialPercent / 100);
+    }
+
+    const amountInPaise = Math.round(amountToPay * 100);
+
+    // 4. Generate Razorpay Order via Secure API call
+    const keyId = process.env.RAZORPAY_KEY_ID;
+    const keySecret = process.env.RAZORPAY_KEY_SECRET;
+
+    if (!keyId || !keySecret || keySecret.includes('YOUR_RAZORPAY_KEY_SECRET')) {
+      // Return a structured fallback/warning order if keys are not fully configured
+      return {
+        id: 'mock_order_' + Date.now().toString().slice(-6) + Math.floor(Math.random() * 100),
+        amount: amountInPaise,
+        currency: 'INR',
+        isMock: true
+      };
+    }
+
+    try {
+      const auth = Buffer.from(`${keyId}:${keySecret}`).toString('base64');
+      const response = await axios.post('https://api.razorpay.com/v1/orders', {
+        amount: amountInPaise,
+        currency: 'INR',
+        receipt: `rcpt_ORD_${Date.now().toString().slice(-6)}`
+      }, {
+        headers: {
+          'Authorization': `Basic ${auth}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      return response.data;
+    } catch (err) {
+      const errorMsg = err.response && err.response.data && err.response.data.error 
+        ? err.response.data.error.description 
+        : err.message;
+      throw new Error(`Razorpay initialization failed: ${errorMsg}`);
+    }
   }
 
   async getUserOrders(userId) {

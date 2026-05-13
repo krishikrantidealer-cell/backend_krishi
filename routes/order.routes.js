@@ -9,6 +9,9 @@ const router = express.Router();
 // All order routes require authentication
 router.use(protect);
 
+// Initialize Razorpay payment (Generate secure server-side order_id)
+router.post('/initialize', orderController.initializePayment);
+
 // Create a new order from the cart
 router.post(
   '/',
