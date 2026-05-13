@@ -4,7 +4,7 @@ const User = require('../models/User');
 const couponService = require('./coupon.service');
 
 class OrderService {
-  async createOrderFromCart(userId, paymentMethod = 'COD', shippingAddress = null) {
+  async createOrderFromCart(userId, paymentMethod = 'Online', shippingAddress = null, paymentData = {}) {
     // 1. Get the user's cart
     const cart = await Cart.findOne({ user: userId }).populate('items.product');
 
@@ -70,7 +70,13 @@ class OrderService {
         isFree: true
       }] : [],
       shippingAddress: address,
-      paymentMethod
+      paymentMethod,
+      paymentStatus: paymentMethod === 'Online'
+        ? 'Paid'
+        : (paymentMethod === 'Partial' ? 'Partially Paid' : 'Pending'),
+      razorpayPaymentId: paymentData.razorpayPaymentId || null,
+      advanceAmount: paymentData.advanceAmount || 0,
+      remainingAmount: paymentData.remainingAmount || 0
     });
 
     // 7. Clear the user's cart thoroughly

@@ -13,7 +13,7 @@ router.use(protect);
 router.post(
   '/',
   [
-    body('paymentMethod').optional().isIn(['COD', 'Online']).withMessage('Invalid payment method')
+    body('paymentMethod').optional().isIn(['Online', 'Partial']).withMessage('Invalid payment method')
   ],
   validate,
   orderController.createOrder

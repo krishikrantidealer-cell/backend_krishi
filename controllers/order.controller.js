@@ -3,8 +3,13 @@ const notificationService = require('../services/notification.service');
 
 exports.createOrder = async (req, res, next) => {
   try {
-    const { paymentMethod, shippingAddress } = req.body;
-    const order = await orderService.createOrderFromCart(req.user._id, paymentMethod, shippingAddress);
+    const { paymentMethod, shippingAddress, razorpayPaymentId, advanceAmount, remainingAmount } = req.body;
+    const order = await orderService.createOrderFromCart(
+      req.user._id,
+      paymentMethod,
+      shippingAddress,
+      { razorpayPaymentId, advanceAmount, remainingAmount }
+    );
     
     // Trigger Utility Notification Automatically
     await notificationService.sendUtilityNotification(

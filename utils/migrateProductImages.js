@@ -1,11 +1,11 @@
+const path = require('path');
 const mongoose = require('mongoose');
 const axios = require('axios');
 const dotenv = require('dotenv');
 const Product = require('../models/Product');
-const ProductDetail = require('../models/ProductDetail');
 const { processAndUploadProductImage } = require('./gcs');
 
-dotenv.config();
+dotenv.config({ path: path.join(__dirname, '../.env') });
 
 function convertToDirectLink(url) {
   if (url.includes('drive.google.com')) {
@@ -65,28 +65,17 @@ async function migrate() {
       }
 
       if (processedThumbnails.length > 0) {
-        // 1. Update lightweight Product Listing
+        // 1. Update Product Listing with all GCS generated URLs
         await Product.updateOne(
           { _id: product._id },
           { 
             $set: { 
               thumbnail: processedThumbnails[0],
-              images: processedThumbnails
+              images: processedThumbnails,
+              mediumImages: processedMedium,
+              originalImages: processedOriginal
             }
           }
-        );
-
-        // 2. Create/Update heavyweight ProductDetail
-        await ProductDetail.findOneAndUpdate(
-          { productId: product._id },
-          {
-            description: product.description || product.body || '',
-            images: {
-              medium: processedMedium,
-              original: processedOriginal
-            }
-          },
-          { upsert: true, new: true }
         );
 
         console.log('✅ Migration successful for this product.');

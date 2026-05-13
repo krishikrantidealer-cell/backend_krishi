@@ -3,7 +3,7 @@ const path = require('path');
 const sharp = require('sharp');
 const dotenv = require('dotenv');
 
-dotenv.config();
+dotenv.config({ path: path.join(__dirname, '../.env') });
 
 let storage;
 

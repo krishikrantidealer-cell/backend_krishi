@@ -74,13 +74,25 @@ const orderSchema = new mongoose.Schema({
   },
   paymentMethod: {
     type: String,
-    enum: ['COD', 'Online'],
-    default: 'COD'
+    enum: ['Online', 'Partial'],
+    required: true
   },
   paymentStatus: {
     type: String,
-    enum: ['Pending', 'Paid', 'Failed'],
+    enum: ['Pending', 'Paid', 'Failed', 'Partially Paid'],
     default: 'Pending'
+  },
+  razorpayPaymentId: {
+    type: String,
+    trim: true
+  },
+  advanceAmount: {
+    type: Number,
+    default: 0
+  },
+  remainingAmount: {
+    type: Number,
+    default: 0
   },
   orderStatus: {
     type: String,

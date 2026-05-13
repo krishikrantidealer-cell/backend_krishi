@@ -77,7 +77,6 @@ async function seedData() {
 
         const keys = Object.keys(cleanRow);
         const firstKey = keys[0];
-        
         // Support flexible brand name columns (Product Brand Name, "7", or the very first column)
         const brandNameRaw = cleanRow['Product Brand Name'] || cleanRow['7'] || (firstKey ? cleanRow[firstKey] : '');
         const brandName = brandNameRaw ? brandNameRaw.trim() : '';
@@ -85,6 +84,13 @@ async function seedData() {
 
         // Support Product Complete Title or Product Title
         const productTitle = cleanRow['Product Complete Title'] || cleanRow['Product Title'] || brandName;
+
+        // Parse Rating & Reviews dynamically
+        const ratingRaw = cleanRow['Rating'] || cleanRow['Product Rating'] || cleanRow['Average Rating'] || cleanRow['averageRating'] || '';
+        const averageRating = ratingRaw ? parseFloat(ratingRaw) || 0 : 0;
+
+        const reviewsRaw = cleanRow['Reviews'] || cleanRow['No. of Reviews'] || cleanRow['Number of Reviews'] || cleanRow['numReviews'] || cleanRow['Review Count'] || '';
+        const numReviews = reviewsRaw ? parseInt(reviewsRaw, 10) || 0 : 0;
 
         // If brandName is present, it's a new product row
         if (brandName && brandName !== 'Product Brand Name' && brandName !== 'Product Brand Name') {
@@ -105,7 +111,9 @@ async function seedData() {
             variants: [],
             availabilityStatus: cleanRow['Availability'] || 'In Stock',
             assignedCollections: cleanRow['Assigned Collections'] ? cleanRow['Assigned Collections'].split(',').map(c => c.trim()) : [],
-            isFeatured: (cleanRow['Featured Product'] || '').toLowerCase() === 'yes'
+            isFeatured: (cleanRow['Featured Product'] || '').toLowerCase() === 'yes',
+            averageRating: averageRating,
+            numReviews: numReviews
           };
           productsArray.push(currentProduct);
         }
