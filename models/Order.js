@@ -96,8 +96,12 @@ const orderSchema = new mongoose.Schema({
   },
   orderStatus: {
     type: String,
-    enum: ['Pending', 'Processing', 'Shipped', 'Out for Delivery', 'Delivered', 'Cancelled'],
+    enum: ['Pending', 'Processing', 'Shipped', 'Out for Delivery', 'Delivered', 'Cancelled', 'RTO'],
     default: 'Pending'
+  },
+  courierStatus: {
+    type: String,
+    trim: true
   },
   awbNumber: {
     type: String,
@@ -110,6 +114,28 @@ const orderSchema = new mongoose.Schema({
   trackingUrl: {
     type: String,
     trim: true
+  },
+  placedAt: {
+    type: Date,
+    default: Date.now
+  },
+  processingAt: {
+    type: Date
+  },
+  shippedAt: {
+    type: Date
+  },
+  outForDeliveryAt: {
+    type: Date
+  },
+  deliveredAt: {
+    type: Date
+  },
+  cancelledAt: {
+    type: Date
+  },
+  rtoAt: {
+    type: Date
   }
 }, {
   timestamps: true

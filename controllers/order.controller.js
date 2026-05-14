@@ -1,3 +1,4 @@
+const Order = require('../models/Order');
 const orderService = require('../services/order.service');
 const notificationService = require('../services/notification.service');
 
@@ -65,6 +66,16 @@ exports.createOrder = async (req, res, next) => {
 exports.getMyOrders = async (req, res, next) => {
   try {
     const orders = await orderService.getUserOrders(req.user._id);
+
+    // Non-blocking background sync for active orders to maintain list accuracy without API lag
+    if (orders && Array.isArray(orders)) {
+      orders
+        .filter(o => ['Processing', 'Shipped', 'Out for Delivery'].includes(o.orderStatus))
+        .forEach(o => {
+          orderService.syncDelhiveryTracking(req.user._id, o._id).catch(() => {});
+        });
+    }
+
     res.json({ success: true, orders });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Failed to fetch orders' });
@@ -73,9 +84,78 @@ exports.getMyOrders = async (req, res, next) => {
 
 exports.getOrderDetails = async (req, res, next) => {
   try {
+    // 1. Perform live authoritative sync with Delhivery using API Token
+    await orderService.syncDelhiveryTracking(req.user._id, req.params.id);
+
+    // 2. Return latest updated order state
     const order = await orderService.getOrderById(req.user._id, req.params.id);
     res.json({ success: true, order });
   } catch (error) {
     res.status(404).json({ success: false, message: error.message });
+  }
+};
+
+exports.delhiveryWebhook = async (req, res, next) => {
+  try {
+    // 1. Extract raw courier status and AWB / Order ID
+    const rawStatus = req.body.status || req.body.current_status || '';
+    const awb = req.body.awb || req.body.awb_number;
+    const orderId = req.body.order_id || req.body.orderId;
+
+    if (!awb && !orderId) {
+      return res.status(400).json({ success: false, message: "AWB or Order ID required in webhook payload" });
+    }
+
+    // 2. Find Order by AWB or Order ID
+    let order;
+    if (awb) {
+      order = await Order.findOne({ awbNumber: awb });
+    }
+    if (!order && orderId) {
+      order = await Order.findOne({ orderId });
+    }
+
+    if (!order) {
+      return res.status(404).json({ success: false, message: "Order not found for given tracking identifier" });
+    }
+
+    // 3. Save raw courier status
+    order.courierStatus = rawStatus;
+
+    // 4. Status Mapping Layer (Delhivery/Shiprocket -> Internal Enum)
+    const statusLower = rawStatus.toLowerCase();
+    if (statusLower.includes('manifested') || statusLower.includes('dispatched')) {
+      order.orderStatus = 'Processing';
+      if (!order.processingAt) order.processingAt = new Date();
+    } else if (statusLower.includes('picked up') || statusLower.includes('in transit') || statusLower.includes('arrived at hub')) {
+      order.orderStatus = 'Shipped';
+      if (!order.shippedAt) order.shippedAt = new Date();
+    } else if (statusLower.includes('out for delivery')) {
+      order.orderStatus = 'Out for Delivery';
+      if (!order.outForDeliveryAt) order.outForDeliveryAt = new Date();
+    } else if (statusLower.includes('delivered') && !statusLower.includes('rto')) {
+      order.orderStatus = 'Delivered';
+      if (!order.deliveredAt) order.deliveredAt = new Date();
+    } else if (statusLower.includes('rto')) {
+      order.orderStatus = 'RTO';
+      if (!order.rtoAt) order.rtoAt = new Date();
+    } else if (statusLower.includes('cancelled')) {
+      order.orderStatus = 'Cancelled';
+      if (!order.cancelledAt) order.cancelledAt = new Date();
+    }
+
+    await order.save();
+
+    // Optional: Trigger background notification for milestone changes
+    notificationService.sendUtilityNotification(
+      order.user,
+      `Order Update: ${order.orderStatus} 📦`,
+      `Your package tracking status is now: ${order.courierStatus || order.orderStatus}.`,
+      `/orders/${order._id}`
+    ).catch(err => console.error("Error sending webhook notification in background:", err));
+
+    res.json({ success: true, message: "Webhook processed and status synced successfully", orderStatus: order.orderStatus });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
   }
 };

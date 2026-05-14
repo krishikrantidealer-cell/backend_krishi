@@ -185,6 +185,59 @@ class OrderService {
     if (!order) throw new Error('Order not found');
     return order;
   }
+
+  async syncDelhiveryTracking(userId, orderId) {
+    const axios = require('axios');
+    const order = await Order.findOne({ _id: orderId, user: userId });
+    if (!order || !order.awbNumber) return order;
+
+    const token = process.env.DELHIVERY_API_TOKEN;
+    if (!token || token.includes('YOUR_DELHIVERY_API_TOKEN')) {
+      return order;
+    }
+
+    try {
+      const response = await axios.get(`https://track.delhivery.com/api/v1/packages/json/?waybill=${order.awbNumber}`, {
+        headers: {
+          'Authorization': `Token ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      const packageData = response.data && response.data.ShipmentData && response.data.ShipmentData[0] && response.data.ShipmentData[0].Shipment;
+      if (packageData && packageData.Status) {
+        const rawStatus = packageData.Status.Status || '';
+        order.courierStatus = rawStatus;
+
+        const statusLower = rawStatus.toLowerCase();
+        if (statusLower.includes('manifested') || statusLower.includes('dispatched')) {
+          order.orderStatus = 'Processing';
+          if (!order.processingAt) order.processingAt = new Date();
+        } else if (statusLower.includes('picked up') || statusLower.includes('in transit') || statusLower.includes('arrived at hub')) {
+          order.orderStatus = 'Shipped';
+          if (!order.shippedAt) order.shippedAt = new Date();
+        } else if (statusLower.includes('out for delivery')) {
+          order.orderStatus = 'Out for Delivery';
+          if (!order.outForDeliveryAt) order.outForDeliveryAt = new Date();
+        } else if (statusLower.includes('delivered') && !statusLower.includes('rto')) {
+          order.orderStatus = 'Delivered';
+          if (!order.deliveredAt) order.deliveredAt = new Date();
+        } else if (statusLower.includes('rto')) {
+          order.orderStatus = 'RTO';
+          if (!order.rtoAt) order.rtoAt = new Date();
+        } else if (statusLower.includes('cancelled')) {
+          order.orderStatus = 'Cancelled';
+          if (!order.cancelledAt) order.cancelledAt = new Date();
+        }
+
+        await order.save();
+      }
+      return order;
+    } catch (err) {
+      console.error("Delhivery API token sync failed, maintaining current state:", err.message);
+      return order;
+    }
+  }
 }
 
 module.exports = new OrderService();

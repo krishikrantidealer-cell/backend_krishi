@@ -6,7 +6,10 @@ const validate = require('../middlewares/validate');
 
 const router = express.Router();
 
-// All order routes require authentication
+// Public Webhook endpoint for Delhivery / Shiprocket automated push updates
+router.post('/webhook', orderController.delhiveryWebhook);
+
+// All subsequent order routes require authentication
 router.use(protect);
 
 // Initialize Razorpay payment (Generate secure server-side order_id)
