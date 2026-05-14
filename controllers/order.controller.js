@@ -159,3 +159,27 @@ exports.delhiveryWebhook = async (req, res, next) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+exports.cancelOrder = async (req, res, next) => {
+  try {
+    const order = await Order.findOne({ _id: req.params.id, user: req.user._id });
+    if (!order) {
+      return res.status(404).json({ success: false, message: "Order not found" });
+    }
+
+    if (['Shipped', 'Out for Delivery', 'Delivered', 'RTO', 'Cancelled'].includes(order.orderStatus)) {
+      return res.status(400).json({
+        success: false,
+        message: "Order has already been dispatched or cancelled. You may refuse delivery at your doorstep."
+      });
+    }
+
+    order.orderStatus = 'Cancelled';
+    order.cancelledAt = new Date();
+    await order.save();
+
+    res.json({ success: true, message: "Order cancelled successfully", order });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};

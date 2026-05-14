@@ -31,4 +31,7 @@ router.get('/', orderController.getMyOrders);
 // Get specific order details
 router.get('/:id', orderController.getOrderDetails);
 
+// Cancel an order (Before dispatch)
+router.post('/:id/cancel', orderController.cancelOrder);
+
 module.exports = router;
