@@ -55,7 +55,10 @@ const cartSchema = new mongoose.Schema({
     variant: { type: String, trim: true },
     quantity: { type: Number, default: 1 },
     isFree: { type: Boolean, default: true }
-  }]
+  }],
+  lastReminderSentAt: {
+    type: Date
+  }
 }, {
   timestamps: true
 });
