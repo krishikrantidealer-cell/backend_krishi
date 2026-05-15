@@ -1,4 +1,5 @@
 const User = require('../models/User');
+const notificationService = require('./notification.service');
 
 class UserService {
   async getProfile(userId) {
@@ -158,6 +159,41 @@ class UserService {
       { new: true }
     );
     if (!user) throw new Error('User not found');
+    return user;
+  }
+
+  async updateKycStatus(userId, status, reason = '') {
+    const user = await User.findById(userId);
+    if (!user) throw new Error('User not found');
+
+    user.kycStatus = status;
+    if (status === 'verified') {
+      user.isKycComplete = true;
+    } else if (status === 'rejected') {
+      user.isKycComplete = false;
+    }
+
+    await user.save();
+
+    // Trigger Notification
+    let title = "KYC Update 📄";
+    let body = "";
+
+    if (status === 'verified') {
+      body = "Congratulations! Your KYC has been verified. You can now place orders.";
+    } else if (status === 'rejected') {
+      body = `KYC Rejected. ${reason || "Please check your documents and re-upload."}`;
+    } else {
+      body = `Your KYC status has been updated to: ${status}`;
+    }
+
+    notificationService.sendUtilityNotification(
+      userId,
+      title,
+      body,
+      '/profile'
+    ).catch(err => console.error("Error sending KYC notification:", err));
+
     return user;
   }
 }

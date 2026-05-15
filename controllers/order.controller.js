@@ -178,6 +178,14 @@ exports.cancelOrder = async (req, res, next) => {
     order.cancelledAt = new Date();
     await order.save();
 
+    // Trigger utility notification
+    notificationService.sendUtilityNotification(
+      order.user,
+      "Order Cancelled ❌",
+      `Your order #${order._id.toString().slice(-6).toUpperCase()} has been cancelled successfully.`,
+      `/order_details/${order._id}`
+    ).catch(err => console.error("Error sending cancellation notification:", err));
+
     res.json({ success: true, message: "Order cancelled successfully", order });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
