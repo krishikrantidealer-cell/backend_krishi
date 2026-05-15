@@ -70,7 +70,7 @@ exports.getMyOrders = async (req, res, next) => {
     // Non-blocking background sync for active orders to maintain list accuracy without API lag
     if (orders && Array.isArray(orders)) {
       orders
-        .filter(o => ['Processing', 'Shipped', 'Out for Delivery'].includes(o.orderStatus))
+        .filter(o => ['Pending', 'Processing', 'Shipped', 'Out for Delivery'].includes(o.orderStatus))
         .forEach(o => {
           orderService.syncDelhiveryTracking(req.user._id, o._id).catch(() => {});
         });
@@ -151,7 +151,7 @@ exports.delhiveryWebhook = async (req, res, next) => {
       order.user,
       `Order Update: ${order.orderStatus} 📦`,
       `Your package tracking status is now: ${order.courierStatus || order.orderStatus}.`,
-      `/orders/${order._id}`
+      `/order_details/${order._id}`
     ).catch(err => console.error("Error sending webhook notification in background:", err));
 
     res.json({ success: true, message: "Webhook processed and status synced successfully", orderStatus: order.orderStatus });

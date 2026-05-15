@@ -3,3 +3,4 @@
 /config/gcs-key.json
 *.log
 .DS_Store
+serviceAccountKey.json

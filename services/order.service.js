@@ -209,7 +209,9 @@ class OrderService {
         const rawStatus = packageData.Status.Status || '';
         order.courierStatus = rawStatus;
 
+        const previousStatus = order.orderStatus;
         const statusLower = rawStatus.toLowerCase();
+        
         if (statusLower.includes('manifested') || statusLower.includes('dispatched')) {
           order.orderStatus = 'Processing';
           if (!order.processingAt) order.processingAt = new Date();
@@ -228,6 +230,17 @@ class OrderService {
         } else if (statusLower.includes('cancelled')) {
           order.orderStatus = 'Cancelled';
           if (!order.cancelledAt) order.cancelledAt = new Date();
+        }
+
+        // Trigger Notification if status has actually changed
+        if (previousStatus !== order.orderStatus) {
+          const notificationService = require('./notification.service');
+          notificationService.sendUtilityNotification(
+            userId,
+            `Order Status Update: ${order.orderStatus}`,
+            `Your order ${order.orderId} is now ${order.orderStatus}.`,
+            `/order_details/${order._id}`
+          );
         }
 
         await order.save();
