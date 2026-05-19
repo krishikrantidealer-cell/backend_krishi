@@ -141,4 +141,9 @@ const orderSchema = new mongoose.Schema({
   timestamps: true
 });
 
+// Optimized Indexes for performance and scalability
+orderSchema.index({ user: 1, createdAt: -1 });
+orderSchema.index({ awbNumber: 1 }, { sparse: true });
+orderSchema.index({ orderStatus: 1 });
+
 module.exports = mongoose.model('Order', orderSchema);
