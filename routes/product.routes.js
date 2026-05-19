@@ -19,7 +19,13 @@ router.get('/categories', productController.getCategories);
 router.get('/', productController.getProducts);
 
 // Create a new product (with multiple variants)
-router.post('/', productController.createProduct);
+router.post('/', protect, productController.createProduct);
+
+// Update a product
+router.put('/:id', protect, productController.updateProduct);
+
+// Delete a product
+router.delete('/:id', protect, productController.deleteProduct);
 
 // Get single product details
 router.get('/:id', productController.getProduct);

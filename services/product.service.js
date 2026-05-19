@@ -78,7 +78,8 @@ class ProductService {
 
     // 2. Fallback to MongoDB
     const products = await Product.find(query)
-      .select('title brandName technicalName vendor thumbnail variants images availabilityStatus averageRating numReviews minPrice maxPrice')
+      .select('title brandName technicalName vendor thumbnail variants images availabilityStatus averageRating numReviews minPrice maxPrice categoryId subCategoryId')
+      .populate('categoryId')
       .sort(sortOrder)
       .limit(limit);
 
@@ -102,7 +103,7 @@ class ProductService {
    * Get Full Product Details (Combined)
    */
   async getProductById(id) {
-    const product = await Product.findById(id);
+    const product = await Product.findById(id).populate('categoryId');
     if (!product) throw new Error('Product not found');
 
     return product;

@@ -7,7 +7,7 @@ const Category = require('../models/Category');
 const Collection = require('../models/Collection');
 
 const MONGO_URI = process.env.MONGODB_URI;
-const SHEET_URL = 'https://docs.google.com/spreadsheets/d/15XLeb_EkYW6Mn0Vohj9RxTMoXyWk8aLk2IMJg9tTJnU/export?format=csv&gid=0';
+const SHEET_URL = 'https://docs.google.com/spreadsheets/d/15XLeb_EkYW6Mn0Vohj9RxTMoXyWk8aLk2IMJg9tTJnU/export?format=csv&gid=1233824187';
 
 function getMultiplier(sizeStr) {
   const clean = sizeStr.toLowerCase().replace(/\s+/g, '');
@@ -110,7 +110,7 @@ async function seedData() {
             thumbnail: cleanRow['Product Image'] ? cleanRow['Product Image'].trim() : '',
             variants: [],
             availabilityStatus: cleanRow['Availability'] || 'In Stock',
-            assignedCollections: cleanRow['Assigned Collections'] ? cleanRow['Assigned Collections'].split(',').map(c => c.trim()) : [],
+            assignedCollections: cleanRow['Assigned Collections'] ? cleanRow['Assigned Collections'].split(',').map(c => c.trim()).filter(Boolean) : [],
             isFeatured: (cleanRow['Featured Product'] || '').toLowerCase() === 'yes',
             averageRating: averageRating,
             numReviews: numReviews
@@ -184,8 +184,10 @@ async function seedData() {
 
         console.log(`Checking/Creating ${uniqueCollectionNames.size} collections...`);
         for (const name of uniqueCollectionNames) {
+          if (!name || !name.trim()) continue;
           const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-          const existing = await Collection.findOne({ name });
+          if (!slug) continue;
+          const existing = await Collection.findOne({ slug });
           if (!existing) {
             await Collection.create({
               name,
@@ -238,6 +240,16 @@ async function seedData() {
 
           delete product._tempCategoryName;
           delete product._tempSubCategoryName;
+
+          // Calculate minPrice and maxPrice manually because insertMany bypasses save middleware
+          if (product.variants && product.variants.length > 0) {
+            const prices = product.variants.map(v => v.price);
+            product.minPrice = Math.min(...prices);
+            product.maxPrice = Math.max(...prices);
+          } else {
+            product.minPrice = 0;
+            product.maxPrice = 0;
+          }
         }
 
         console.log('Inserting products into database...');

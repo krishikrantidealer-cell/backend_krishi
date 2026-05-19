@@ -3,10 +3,21 @@ const mongoose = require('mongoose');
 const userSchema = new mongoose.Schema({
   phoneNumber: {
     type: String,
-    required: true,
     unique: true,
+    sparse: true,
     trim: true,
     index: true
+  },
+  email: {
+    type: String,
+    unique: true,
+    sparse: true,
+    lowercase: true,
+    trim: true,
+    index: true
+  },
+  password: {
+    type: String
   },
   isVerified: {
     type: Boolean,
@@ -53,7 +64,7 @@ const userSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['user', 'admin'],
+    enum: ['user', 'admin', 'sales'],
     default: 'user'
   },
   // KYC Fields

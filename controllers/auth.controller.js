@@ -4,6 +4,59 @@ const tokenService = require('../services/token.service');
 const uap = require('ua-parser-js');
 
 class AuthController {
+  // @desc    Admin / Sales Email and Password Login
+  // @route   POST /api/auth/admin/login
+  async adminLogin(req, res) {
+    try {
+      const { email, password, deviceId } = req.body;
+
+      // 1. Find User by Email
+      const user = await User.findOne({ email });
+      if (!user) {
+        return res.status(401).json({ success: false, message: 'Invalid credentials' });
+      }
+
+      // 2. Verify Role (Must be admin or sales)
+      if (user.role !== 'admin' && user.role !== 'sales') {
+        return res.status(403).json({ success: false, message: 'Access denied: insufficient permissions' });
+      }
+
+      // 3. Verify Password
+      const { compareData } = require('../utils/hash');
+      const isMatch = await compareData(password, user.password);
+      if (!isMatch) {
+        return res.status(401).json({ success: false, message: 'Invalid credentials' });
+      }
+
+      // 4. Create Session
+      const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+      const userAgent = req.headers['user-agent'];
+      
+      const tokens = await tokenService.createSession(
+        user._id, 
+        deviceId || 'admin-console', 
+        ipAddress, 
+        userAgent
+      );
+
+      res.status(200).json({
+        success: true,
+        user: {
+          id: user._id,
+          email: user.email,
+          phoneNumber: user.phoneNumber,
+          isVerified: user.isVerified,
+          isProfileComplete: user.isProfileComplete,
+          isKycComplete: user.isKycComplete,
+          role: user.role
+        },
+        ...tokens
+      });
+    } catch (error) {
+      res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
   // @desc    Send OTP to phone number
   // @route   POST /api/auth/send-otp
   async sendOTP(req, res) {

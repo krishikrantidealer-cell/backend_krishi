@@ -279,3 +279,54 @@ exports.uploadImages = async (req, res, next) => {
     next(error);
   }
 };
+
+// Update an existing product (Admin)
+exports.updateProduct = async (req, res, next) => {
+  try {
+    let updateData = req.body;
+    
+    if (typeof updateData.data === 'string') {
+      updateData = JSON.parse(updateData.data);
+    }
+
+    const productId = req.params.id;
+
+    // Handle Image Uploads if any new files are uploaded
+    if (req.files && req.files.length > 0) {
+      const uploadPromises = req.files.map(file => 
+        processAndUploadProductImage(file.buffer, file.originalname, productId)
+      );
+      
+      const processedImages = await Promise.all(uploadPromises);
+      
+      updateData.thumbnail = processedImages[0].thumb;
+      updateData.mediumImages = processedImages.map(img => img.medium);
+      updateData.originalImages = processedImages.map(img => img.original);
+      updateData.images = processedImages.map(img => img.thumb);
+    }
+
+    const product = await productService.updateProduct(productId, updateData);
+    res.json({
+      success: true,
+      message: 'Product updated successfully',
+      product
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Delete a product (Admin)
+exports.deleteProduct = async (req, res, next) => {
+  try {
+    const productId = req.params.id;
+    await productService.deleteProduct(productId);
+    res.json({
+      success: true,
+      message: 'Product deleted successfully'
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+

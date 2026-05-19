@@ -9,6 +9,17 @@ const router = express.Router();
 
 // Public routes with rate limiting
 router.post(
+  '/admin/login',
+  authLimiter,
+  [
+    body('email').isEmail().withMessage('Please provide a valid email address'),
+    body('password').notEmpty().withMessage('Password is required')
+  ],
+  validate,
+  authController.adminLogin
+);
+
+router.post(
   '/send-otp',
   authLimiter,
   [

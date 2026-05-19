@@ -70,3 +70,101 @@ exports.getCollectionsWithProducts = async (req, res, next) => {
     next(error);
   }
 };
+
+// Create a new collection (Admin)
+exports.createCollection = async (req, res, next) => {
+  try {
+    const { name, description, bannerImage, isActive, priority } = req.body;
+    
+    // Automatically generate slug from name
+    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+
+    const collection = await Collection.create({
+      name,
+      slug,
+      description,
+      bannerImage,
+      isActive: isActive !== undefined ? isActive : true,
+      priority: priority !== undefined ? Number(priority) : 0
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Collection created successfully',
+      collection
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Update an existing collection (Admin)
+exports.updateCollection = async (req, res, next) => {
+  try {
+    const { name, description, bannerImage, isActive, priority } = req.body;
+    
+    const collection = await Collection.findById(req.params.id);
+    if (!collection) {
+      return res.status(404).json({ success: false, message: 'Collection not found' });
+    }
+
+    const oldName = collection.name;
+    const updateData = {};
+    
+    if (name !== undefined) {
+      updateData.name = name;
+      updateData.slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+    }
+    if (description !== undefined) updateData.description = description;
+    if (bannerImage !== undefined) updateData.bannerImage = bannerImage;
+    if (isActive !== undefined) updateData.isActive = isActive;
+    if (priority !== undefined) updateData.priority = Number(priority);
+
+    const updatedCollection = await Collection.findByIdAndUpdate(
+      req.params.id,
+      { $set: updateData },
+      { new: true, runValidators: true }
+    );
+
+    // If name is updated, update matching products as well
+    if (name !== undefined && oldName !== name) {
+      await Product.updateMany(
+        { assignedCollections: oldName },
+        { $set: { "assignedCollections.$[elem]": name } },
+        { arrayFilters: [{ "elem": oldName }] }
+      );
+    }
+
+    res.json({
+      success: true,
+      message: 'Collection updated successfully',
+      collection: updatedCollection
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Delete a collection (Admin)
+exports.deleteCollection = async (req, res, next) => {
+  try {
+    const collection = await Collection.findByIdAndDelete(req.params.id);
+    if (!collection) {
+      return res.status(404).json({ success: false, message: 'Collection not found' });
+    }
+
+    // Pull the collection name from all products' assignedCollections
+    await Product.updateMany(
+      { assignedCollections: collection.name },
+      { $pull: { assignedCollections: collection.name } }
+    );
+
+    res.json({
+      success: true,
+      message: 'Collection deleted successfully'
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
