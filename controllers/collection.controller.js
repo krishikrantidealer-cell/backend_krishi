@@ -4,7 +4,8 @@ const Product = require('../models/Product');
 // Get all active collections
 exports.getCollections = async (req, res, next) => {
   try {
-    const collections = await Collection.find({ isActive: true })
+    const query = req.query.all === 'true' ? {} : { isActive: true };
+    const collections = await Collection.find(query)
       .sort({ priority: -1, name: 1 });
     
     res.json({
@@ -101,7 +102,7 @@ exports.createCollection = async (req, res, next) => {
 // Update an existing collection (Admin)
 exports.updateCollection = async (req, res, next) => {
   try {
-    const { name, description, bannerImage, isActive, priority } = req.body;
+    const { name, description, bannerImage, isActive, priority, subCollections } = req.body;
     
     const collection = await Collection.findById(req.params.id);
     if (!collection) {
@@ -119,6 +120,7 @@ exports.updateCollection = async (req, res, next) => {
     if (bannerImage !== undefined) updateData.bannerImage = bannerImage;
     if (isActive !== undefined) updateData.isActive = isActive;
     if (priority !== undefined) updateData.priority = Number(priority);
+    if (subCollections !== undefined) updateData.subCollections = subCollections;
 
     const updatedCollection = await Collection.findByIdAndUpdate(
       req.params.id,
@@ -167,4 +169,126 @@ exports.deleteCollection = async (req, res, next) => {
     next(error);
   }
 };
+
+// Create a new sub-collection (Admin)
+exports.createSubCollection = async (req, res, next) => {
+  try {
+    const { name, isActive } = req.body;
+    const parentId = req.params.id;
+
+    const parent = await Collection.findById(parentId);
+    if (!parent) {
+      return res.status(404).json({ success: false, message: 'Parent collection not found' });
+    }
+
+    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+
+    // Check if sub-collection already exists in this parent
+    const exists = parent.subCollections.some(sub => sub.slug === slug || sub.name.toLowerCase() === name.toLowerCase());
+    if (exists) {
+      return res.status(400).json({ success: false, message: 'Sub-collection already exists' });
+    }
+
+    const newSub = {
+      name,
+      slug,
+      isActive: isActive !== undefined ? isActive : true
+    };
+
+    parent.subCollections.push(newSub);
+    await parent.save();
+
+    res.status(201).json({
+      success: true,
+      message: 'Sub-collection created successfully',
+      subCollection: newSub
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Update a sub-collection (Admin)
+exports.updateSubCollection = async (req, res, next) => {
+  try {
+    const { name, isActive } = req.body;
+    const { id: parentId, subId } = req.params;
+
+    const parent = await Collection.findById(parentId);
+    if (!parent) {
+      return res.status(404).json({ success: false, message: 'Parent collection not found' });
+    }
+
+    const subIndex = parent.subCollections.findIndex(sub => sub._id.toString() === subId);
+    if (subIndex === -1) {
+      return res.status(404).json({ success: false, message: 'Sub-collection not found' });
+    }
+
+    const oldName = parent.subCollections[subIndex].name;
+    
+    if (name !== undefined) {
+      parent.subCollections[subIndex].name = name;
+      parent.subCollections[subIndex].slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+    }
+    if (isActive !== undefined) {
+      parent.subCollections[subIndex].isActive = isActive;
+    }
+
+    await parent.save();
+
+    // If name is updated, update matching products as well
+    if (name !== undefined && oldName !== name) {
+      await Product.updateMany(
+        { assignedCollections: oldName },
+        { $set: { "assignedCollections.$[elem]": name } },
+        { arrayFilters: [{ "elem": oldName }] }
+      );
+    }
+
+    res.json({
+      success: true,
+      message: 'Sub-collection updated successfully',
+      subCollection: parent.subCollections[subIndex]
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Delete a sub-collection (Admin)
+exports.deleteSubCollection = async (req, res, next) => {
+  try {
+    const { id: parentId, subId } = req.params;
+
+    const parent = await Collection.findById(parentId);
+    if (!parent) {
+      return res.status(404).json({ success: false, message: 'Parent collection not found' });
+    }
+
+    const subIndex = parent.subCollections.findIndex(sub => sub._id.toString() === subId);
+    if (subIndex === -1) {
+      return res.status(404).json({ success: false, message: 'Sub-collection not found' });
+    }
+
+    const subName = parent.subCollections[subIndex].name;
+
+    // Pull the sub-collection
+    parent.subCollections.splice(subIndex, 1);
+    await parent.save();
+
+    // Pull the collection name from all products' assignedCollections
+    await Product.updateMany(
+      { assignedCollections: subName },
+      { $pull: { assignedCollections: subName } }
+    );
+
+    res.json({
+      success: true,
+      message: 'Sub-collection deleted successfully'
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 

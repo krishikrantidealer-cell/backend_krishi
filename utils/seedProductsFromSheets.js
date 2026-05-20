@@ -54,11 +54,11 @@ async function seedData() {
     await mongoose.connect(MONGO_URI);
     console.log('Connected to MongoDB.');
 
-    console.log('Clearing old products and categories...');
+    console.log('Clearing old products, categories, and collections...');
     await Product.deleteMany({});
     await Category.deleteMany({});
-    // We don't delete Collections here to preserve manually created ones
-    console.log('Old product and category data cleared.');
+    await Collection.deleteMany({});
+    console.log('Old data cleared.');
 
     console.log('Fetching data from Google Sheets...');
     const response = await axios.get(SHEET_URL, { responseType: 'stream' });
@@ -174,28 +174,73 @@ async function seedData() {
       .on('end', async () => {
         console.log('Finished parsing Google Sheet data.');
 
-        // Extract and create unique collections
-        const uniqueCollectionNames = new Set();
+        // Extract and map collections
+        const subCollectionsSet = new Set();
         productsArray.forEach(p => {
           if (p.assignedCollections) {
-            p.assignedCollections.forEach(c => uniqueCollectionNames.add(c));
+            p.assignedCollections.forEach(c => subCollectionsSet.add(c));
           }
         });
 
-        console.log(`Checking/Creating ${uniqueCollectionNames.size} collections...`);
-        for (const name of uniqueCollectionNames) {
-          if (!name || !name.trim()) continue;
-          const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-          if (!slug) continue;
-          const existing = await Collection.findOne({ slug });
+        console.log(`Checking/Creating ${subCollectionsSet.size} subcollections...`);
+
+        // A helper to decide the parent collection
+        function getParentCollection(subName) {
+          const lower = subName.toLowerCase();
+          const crops = ['cotton', 'paddy', 'wheat', 'soybean', 'chana', 'maize', 'sugarcane', 'vegetable', 'fruit', 'tomato', 'chilli', 'onion', 'potato', 'crop', 'rice', 'gram', 'pulse', 'brinjal', 'cabbage', 'cauliflower', 'groundnut'];
+          const nutrients = ['nitrogen', 'phosphorus', 'potassium', 'zinc', 'boron', 'calcium', 'sulphur', 'micronutrient', 'npk', 'nutrient', 'fertilizer', 'acid', 'extract', 'vitamins', 'growth'];
+          const diseases = ['blight', 'mildew', 'rot', 'rust', 'wilt', 'spot', 'disease', 'fungus', 'bacterial'];
+          const pests = ['aphid', 'jassid', 'thrip', 'whitefly', 'borer', 'caterpillar', 'worm', 'hopper', 'mite', 'pest', 'insect', 'fly', 'bug', 'beetle'];
+          const weeds = ['weed', 'grass', 'broadleaf', 'sedge'];
+
+          if (crops.some(k => lower.includes(k))) return 'Shop by Crop';
+          if (nutrients.some(k => lower.includes(k))) return 'Shop by Nutrients';
+          if (diseases.some(k => lower.includes(k))) return 'Shop by Disease';
+          if (pests.some(k => lower.includes(k))) return 'Shop by Pest';
+          if (weeds.some(k => lower.includes(k))) return 'Shop by Weed';
+          
+          return 'Other Collections';
+        }
+
+        const collectionsMap = {};
+        for (const subName of subCollectionsSet) {
+          if (!subName || !subName.trim()) continue;
+          const parentName = getParentCollection(subName);
+          if (!collectionsMap[parentName]) collectionsMap[parentName] = [];
+          
+          const slug = subName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+          if (slug) {
+            collectionsMap[parentName].push({ name: subName.trim(), slug, isActive: true });
+          }
+        }
+
+        for (const parentName in collectionsMap) {
+          const parentSlug = parentName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+          let existing = await Collection.findOne({ slug: parentSlug });
+          
           if (!existing) {
-            await Collection.create({
-              name,
-              slug,
+            existing = await Collection.create({
+              name: parentName,
+              slug: parentSlug,
               isActive: true,
-              priority: 0
+              priority: 0,
+              subCollections: collectionsMap[parentName]
             });
-            console.log(`Created new collection: ${name}`);
+            console.log(`Created new collection: ${parentName} with ${collectionsMap[parentName].length} subcollections`);
+          } else {
+            // Update subCollections if needed
+            const existingSubSlugs = new Set(existing.subCollections.map(s => s.slug));
+            let updated = false;
+            for (const sub of collectionsMap[parentName]) {
+              if (!existingSubSlugs.has(sub.slug)) {
+                existing.subCollections.push(sub);
+                updated = true;
+              }
+            }
+            if (updated) {
+              await existing.save();
+              console.log(`Updated collection: ${parentName}`);
+            }
           }
         }
 

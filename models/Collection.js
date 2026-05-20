@@ -29,7 +29,24 @@ const collectionSchema = new mongoose.Schema({
   priority: {
     type: Number,
     default: 0
-  }
+  },
+  subCollections: [{
+    name: {
+      type: String,
+      required: true,
+      trim: true
+    },
+    slug: {
+      type: String,
+      required: true,
+      lowercase: true,
+      trim: true
+    },
+    isActive: {
+      type: Boolean,
+      default: true
+    }
+  }]
 }, {
   timestamps: true
 });
