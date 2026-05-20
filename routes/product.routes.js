@@ -15,6 +15,12 @@ router.get('/discovery', productController.getHomeDiscovery);
 // Get all categories and sub-categories
 router.get('/categories', productController.getCategories);
 
+// Create a new category
+router.post('/categories', protect, productController.createCategory);
+
+// Create a new sub-category inside a category
+router.post('/categories/:id/subcategories', protect, productController.createSubCategory);
+
 // Get all products (with filters)
 router.get('/', productController.getProducts);
 

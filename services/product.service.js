@@ -117,12 +117,11 @@ class ProductService {
    * Update a product and invalidate cache
    */
   async updateProduct(id, updateData) {
-    const product = await Product.findByIdAndUpdate(
-      id,
-      { $set: updateData },
-      { new: true, runValidators: true }
-    );
+    const product = await Product.findById(id);
     if (!product) throw new Error('Product not found');
+
+    Object.assign(product, updateData);
+    await product.save();
 
     // Invalidate product listing cache
     await cacheService.delByPattern('products:*');

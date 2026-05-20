@@ -4,6 +4,7 @@ const mongoose = require('mongoose');
 const Collection = require('../models/Collection');
 const Product = require('../models/Product');
 const Banner = require('../models/Banner');
+const Category = require('../models/Category');
 
 // Get all products with cursor-based pagination
 exports.getProducts = async (req, res, next) => {
@@ -324,6 +325,73 @@ exports.deleteProduct = async (req, res, next) => {
     res.json({
       success: true,
       message: 'Product deleted successfully'
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Create a new category (Admin)
+exports.createCategory = async (req, res, next) => {
+  try {
+    const { name, subCategories } = req.body;
+    if (!name) {
+      return res.status(400).json({ success: false, message: 'Category name is required' });
+    }
+    
+    // Check if category already exists
+    const existing = await Category.findOne({ name: new RegExp(`^${name.trim()}$`, 'i') });
+    if (existing) {
+      return res.status(400).json({ success: false, message: 'Category already exists' });
+    }
+
+    const formattedSubCategories = (subCategories || []).map(sub => 
+      typeof sub === 'string' ? { name: sub.trim() } : { name: sub.name.trim() }
+    );
+
+    const category = await Category.create({
+      name: name.trim(),
+      subCategories: formattedSubCategories
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Category created successfully',
+      category
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Create a new sub-category inside a category (Admin)
+exports.createSubCategory = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { name } = req.body;
+    if (!name) {
+      return res.status(400).json({ success: false, message: 'Subcategory name is required' });
+    }
+
+    const category = await Category.findById(id);
+    if (!category) {
+      return res.status(404).json({ success: false, message: 'Category not found' });
+    }
+
+    // Check if sub-category already exists
+    const subNameLower = name.trim().toLowerCase();
+    const existingSub = category.subCategories.find(sub => sub.name.toLowerCase() === subNameLower);
+    if (existingSub) {
+      return res.status(400).json({ success: false, message: 'Subcategory already exists' });
+    }
+
+    category.subCategories.push({ name: name.trim() });
+    await category.save();
+
+    res.status(201).json({
+      success: true,
+      message: 'Subcategory added successfully',
+      category
     });
   } catch (error) {
     next(error);
