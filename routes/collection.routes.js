@@ -19,6 +19,9 @@ router.post('/', protect, collectionController.createCollection);
 // Update collection (Admin)
 router.put('/:id', protect, collectionController.updateCollection);
 
+// Delete collection (Admin)
+router.delete('/:id', protect, collectionController.deleteCollection);
+
 // Create sub-collection (Admin)
 router.post('/:id/sub', protect, collectionController.createSubCollection);
 
