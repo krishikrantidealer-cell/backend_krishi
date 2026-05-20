@@ -399,3 +399,141 @@ exports.createSubCategory = async (req, res, next) => {
   }
 };
 
+// Update a category (Admin)
+exports.updateCategory = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { name } = req.body;
+    if (!name) {
+      return res.status(400).json({ success: false, message: 'Category name is required' });
+    }
+
+    const category = await Category.findById(id);
+    if (!category) {
+      return res.status(404).json({ success: false, message: 'Category not found' });
+    }
+
+    // Check if name is unique
+    const existing = await Category.findOne({ 
+      name: new RegExp(`^${name.trim()}$`, 'i'),
+      _id: { $ne: id }
+    });
+    if (existing) {
+      return res.status(400).json({ success: false, message: 'Another category with this name already exists' });
+    }
+
+    category.name = name.trim();
+    await category.save();
+
+    res.json({
+      success: true,
+      message: 'Category updated successfully',
+      category
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Delete a category (Admin)
+exports.deleteCategory = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const category = await Category.findById(id);
+    if (!category) {
+      return res.status(404).json({ success: false, message: 'Category not found' });
+    }
+
+    await Category.findByIdAndDelete(id);
+
+    // Unset categoryId and subCategoryId for matching products
+    const Product = require('../models/Product');
+    await Product.updateMany(
+      { categoryId: id },
+      { $unset: { categoryId: "", subCategoryId: "" } }
+    );
+
+    res.json({
+      success: true,
+      message: 'Category deleted successfully'
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Update a sub-category (Admin)
+exports.updateSubCategory = async (req, res, next) => {
+  try {
+    const { id, subId } = req.params;
+    const { name } = req.body;
+    if (!name) {
+      return res.status(400).json({ success: false, message: 'Subcategory name is required' });
+    }
+
+    const category = await Category.findById(id);
+    if (!category) {
+      return res.status(404).json({ success: false, message: 'Category not found' });
+    }
+
+    const subIndex = category.subCategories.findIndex(sub => sub._id.toString() === subId);
+    if (subIndex === -1) {
+      return res.status(404).json({ success: false, message: 'Subcategory not found' });
+    }
+
+    // Check if new subcategory name already exists in this category
+    const subNameLower = name.trim().toLowerCase();
+    const duplicate = category.subCategories.find((sub, idx) => idx !== subIndex && sub.name.toLowerCase() === subNameLower);
+    if (duplicate) {
+      return res.status(400).json({ success: false, message: 'Subcategory with this name already exists in this category' });
+    }
+
+    category.subCategories[subIndex].name = name.trim();
+    await category.save();
+
+    res.json({
+      success: true,
+      message: 'Subcategory updated successfully',
+      category
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Delete a sub-category (Admin)
+exports.deleteSubCategory = async (req, res, next) => {
+  try {
+    const { id, subId } = req.params;
+
+    const category = await Category.findById(id);
+    if (!category) {
+      return res.status(404).json({ success: false, message: 'Category not found' });
+    }
+
+    const subIndex = category.subCategories.findIndex(sub => sub._id.toString() === subId);
+    if (subIndex === -1) {
+      return res.status(404).json({ success: false, message: 'Subcategory not found' });
+    }
+
+    category.subCategories.splice(subIndex, 1);
+    await category.save();
+
+    // Unset subCategoryId for matching products
+    const Product = require('../models/Product');
+    await Product.updateMany(
+      { subCategoryId: subId },
+      { $unset: { subCategoryId: "" } }
+    );
+
+    res.json({
+      success: true,
+      message: 'Subcategory deleted successfully',
+      category
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+

@@ -21,6 +21,18 @@ router.post('/categories', protect, productController.createCategory);
 // Create a new sub-category inside a category
 router.post('/categories/:id/subcategories', protect, productController.createSubCategory);
 
+// Update a category
+router.put('/categories/:id', protect, productController.updateCategory);
+
+// Delete a category
+router.delete('/categories/:id', protect, productController.deleteCategory);
+
+// Update a sub-category
+router.put('/categories/:id/subcategories/:subId', protect, productController.updateSubCategory);
+
+// Delete a sub-category
+router.delete('/categories/:id/subcategories/:subId', protect, productController.deleteSubCategory);
+
 // Get all products (with filters)
 router.get('/', productController.getProducts);
 
