@@ -14,9 +14,56 @@ const couponRoutes = require('./routes/coupon.routes');
 const collectionRoutes = require('./routes/collection.routes');
 
 const app = express();
+const zlib = require('zlib');
 
 // Trust proxy for correct IP detection behind Render/Load Balancers
 app.set('trust proxy', 1);
+
+// Native Gzip Compression Middleware
+app.use((req, res, next) => {
+  const acceptEncoding = req.headers['accept-encoding'] || '';
+  if (!acceptEncoding.includes('gzip')) {
+    return next();
+  }
+
+  const chunks = [];
+  const originalWrite = res.write;
+  const originalEnd = res.end;
+
+  res.write = function (chunk, ...args) {
+    if (chunk) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    return true;
+  };
+
+  res.end = function (chunk, encoding, ...args) {
+    if (chunk) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    if (chunks.length === 0) {
+      res.write = originalWrite;
+      res.end = originalEnd;
+      return originalEnd.call(this, chunk, encoding, ...args);
+    }
+    const body = Buffer.concat(chunks);
+    if (body.length < 1024) {
+      res.write = originalWrite;
+      res.end = originalEnd;
+      return originalEnd.call(this, body, encoding, ...args);
+    }
+    zlib.gzip(body, (err, compressed) => {
+      if (err) {
+        res.write = originalWrite;
+        res.end = originalEnd;
+        return originalEnd.call(this, body, encoding, ...args);
+      }
+      res.setHeader('Content-Encoding', 'gzip');
+      res.setHeader('Content-Length', compressed.length);
+      res.write = originalWrite;
+      res.end = originalEnd;
+      originalEnd.call(this, compressed, ...args);
+    });
+  };
+
+  next();
+});
 
 // Security Middleware
 app.use(helmet());
