@@ -78,10 +78,11 @@ class ProductService {
 
     // 2. Fallback to MongoDB
     const products = await Product.find(query)
-      .select('title brandName technicalName vendor thumbnail variants images availabilityStatus averageRating numReviews minPrice maxPrice categoryId subCategoryId')
+      .select('title brandName technicalName vendor thumbnail variants images availabilityStatus averageRating numReviews minPrice maxPrice categoryId subCategoryId assignedCollections description specifications tags')
       .populate('categoryId')
       .sort(sortOrder)
-      .limit(limit);
+      .limit(limit)
+      .lean();
 
     const nextCursor = products.length > 0 ? products[products.length - 1]._id : null;
 
@@ -110,7 +111,7 @@ class ProductService {
   }
 
   async getCategoriesHierarchy() {
-    return await Category.find({});
+    return await Category.find({}).lean();
   }
 
   /**

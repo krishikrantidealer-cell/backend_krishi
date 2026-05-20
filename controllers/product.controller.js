@@ -173,7 +173,8 @@ exports.getHomeDiscovery = async (req, res, next) => {
         availabilityStatus: { $ne: 'Out of Stock' } 
       })
       .select('title brandName technicalName thumbnail variants minPrice maxPrice availabilityStatus averageRating')
-      .limit(10);
+      .limit(10)
+      .lean();
 
       // Find matching custom collection banner to set as the shopbycrop/collection bannerImage
       let bannerImage = col.bannerImage;
