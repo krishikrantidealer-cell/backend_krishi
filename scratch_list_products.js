@@ -5,11 +5,13 @@ const Product = require('./models/Product');
 async function listProducts() {
   try {
     await mongoose.connect(process.env.MONGODB_URI);
-    const p = await Product.findOne({ title: /Thioshield/i });
-    if (p) {
+    const products = await Product.find({}).limit(5);
+    for (const p of products) {
       console.log(`Product: ${p.title}`);
-      console.log('Variants:');
-      p.variants.forEach(v => console.log(`- Size: ${v.size}, Price: ${v.price}, CompareAtPrice: ${v.compareAtPrice}`));
+      console.log(`- Thumbnail: ${p.thumbnail}`);
+      console.log(`- Images: ${JSON.stringify(p.images)}`);
+      console.log(`- OriginalImages: ${JSON.stringify(p.originalImages)}`);
+      console.log(`- MediumImages: ${JSON.stringify(p.mediumImages)}`);
     }
     process.exit(0);
   } catch (error) {

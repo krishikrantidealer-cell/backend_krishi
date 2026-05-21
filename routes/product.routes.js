@@ -2,6 +2,7 @@ const express = require('express');
 const productController = require('../controllers/product.controller');
 const reviewController = require('../controllers/review.controller');
 const { protect } = require('../middlewares/auth.middleware');
+const upload = require('../middlewares/upload.middleware');
 
 const router = express.Router();
 
@@ -37,10 +38,10 @@ router.delete('/categories/:id/subcategories/:subId', protect, productController
 router.get('/', productController.getProducts);
 
 // Create a new product (with multiple variants)
-router.post('/', protect, productController.createProduct);
+router.post('/', protect, upload.array('images', 10), productController.createProduct);
 
 // Update a product
-router.put('/:id', protect, productController.updateProduct);
+router.put('/:id', protect, upload.array('images', 10), productController.updateProduct);
 
 // Delete a product
 router.delete('/:id', protect, productController.deleteProduct);
