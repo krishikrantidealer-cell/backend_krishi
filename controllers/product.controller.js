@@ -294,6 +294,14 @@ exports.updateProduct = async (req, res, next) => {
 
     const productId = req.params.id;
 
+    // keepImages: URLs of existing images the admin wants to retain
+    const keepImages = Array.isArray(updateData.keepImages) ? updateData.keepImages : [];
+    const keepMedium = Array.isArray(updateData.keepMediumImages) ? updateData.keepMediumImages : [];
+    const keepOriginal = Array.isArray(updateData.keepOriginalImages) ? updateData.keepOriginalImages : [];
+    delete updateData.keepImages;
+    delete updateData.keepMediumImages;
+    delete updateData.keepOriginalImages;
+
     // Handle Image Uploads if any new files are uploaded
     if (req.files && req.files.length > 0) {
       const uploadPromises = req.files.map(file => 
@@ -301,11 +309,22 @@ exports.updateProduct = async (req, res, next) => {
       );
       
       const processedImages = await Promise.all(uploadPromises);
-      
-      updateData.thumbnail = processedImages[0].thumb;
-      updateData.mediumImages = processedImages.map(img => img.medium);
-      updateData.originalImages = processedImages.map(img => img.original);
-      updateData.images = processedImages.map(img => img.thumb);
+
+      // Merge kept existing images with newly uploaded images
+      const allThumbs = [...keepImages, ...processedImages.map(img => img.thumb)];
+      const allMedium = [...keepMedium, ...processedImages.map(img => img.medium)];
+      const allOriginal = [...keepOriginal, ...processedImages.map(img => img.original)];
+
+      updateData.thumbnail = allThumbs[0]; // First image is always thumbnail
+      updateData.images = allThumbs;
+      updateData.mediumImages = allMedium;
+      updateData.originalImages = allOriginal;
+    } else if (keepImages.length > 0) {
+      // No new uploads but kept images may have changed (e.g. some deleted)
+      updateData.thumbnail = keepImages[0];
+      updateData.images = keepImages;
+      if (keepMedium.length > 0) updateData.mediumImages = keepMedium;
+      if (keepOriginal.length > 0) updateData.originalImages = keepOriginal;
     }
 
     const product = await productService.updateProduct(productId, updateData);
