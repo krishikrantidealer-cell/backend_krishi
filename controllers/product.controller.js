@@ -5,6 +5,7 @@ const Collection = require('../models/Collection');
 const Product = require('../models/Product');
 const Banner = require('../models/Banner');
 const Category = require('../models/Category');
+const cacheService = require('../utils/cache');
 
 // Get all products with cursor-based pagination
 exports.getProducts = async (req, res, next) => {
@@ -355,6 +356,10 @@ exports.createCategory = async (req, res, next) => {
       subCategories: formattedSubCategories
     });
 
+    try {
+      await cacheService.del('categories:hierarchy');
+    } catch (_) {}
+
     res.status(201).json({
       success: true,
       message: 'Category created successfully',
@@ -388,6 +393,10 @@ exports.createSubCategory = async (req, res, next) => {
 
     category.subCategories.push({ name: name.trim() });
     await category.save();
+
+    try {
+      await cacheService.del('categories:hierarchy');
+    } catch (_) {}
 
     res.status(201).json({
       success: true,
@@ -425,6 +434,10 @@ exports.updateCategory = async (req, res, next) => {
     category.name = name.trim();
     await category.save();
 
+    try {
+      await cacheService.del('categories:hierarchy');
+    } catch (_) {}
+
     res.json({
       success: true,
       message: 'Category updated successfully',
@@ -453,6 +466,10 @@ exports.deleteCategory = async (req, res, next) => {
       { categoryId: id },
       { $unset: { categoryId: "", subCategoryId: "" } }
     );
+
+    try {
+      await cacheService.del('categories:hierarchy');
+    } catch (_) {}
 
     res.json({
       success: true,
@@ -492,6 +509,10 @@ exports.updateSubCategory = async (req, res, next) => {
     category.subCategories[subIndex].name = name.trim();
     await category.save();
 
+    try {
+      await cacheService.del('categories:hierarchy');
+    } catch (_) {}
+
     res.json({
       success: true,
       message: 'Subcategory updated successfully',
@@ -526,6 +547,10 @@ exports.deleteSubCategory = async (req, res, next) => {
       { subCategoryId: subId },
       { $unset: { subCategoryId: "" } }
     );
+
+    try {
+      await cacheService.del('categories:hierarchy');
+    } catch (_) {}
 
     res.json({
       success: true,

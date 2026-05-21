@@ -111,7 +111,19 @@ class ProductService {
   }
 
   async getCategoriesHierarchy() {
-    return await Category.find({}).lean();
+    const cacheKey = 'categories:hierarchy';
+    try {
+      const cached = await cacheService.get(cacheKey);
+      if (cached) return cached;
+    } catch (_) {}
+
+    const categories = await Category.find({}).lean();
+
+    try {
+      await cacheService.set(cacheKey, categories, 86400); // Cache for 24 hours
+    } catch (_) {}
+
+    return categories;
   }
 
   /**
