@@ -13,8 +13,10 @@ async function checkCollections() {
 
     const collections = await Collection.find();
     for (const col of collections) {
-      const productCount = await Product.countDocuments({ assignedCollections: col.name });
-      console.log(`- ${col.name} (${col.slug}): ${productCount} products`);
+      console.log(`- ${col.name} (${col._id}) (${col.slug}):`);
+      for (const sub of col.subCollections || []) {
+        console.log(`  * Sub: ${sub.name} (id: ${sub._id || sub.id}) (slug: ${sub.slug})`);
+      }
     }
 
     process.exit(0);
