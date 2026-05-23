@@ -210,7 +210,7 @@ exports.getHomeDiscovery = async (req, res, next) => {
       bestOffersBanners,
       categories,
       featuredProducts: featuredResult.products,
-      collections: collectionsWithProducts.filter(c => c.products.length > 0)
+      collections: collectionsWithProducts
     });
   } catch (error) {
     next(error);
