@@ -69,18 +69,14 @@ exports.getCategories = async (req, res) => {
 // Consolidated Discovery API for Home Screen (BFF Pattern)
 exports.getHomeDiscovery = async (req, res, next) => {
   try {
-    // 1. Fetch Categories
     const categoriesPromise = productService.getCategoriesHierarchy();
     
-    // 2. Fetch Featured Products (Top 10)
     const featuredPromise = productService.getProducts({ isFeatured: true }, { limit: 10 });
     
-    // 3. Fetch Collections
     const collectionsPromise = Collection.find({ isActive: true })
       .sort({ priority: -1, name: 1 })
       .lean();
 
-    // 4. Fetch Banners (including custom_collections, best_offers)
     const bannersDocs = await Banner.find({ isActive: true, type: { $in: ['home', 'category', 'category_card', 'custom_collections', 'best_offers'] } })
       .sort({ priority: 1 })
       .lean();
@@ -167,7 +163,6 @@ exports.getHomeDiscovery = async (req, res, next) => {
       }
     });
 
-    // 5. Populate collections with products and map custom collection banners
     const collectionsWithProducts = await Promise.all(collections.map(async (col) => {
       const products = await Product.find({ 
         assignedCollections: col.name,

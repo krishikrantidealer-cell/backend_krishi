@@ -19,7 +19,6 @@ const zlib = require('zlib');
 // Trust proxy for correct IP detection behind Render/Load Balancers
 app.set('trust proxy', 1);
 
-// Native Gzip Compression Middleware
 app.use((req, res, next) => {
   const acceptEncoding = req.headers['accept-encoding'] || '';
   if (!acceptEncoding.includes('gzip')) {
@@ -65,7 +64,6 @@ app.use((req, res, next) => {
   next();
 });
 
-// Security Middleware
 app.use(helmet());
 app.use(cors({
   origin: '*', // Configure this for your Flutter app domain/IP in production
@@ -73,19 +71,15 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-// Body Parser
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Logging
 if (process.env.NODE_ENV === 'development') {
   app.use(morgan('dev'));
 }
 
-// Global Rate Limiting
 app.use('/api', apiLimiter);
 
-// Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/products', productRoutes);
@@ -95,7 +89,6 @@ app.use('/api/favourites', favouriteRoutes);
 app.use('/api/coupons', couponRoutes);
 app.use('/api/collections', collectionRoutes);
 
-// Health Check
 app.get('/health', async (req, res) => {
   const { redisClient } = require('./config/redis');
   let redisStatus = 'disconnected';
@@ -114,12 +107,10 @@ app.get('/health', async (req, res) => {
   });
 });
 
-// Root Route
 app.get('/', (req, res) => {
   res.json({ message: 'Welcome to Krishi Auth API' });
 });
 
-// Error Handling Middleware
 app.use((err, req, res, next) => {
   const statusCode = res.statusCode === 200 ? 500 : res.statusCode;
   res.status(statusCode).json({

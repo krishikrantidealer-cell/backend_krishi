@@ -5,7 +5,6 @@ const cronService = require('./services/cron.service');
 
 const PORT = process.env.PORT || 5000;
 
-// Connect to Databases and Start Server
 const startServer = async () => {
   try {
     await connectDB();

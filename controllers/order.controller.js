@@ -84,10 +84,8 @@ exports.getMyOrders = async (req, res, next) => {
 
 exports.getOrderDetails = async (req, res, next) => {
   try {
-    // 1. Perform live authoritative sync with Delhivery using API Token
     await orderService.syncDelhiveryTracking(req.user._id, req.params.id);
 
-    // 2. Return latest updated order state
     const order = await orderService.getOrderById(req.user._id, req.params.id);
     res.json({ success: true, order });
   } catch (error) {
@@ -97,7 +95,6 @@ exports.getOrderDetails = async (req, res, next) => {
 
 exports.delhiveryWebhook = async (req, res, next) => {
   try {
-    // 1. Extract raw courier status and AWB / Order ID
     const rawStatus = req.body.status || req.body.current_status || '';
     const awb = req.body.awb || req.body.awb_number;
     const orderId = req.body.order_id || req.body.orderId;
@@ -106,7 +103,6 @@ exports.delhiveryWebhook = async (req, res, next) => {
       return res.status(400).json({ success: false, message: "AWB or Order ID required in webhook payload" });
     }
 
-    // 2. Find Order by AWB or Order ID
     let order;
     if (awb) {
       order = await Order.findOne({ awbNumber: awb });
@@ -119,10 +115,8 @@ exports.delhiveryWebhook = async (req, res, next) => {
       return res.status(404).json({ success: false, message: "Order not found for given tracking identifier" });
     }
 
-    // 3. Save raw courier status
     order.courierStatus = rawStatus;
 
-    // 4. Status Mapping Layer (Delhivery/Shiprocket -> Internal Enum)
     const statusLower = rawStatus.toLowerCase();
     if (statusLower.includes('manifested') || statusLower.includes('dispatched')) {
       order.orderStatus = 'Processing';
