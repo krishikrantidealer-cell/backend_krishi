@@ -1,7 +1,7 @@
 const express = require('express');
 const productController = require('../controllers/product.controller');
 const reviewController = require('../controllers/review.controller');
-const { protect } = require('../middlewares/auth.middleware');
+const { protect, authorizeRoles } = require('../middlewares/auth.middleware');
 const upload = require('../middlewares/upload.middleware');
 
 const router = express.Router();
@@ -17,34 +17,34 @@ router.get('/discovery', productController.getHomeDiscovery);
 router.get('/categories', productController.getCategories);
 
 // Create a new category
-router.post('/categories', protect, productController.createCategory);
+router.post('/categories', protect, authorizeRoles('admin'), productController.createCategory);
 
 // Create a new sub-category inside a category
-router.post('/categories/:id/subcategories', protect, productController.createSubCategory);
+router.post('/categories/:id/subcategories', protect, authorizeRoles('admin'), productController.createSubCategory);
 
 // Update a category
-router.put('/categories/:id', protect, productController.updateCategory);
+router.put('/categories/:id', protect, authorizeRoles('admin'), productController.updateCategory);
 
 // Delete a category
-router.delete('/categories/:id', protect, productController.deleteCategory);
+router.delete('/categories/:id', protect, authorizeRoles('admin'), productController.deleteCategory);
 
 // Update a sub-category
-router.put('/categories/:id/subcategories/:subId', protect, productController.updateSubCategory);
+router.put('/categories/:id/subcategories/:subId', protect, authorizeRoles('admin'), productController.updateSubCategory);
 
 // Delete a sub-category
-router.delete('/categories/:id/subcategories/:subId', protect, productController.deleteSubCategory);
+router.delete('/categories/:id/subcategories/:subId', protect, authorizeRoles('admin'), productController.deleteSubCategory);
 
 // Get all products (with filters)
 router.get('/', productController.getProducts);
 
 // Create a new product (with multiple variants)
-router.post('/', protect, upload.array('images', 10), productController.createProduct);
+router.post('/', protect, authorizeRoles('admin'), upload.array('images', 10), productController.createProduct);
 
 // Update a product
-router.put('/:id', protect, upload.array('images', 10), productController.updateProduct);
+router.put('/:id', protect, authorizeRoles('admin'), upload.array('images', 10), productController.updateProduct);
 
 // Delete a product
-router.delete('/:id', protect, productController.deleteProduct);
+router.delete('/:id', protect, authorizeRoles('admin'), productController.deleteProduct);
 
 // Get single product details
 router.get('/:id', productController.getProduct);

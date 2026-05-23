@@ -9,6 +9,34 @@ class CouponService {
     return await Coupon.find({ isActive: true });
   }
 
+  // --- ADMIN METHODS ---
+  async getAllCoupons() {
+    return await Coupon.find().sort({ createdAt: -1 });
+  }
+
+  async createCoupon(data) {
+    // Ensure code is uppercase
+    if (data.code) {
+      data.code = data.code.toUpperCase();
+    }
+    return await Coupon.create(data);
+  }
+
+  async updateCoupon(id, data) {
+    if (data.code) {
+      data.code = data.code.toUpperCase();
+    }
+    const coupon = await Coupon.findByIdAndUpdate(id, data, { new: true, runValidators: true });
+    if (!coupon) throw new Error('Coupon not found');
+    return coupon;
+  }
+
+  async deleteCoupon(id) {
+    const coupon = await Coupon.findByIdAndDelete(id);
+    if (!coupon) throw new Error('Coupon not found');
+    return coupon;
+  }
+
   async applyCoupon(userId, code, cartTotalOverride = null, existingCart = null) {
     const coupon = await Coupon.findOne({ code: code.toUpperCase(), isActive: true });
     

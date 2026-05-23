@@ -179,6 +179,46 @@ class OrderService {
       .sort({ createdAt: -1 });
   }
 
+  // --- ADMIN METHODS ---
+  async getAllOrders(filters = {}) {
+    const query = {};
+    if (filters.status) query.orderStatus = filters.status;
+    if (filters.paymentStatus) query.paymentStatus = filters.paymentStatus;
+    
+    return await Order.find(query)
+      .populate('user', 'firstName lastName phoneNumber')
+      .populate('items.product')
+      .sort({ createdAt: -1 });
+  }
+
+  async updateOrderStatus(orderId, status, awbNumber = null) {
+    const order = await Order.findById(orderId);
+    if (!order) throw new Error('Order not found');
+
+    order.orderStatus = status;
+    if (awbNumber) order.awbNumber = awbNumber;
+
+    if (status === 'Processing') order.processingAt = new Date();
+    else if (status === 'Shipped') order.shippedAt = new Date();
+    else if (status === 'Out for Delivery') order.outForDeliveryAt = new Date();
+    else if (status === 'Delivered') order.deliveredAt = new Date();
+    else if (status === 'Cancelled') order.cancelledAt = new Date();
+    else if (status === 'RTO') order.rtoAt = new Date();
+
+    await order.save();
+
+    // Trigger Notification
+    const notificationService = require('./notification.service');
+    notificationService.sendUtilityNotification(
+      order.user,
+      `Order Status Update: ${status} 📦`,
+      `Your order ${order.orderId} is now ${status}.`,
+      `/order_details/${order._id}`
+    ).catch(err => console.error("Error sending order status notification:", err));
+
+    return order;
+  }
+
   async getOrderById(userId, orderId) {
     const order = await Order.findOne({ _id: orderId, user: userId })
       .populate('items.product');

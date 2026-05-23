@@ -164,8 +164,11 @@ exports.getHomeDiscovery = async (req, res, next) => {
     });
 
     const collectionsWithProducts = await Promise.all(collections.map(async (col) => {
+      const subNames = (col.subCollections || []).map(s => s.name);
+      const allNames = [col.name, ...subNames];
+
       const products = await Product.find({ 
-        assignedCollections: col.name,
+        assignedCollections: { $in: allNames },
         availabilityStatus: { $ne: 'Out of Stock' } 
       })
       .select('title brandName technicalName thumbnail variants minPrice maxPrice availabilityStatus averageRating')

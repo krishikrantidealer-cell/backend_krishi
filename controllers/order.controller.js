@@ -185,3 +185,34 @@ exports.cancelOrder = async (req, res, next) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// --- ADMIN CONTROLLERS ---
+exports.getAllOrders = async (req, res, next) => {
+  try {
+    const filters = {
+      status: req.query.status,
+      paymentStatus: req.query.paymentStatus
+    };
+    const orders = await orderService.getAllOrders(filters);
+    res.json({ success: true, orders });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.adminUpdateOrderStatus = async (req, res, next) => {
+  try {
+    const { status, awbNumber } = req.body;
+    const { id } = req.params;
+
+    const allowedStatuses = ['Pending', 'Processing', 'Shipped', 'Out for Delivery', 'Delivered', 'Cancelled', 'RTO'];
+    if (!allowedStatuses.includes(status)) {
+      return res.status(400).json({ success: false, message: 'Invalid order status' });
+    }
+
+    const order = await orderService.updateOrderStatus(id, status, awbNumber);
+    res.json({ success: true, message: `Order status updated to ${status}`, order });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};

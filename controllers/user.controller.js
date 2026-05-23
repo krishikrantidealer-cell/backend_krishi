@@ -135,3 +135,35 @@ exports.getMyNotifications = async (req, res, next) => {
     next(error);
   }
 };
+
+/**
+ * ADMIN CONTROLLERS
+ */
+exports.getAllUsers = async (req, res, next) => {
+  try {
+    const filters = {
+      role: req.query.role,
+      kycStatus: req.query.kycStatus
+    };
+    const users = await userService.getAllUsers(filters);
+    res.json({ success: true, users });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.adminUpdateKycStatus = async (req, res, next) => {
+  try {
+    const { status, reason } = req.body;
+    const { userId } = req.params;
+    
+    if (!['verified', 'rejected'].includes(status)) {
+      return res.status(400).json({ success: false, message: 'Invalid status. Must be verified or rejected' });
+    }
+
+    const user = await userService.updateKycStatus(userId, status, reason);
+    res.json({ success: true, message: `KYC status updated to ${status}`, user });
+  } catch (error) {
+    next(error);
+  }
+};

@@ -34,4 +34,13 @@ router.get('/:id', orderController.getOrderDetails);
 // Cancel an order (Before dispatch)
 router.post('/:id/cancel', orderController.cancelOrder);
 
+// --- ADMIN ROUTES ---
+const { authorizeRoles } = require('../middlewares/auth.middleware');
+
+// Get all orders (Admin only)
+router.get('/admin/all', authorizeRoles('admin'), orderController.getAllOrders);
+
+// Update order status (Admin only)
+router.put('/admin/:id/status', authorizeRoles('admin'), orderController.adminUpdateOrderStatus);
+
 module.exports = router;

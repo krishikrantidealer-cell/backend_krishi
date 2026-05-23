@@ -12,6 +12,7 @@ const orderRoutes = require('./routes/order.routes');
 const favouriteRoutes = require('./routes/favourite.routes');
 const couponRoutes = require('./routes/coupon.routes');
 const collectionRoutes = require('./routes/collection.routes');
+const adminRoutes = require('./routes/admin.routes');
 
 const app = express();
 const zlib = require('zlib');
@@ -88,6 +89,7 @@ app.use('/api/orders', orderRoutes);
 app.use('/api/favourites', favouriteRoutes);
 app.use('/api/coupons', couponRoutes);
 app.use('/api/collections', collectionRoutes);
+app.use('/api/admin', adminRoutes);
 
 app.get('/health', async (req, res) => {
   const { redisClient } = require('./config/redis');

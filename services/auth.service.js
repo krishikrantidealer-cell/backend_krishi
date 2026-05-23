@@ -58,6 +58,8 @@ class AuthService {
       throw new Error('Invalid OTP.');
     }
 
+
+
     // OTP is correct, delete it (single-use)
     await redisClient.del(otpKey);
     return true;

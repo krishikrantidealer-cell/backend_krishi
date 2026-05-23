@@ -82,4 +82,13 @@ router.post(
 router.delete('/addresses/:addressId', userController.deleteShippingAddress);
 router.patch('/addresses/:addressId/default', userController.setDefaultAddress);
 
+// --- ADMIN ROUTES ---
+const { authorizeRoles } = require('../middlewares/auth.middleware');
+
+// Get all users (Admin only)
+router.get('/', authorizeRoles('admin'), userController.getAllUsers);
+
+// Update KYC Status (Approve/Reject) (Admin only)
+router.put('/:userId/kyc', authorizeRoles('admin'), userController.adminUpdateKycStatus);
+
 module.exports = router;

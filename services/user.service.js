@@ -2,6 +2,15 @@ const User = require('../models/User');
 const notificationService = require('./notification.service');
 
 class UserService {
+  async getAllUsers(filters = {}) {
+    // Optionally filter by role, kycStatus, etc.
+    const query = {};
+    if (filters.role) query.role = filters.role;
+    if (filters.kycStatus) query.kycStatus = filters.kycStatus;
+    
+    return await User.find(query).select('-password').sort({ createdAt: -1 });
+  }
+
   async getProfile(userId) {
     const user = await User.findById(userId);
     if (!user) {
