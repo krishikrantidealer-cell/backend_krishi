@@ -112,34 +112,66 @@ const productSchema = new mongoose.Schema({
 });
 
 // Automatically calculate min/max price, generate tags, and set default availability before saving
-productSchema.pre('save', function() {
-  if (this.variants && this.variants.length > 0) {
-    const prices = this.variants.map(v => v.price);
-    this.minPrice = Math.min(...prices);
-    this.maxPrice = Math.max(...prices);
-  } else {
-    this.minPrice = 0;
-    this.maxPrice = 0;
-  }
-
-  // Auto-generate tags
-  const generatedTags = new Set();
-  const fieldsToTag = [this.title, this.brandName, this.technicalName, this.vendor];
-  fieldsToTag.forEach(field => {
-    if (field) {
-      field.split(/[\s,/\-\(\)]+/).forEach(w => {
-        const clean = w.replace(/[^a-zA-Z0-9]/g, '').trim().toLowerCase();
-        if (clean.length > 2) {
-          generatedTags.add(clean);
+productSchema.pre('save', async function(next) {
+  try {
+    // Automatically map raw ObjectIDs to Collection/Subcollection Names
+    if (this.isModified('assignedCollections') && this.assignedCollections && this.assignedCollections.length > 0) {
+      const Collection = mongoose.models.Collection || mongoose.model('Collection');
+      const newAssignments = [];
+      for (let c of this.assignedCollections) {
+        if (/^[0-9a-fA-F]{24}$/.test(c)) {
+          let col = await Collection.findById(c);
+          if (col) {
+            newAssignments.push(col.name);
+            continue;
+          }
+          col = await Collection.findOne({ 'subCollections._id': c });
+          if (col) {
+            const sub = col.subCollections.find(s => s._id.toString() === c.toString());
+            if (sub) newAssignments.push(sub.name);
+            else newAssignments.push(c);
+          } else {
+            newAssignments.push(c);
+          }
+        } else {
+          newAssignments.push(c);
         }
-      });
+      }
+      this.assignedCollections = [...new Set(newAssignments)];
     }
-  });
-  this.tags = Array.from(generatedTags);
 
-  // Set default availabilityStatus if missing
-  if (!this.availabilityStatus) {
-    this.availabilityStatus = 'In Stock';
+    if (this.variants && this.variants.length > 0) {
+      const prices = this.variants.map(v => v.price);
+      this.minPrice = Math.min(...prices);
+      this.maxPrice = Math.max(...prices);
+    } else {
+      this.minPrice = 0;
+      this.maxPrice = 0;
+    }
+
+    // Auto-generate tags
+    const generatedTags = new Set();
+    const fieldsToTag = [this.title, this.brandName, this.technicalName, this.vendor];
+    fieldsToTag.forEach(field => {
+      if (field) {
+        field.split(/[\s,/\-\(\)]+/).forEach(w => {
+          const clean = w.replace(/[^a-zA-Z0-9]/g, '').trim().toLowerCase();
+          if (clean.length > 2) {
+            generatedTags.add(clean);
+          }
+        });
+      }
+    });
+    this.tags = Array.from(generatedTags);
+
+    // Set default availabilityStatus if missing
+    if (!this.availabilityStatus) {
+      this.availabilityStatus = 'In Stock';
+    }
+    
+    next();
+  } catch (error) {
+    next(error);
   }
 });
 
