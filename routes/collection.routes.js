@@ -15,10 +15,10 @@ router.get('/products', collectionController.getCollectionsWithProducts);
 router.get('/:slug', collectionController.getCollectionBySlug);
 
 // Create collection (Admin)
-router.post('/', protect, authorizeRoles('admin'), upload.single('image'), collectionController.createCollection);
+router.post('/', protect, authorizeRoles('admin'), collectionController.createCollection);
 
 // Update collection (Admin)
-router.put('/:id', protect, authorizeRoles('admin'), upload.single('image'), collectionController.updateCollection);
+router.put('/:id', protect, authorizeRoles('admin'), collectionController.updateCollection);
 
 // Delete collection (Admin)
 router.delete('/:id', protect, authorizeRoles('admin'), collectionController.deleteCollection);

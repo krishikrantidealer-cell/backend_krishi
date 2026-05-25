@@ -78,18 +78,11 @@ exports.createCollection = async (req, res, next) => {
   try {
     const { name, description, bannerImage, isActive, priority } = req.body;
     
-    let nameToUse = name || `Collection-${Date.now()}`;
-    let slug = nameToUse.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-    let bannerImageUrl = bannerImage;
-
-    if (req.file) {
-      const timestamp = Date.now();
-      const destination = `collections/${slug}_${timestamp}.webp`;
-      bannerImageUrl = await uploadToGCS(req.file.buffer, destination, 'image/webp');
-    }
+    // Automatically generate slug from name
+    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 
     const collection = await Collection.create({
-      name: nameToUse,
+      name,
       slug,
       description,
       bannerImage,
@@ -121,21 +114,12 @@ exports.updateCollection = async (req, res, next) => {
     const updateData = {};
     
     if (name !== undefined) {
-      const nameToUse = name || `Collection-${Date.now()}`;
-      updateData.name = nameToUse;
-      updateData.slug = nameToUse.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-    }
-    
-    if (req.file) {
-      const timestamp = Date.now();
-      const slugToUse = updateData.slug || collection.slug;
-      const destination = `collections/${slugToUse}_${timestamp}.webp`;
-      updateData.bannerImage = await uploadToGCS(req.file.buffer, destination, 'image/webp');
-    } else if (bannerImage !== undefined) {
-      updateData.bannerImage = bannerImage;
+      updateData.name = name;
+      updateData.slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
     }
     
     if (description !== undefined) updateData.description = description;
+    if (bannerImage !== undefined) updateData.bannerImage = bannerImage;
     if (isActive !== undefined) updateData.isActive = isActive;
     if (priority !== undefined) updateData.priority = Number(priority);
     if (subCollections !== undefined) updateData.subCollections = subCollections;
