@@ -8,7 +8,7 @@ exports.getCollections = async (req, res, next) => {
     const query = req.query.all === 'true' ? {} : { isActive: true };
     const collections = await Collection.find(query)
       .sort({ priority: -1, name: 1 });
-    
+
     res.json({
       success: true,
       collections
@@ -25,7 +25,7 @@ exports.getCollectionBySlug = async (req, res, next) => {
     if (!collection) {
       return res.status(404).json({ success: false, message: 'Collection not found' });
     }
-    
+
     res.json({
       success: true,
       collection
@@ -45,13 +45,13 @@ exports.getCollectionsWithProducts = async (req, res, next) => {
       .lean();
 
     const result = await Promise.all(collections.map(async (col) => {
-      const products = await Product.find({ 
+      const products = await Product.find({
         assignedCollections: col.name,
-        availabilityStatus: { $ne: 'Out of Stock' } 
+        availabilityStatus: { $ne: 'Out of Stock' }
       })
-      .select('title brandName technicalName thumbnail variants minPrice maxPrice availabilityStatus averageRating')
-      .limit(limit)
-      .lean();
+        .select('title brandName technicalName thumbnail variants minPrice maxPrice availabilityStatus averageRating')
+        .limit(limit)
+        .lean();
 
       return {
         ...col,
@@ -60,7 +60,7 @@ exports.getCollectionsWithProducts = async (req, res, next) => {
     }));
 
     // Filter out collections that have no products if requested
-    const finalResult = req.query.skipEmpty === 'true' 
+    const finalResult = req.query.skipEmpty === 'true'
       ? result.filter(c => c.products.length > 0)
       : result;
 
@@ -77,7 +77,7 @@ exports.getCollectionsWithProducts = async (req, res, next) => {
 exports.createCollection = async (req, res, next) => {
   try {
     const { name, description, bannerImage, isActive, priority } = req.body;
-    
+
     // Automatically generate slug from name
     const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 
@@ -104,7 +104,7 @@ exports.createCollection = async (req, res, next) => {
 exports.updateCollection = async (req, res, next) => {
   try {
     const { name, description, bannerImage, isActive, priority, subCollections } = req.body;
-    
+
     const collection = await Collection.findById(req.params.id);
     if (!collection) {
       return res.status(404).json({ success: false, message: 'Collection not found' });
@@ -112,12 +112,12 @@ exports.updateCollection = async (req, res, next) => {
 
     const oldName = collection.name;
     const updateData = {};
-    
+
     if (name !== undefined) {
       updateData.name = name;
       updateData.slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
     }
-    
+
     if (description !== undefined) updateData.description = description;
     if (bannerImage !== undefined) updateData.bannerImage = bannerImage;
     if (isActive !== undefined) updateData.isActive = isActive;
@@ -180,7 +180,7 @@ exports.createSubCollection = async (req, res, next) => {
 
     const parent = await Collection.findById(parentId);
     if (!parent) {
-      return res.status(404).json({ success: false, message: 'Parent collection not found' });
+      return res.status(404).json({ success: false, message: 'Collection not found' });
     }
 
     let nameToUse = name || `SubCollection-${Date.now()}`;
@@ -191,7 +191,7 @@ exports.createSubCollection = async (req, res, next) => {
     if (exists) {
       return res.status(400).json({ success: false, message: 'Sub-collection already exists' });
     }
-    
+
     let imageUrl;
     if (req.file) {
       const timestamp = Date.now();
@@ -227,7 +227,7 @@ exports.updateSubCollection = async (req, res, next) => {
 
     const parent = await Collection.findById(parentId);
     if (!parent) {
-      return res.status(404).json({ success: false, message: 'Parent collection not found' });
+      return res.status(404).json({ success: false, message: 'Collection not found' });
     }
 
     const subIndex = parent.subCollections.findIndex(sub => sub._id.toString() === subId);
@@ -236,7 +236,7 @@ exports.updateSubCollection = async (req, res, next) => {
     }
 
     const oldName = parent.subCollections[subIndex].name;
-    
+
     if (name !== undefined) {
       const nameToUse = name || `SubCollection-${Date.now()}`;
       parent.subCollections[subIndex].name = nameToUse;
@@ -280,7 +280,7 @@ exports.deleteSubCollection = async (req, res, next) => {
 
     const parent = await Collection.findById(parentId);
     if (!parent) {
-      return res.status(404).json({ success: false, message: 'Parent collection not found' });
+      return res.status(404).json({ success: false, message: 'Collection not found' });
     }
 
     const subIndex = parent.subCollections.findIndex(sub => sub._id.toString() === subId);
