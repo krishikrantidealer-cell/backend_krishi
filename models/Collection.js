@@ -45,6 +45,10 @@ const collectionSchema = new mongoose.Schema({
     isActive: {
       type: Boolean,
       default: true
+    },
+    image: {
+      type: String,
+      trim: true
     }
   }]
 }, {

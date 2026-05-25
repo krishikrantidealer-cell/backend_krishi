@@ -1,6 +1,7 @@
 const express = require('express');
 const collectionController = require('../controllers/collection.controller');
 const { protect, authorizeRoles } = require('../middlewares/auth.middleware');
+const upload = require('../middlewares/upload.middleware');
 
 const router = express.Router();
 
@@ -14,19 +15,19 @@ router.get('/products', collectionController.getCollectionsWithProducts);
 router.get('/:slug', collectionController.getCollectionBySlug);
 
 // Create collection (Admin)
-router.post('/', protect, authorizeRoles('admin'), collectionController.createCollection);
+router.post('/', protect, authorizeRoles('admin'), upload.single('image'), collectionController.createCollection);
 
 // Update collection (Admin)
-router.put('/:id', protect, authorizeRoles('admin'), collectionController.updateCollection);
+router.put('/:id', protect, authorizeRoles('admin'), upload.single('image'), collectionController.updateCollection);
 
 // Delete collection (Admin)
 router.delete('/:id', protect, authorizeRoles('admin'), collectionController.deleteCollection);
 
 // Create sub-collection (Admin)
-router.post('/:id/sub', protect, authorizeRoles('admin'), collectionController.createSubCollection);
+router.post('/:id/sub', protect, authorizeRoles('admin'), upload.single('image'), collectionController.createSubCollection);
 
 // Update sub-collection (Admin)
-router.put('/:id/sub/:subId', protect, authorizeRoles('admin'), collectionController.updateSubCollection);
+router.put('/:id/sub/:subId', protect, authorizeRoles('admin'), upload.single('image'), collectionController.updateSubCollection);
 
 // Delete sub-collection (Admin)
 router.delete('/:id/sub/:subId', protect, authorizeRoles('admin'), collectionController.deleteSubCollection);

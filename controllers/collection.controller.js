@@ -1,5 +1,6 @@
 const Collection = require('../models/Collection');
 const Product = require('../models/Product');
+const { uploadToGCS } = require('../utils/gcs');
 
 // Get all active collections
 exports.getCollections = async (req, res, next) => {
@@ -77,11 +78,18 @@ exports.createCollection = async (req, res, next) => {
   try {
     const { name, description, bannerImage, isActive, priority } = req.body;
     
-    // Automatically generate slug from name
-    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+    let nameToUse = name || `Collection-${Date.now()}`;
+    let slug = nameToUse.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+    let bannerImageUrl = bannerImage;
+
+    if (req.file) {
+      const timestamp = Date.now();
+      const destination = `collections/${slug}_${timestamp}.webp`;
+      bannerImageUrl = await uploadToGCS(req.file.buffer, destination, 'image/webp');
+    }
 
     const collection = await Collection.create({
-      name,
+      name: nameToUse,
       slug,
       description,
       bannerImage,
@@ -113,11 +121,21 @@ exports.updateCollection = async (req, res, next) => {
     const updateData = {};
     
     if (name !== undefined) {
-      updateData.name = name;
-      updateData.slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+      const nameToUse = name || `Collection-${Date.now()}`;
+      updateData.name = nameToUse;
+      updateData.slug = nameToUse.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
     }
+    
+    if (req.file) {
+      const timestamp = Date.now();
+      const slugToUse = updateData.slug || collection.slug;
+      const destination = `collections/${slugToUse}_${timestamp}.webp`;
+      updateData.bannerImage = await uploadToGCS(req.file.buffer, destination, 'image/webp');
+    } else if (bannerImage !== undefined) {
+      updateData.bannerImage = bannerImage;
+    }
+    
     if (description !== undefined) updateData.description = description;
-    if (bannerImage !== undefined) updateData.bannerImage = bannerImage;
     if (isActive !== undefined) updateData.isActive = isActive;
     if (priority !== undefined) updateData.priority = Number(priority);
     if (subCollections !== undefined) updateData.subCollections = subCollections;
@@ -181,17 +199,26 @@ exports.createSubCollection = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Parent collection not found' });
     }
 
-    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+    let nameToUse = name || `SubCollection-${Date.now()}`;
+    let slug = nameToUse.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 
     // Check if sub-collection already exists in this parent
-    const exists = parent.subCollections.some(sub => sub.slug === slug || sub.name.toLowerCase() === name.toLowerCase());
+    const exists = parent.subCollections.some(sub => sub.slug === slug || sub.name.toLowerCase() === nameToUse.toLowerCase());
     if (exists) {
       return res.status(400).json({ success: false, message: 'Sub-collection already exists' });
     }
+    
+    let imageUrl;
+    if (req.file) {
+      const timestamp = Date.now();
+      const destination = `collections/sub/${slug}_${timestamp}.webp`;
+      imageUrl = await uploadToGCS(req.file.buffer, destination, 'image/webp');
+    }
 
     const newSub = {
-      name,
+      name: nameToUse,
       slug,
+      image: imageUrl,
       isActive: isActive !== undefined ? isActive : true
     };
 
@@ -227,11 +254,18 @@ exports.updateSubCollection = async (req, res, next) => {
     const oldName = parent.subCollections[subIndex].name;
     
     if (name !== undefined) {
-      parent.subCollections[subIndex].name = name;
-      parent.subCollections[subIndex].slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+      const nameToUse = name || `SubCollection-${Date.now()}`;
+      parent.subCollections[subIndex].name = nameToUse;
+      parent.subCollections[subIndex].slug = nameToUse.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
     }
     if (isActive !== undefined) {
       parent.subCollections[subIndex].isActive = isActive;
+    }
+    if (req.file) {
+      const timestamp = Date.now();
+      const slugToUse = parent.subCollections[subIndex].slug;
+      const destination = `collections/sub/${slugToUse}_${timestamp}.webp`;
+      parent.subCollections[subIndex].image = await uploadToGCS(req.file.buffer, destination, 'image/webp');
     }
 
     await parent.save();
