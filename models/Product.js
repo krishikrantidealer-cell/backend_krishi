@@ -18,7 +18,13 @@ const variantSchema = new mongoose.Schema({
   price30_50: { type: Number, min: 0 },
   price50_plus: { type: Number, min: 0 },
   packVolume: { type: Number, default: 1.0 },
-  weight: { type: Number }
+  weight: { type: Number },
+  rates: { type: Map, of: String },
+  computedPrices: { type: Map, of: String },
+  priceTiers: [{
+    id: { type: String },
+    name: { type: String }
+  }]
 });
 
 const productSchema = new mongoose.Schema({

@@ -1,6 +1,7 @@
 const userService = require('../services/user.service');
 const { processAndUploadKycDocument } = require('../utils/gcs');
 const Notification = require('../models/Notification');
+const { CRC32C_EXCEPTION_MESSAGES } = require('@google-cloud/storage');
 
 exports.getProfile = async (req, res, next) => {
   try {
@@ -43,15 +44,15 @@ exports.completeProfile = async (req, res, next) => {
 exports.submitKyc = async (req, res, next) => {
   try {
     const kycData = req.body;
-    
+
     // Handle File Upload to GCS
     if (!req.file) {
       return res.status(400).json({ success: false, message: 'Licence image file is required' });
     }
 
     const licenceImageUrl = await processAndUploadKycDocument(
-      req.file.buffer, 
-      req.file.originalname, 
+      req.file.buffer,
+      req.file.originalname,
       req.user._id
     );
 
@@ -59,7 +60,7 @@ exports.submitKyc = async (req, res, next) => {
     kycData.licenceImage = licenceImageUrl;
 
     const user = await userService.submitKyc(req.user._id, kycData);
-    
+
     res.json({
       success: true,
       message: 'KYC submitted successfully',
@@ -129,7 +130,7 @@ exports.getMyNotifications = async (req, res, next) => {
     const notifications = await Notification.find({ user: req.user._id })
       .sort({ createdAt: -1 })
       .limit(50);
-      
+
     res.json({ success: true, notifications });
   } catch (error) {
     next(error);
@@ -156,7 +157,7 @@ exports.adminUpdateKycStatus = async (req, res, next) => {
   try {
     const { status, reason } = req.body;
     const { userId } = req.params;
-    
+
     if (!['verified', 'rejected'].includes(status)) {
       return res.status(400).json({ success: false, message: 'Invalid status. Must be verified or rejected' });
     }

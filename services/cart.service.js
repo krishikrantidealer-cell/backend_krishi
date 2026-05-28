@@ -29,6 +29,59 @@ async function runLocked(userId, fn) {
   return resultPromise;
 }
 
+function getCorrectPrice(variant, totalVolume) {
+  if (variant.priceTiers && variant.priceTiers.length > 0 && variant.rates) {
+    const tiersWithMin = [];
+    for (const tier of variant.priceTiers) {
+      const name = tier.name || '';
+      let minVal = 0;
+      const rangeMatch = name.match(/(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)/);
+      const plusMatch = name.match(/(\d+(?:\.\d+)?)\s*\+/);
+      if (rangeMatch) {
+        minVal = parseFloat(rangeMatch[1]);
+      } else if (plusMatch) {
+        minVal = parseFloat(plusMatch[1]);
+      } else {
+        const numMatch = name.match(/(\d+(?:\.\d+)?)/);
+        if (numMatch) {
+          minVal = parseFloat(numMatch[1]);
+        }
+      }
+      
+      tiersWithMin.push({
+        id: tier.id,
+        min: minVal,
+        name: name
+      });
+    }
+
+    // Sort by min descending
+    tiersWithMin.sort((a, b) => b.min - a.min);
+
+    for (const tier of tiersWithMin) {
+      if (totalVolume >= tier.min) {
+        const rateVal = variant.rates.get ? variant.rates.get(tier.id) : variant.rates[tier.id];
+        if (rateVal) {
+          const numMatch = rateVal.match(/^([0-9.]+)/);
+          if (numMatch) {
+            return parseFloat(numMatch[1]);
+          }
+        }
+      }
+    }
+  }
+
+  // Fallback to legacy hardcoded logic
+  if (totalVolume > 50.0) {
+    return variant.price50_plus || variant.price;
+  } else if (totalVolume > 30.0) {
+    return variant.price30_50 || variant.price;
+  } else if (totalVolume >= 10.0) {
+    return variant.price10_30 || variant.price;
+  }
+  return variant.price;
+}
+
 class CartService {
   async getCart(userId) {
     let cart = await Cart.findOne({ user: userId }).populate('items.product', 'title brandName technicalName vendor images variants');
@@ -152,15 +205,7 @@ class CartService {
         if (variant) {
           const packVolume = variant.packVolume || 1.0;
           const totalVolume = packVolume * item.quantity;
-          let correctPrice = variant.price;
-
-          if (totalVolume > 50.0) {
-            correctPrice = variant.price50_plus || variant.price;
-          } else if (totalVolume > 30.0) {
-            correctPrice = variant.price30_50 || variant.price;
-          } else if (totalVolume >= 10.0) {
-            correctPrice = variant.price10_30 || variant.price;
-          }
+          const correctPrice = getCorrectPrice(variant, totalVolume);
 
           item.price = correctPrice * packVolume;
         }
