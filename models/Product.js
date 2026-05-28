@@ -24,7 +24,8 @@ const variantSchema = new mongoose.Schema({
   priceTiers: [{
     id: { type: String },
     name: { type: String }
-  }]
+  }],
+  basePacking: { type: String }
 });
 
 const productSchema = new mongoose.Schema({
