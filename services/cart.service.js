@@ -64,13 +64,7 @@ function getCorrectPrice(variant, totalVolume) {
         if (rateVal) {
           const numMatch = rateVal.match(/^([0-9.]+)/);
           if (numMatch) {
-            let parsedRate = parseFloat(numMatch[1]);
-            // Normalize small-unit rates: /gm or /ml → multiply by 1000 to get /kg or /lit
-            // packVolume is always stored in kg/lit, so the rate must be in the same base.
-            if (rateVal.toLowerCase().endsWith('/gm') || rateVal.toLowerCase().endsWith('/ml')) {
-              parsedRate *= 1000;
-            }
-            return parsedRate;
+            return parseFloat(numMatch[1]);
           }
         }
       }
