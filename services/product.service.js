@@ -18,7 +18,7 @@ class ProductService {
     });
 
     // Description and specifications are now embedded in the Product model via productData
-    
+
     // Invalidate product listing cache
     await cacheService.delByPattern('products:*');
 
@@ -115,7 +115,7 @@ class ProductService {
     try {
       const cached = await cacheService.get(cacheKey);
       if (cached) return cached;
-    } catch (_) {}
+    } catch (_) { }
 
     const mongoose = require('mongoose');
     const categories = await Category.find({}).lean();
@@ -125,24 +125,14 @@ class ProductService {
     if (missingBanners) {
       try {
         const Banner = mongoose.models.Banner || mongoose.model('Banner');
-        const bannersDocs = await Banner.find({ isActive: true, type: { $in: ['category_card', 'category'] } }).lean();
-        
+        const bannersDocs = await Banner.find({ isActive: true, type: 'category_card' }).lean();
+
         const categoryCardBanners = [];
         bannersDocs.forEach(doc => {
           if (doc.categorycardbanners && Array.isArray(doc.categorycardbanners)) {
             doc.categorycardbanners.forEach((url, index) => {
               categoryCardBanners.push({
                 title: `Category Card Banner ${index + 1}`,
-                imageUrl: url,
-                priority: index,
-                redirectTarget: doc.redirectTarget
-              });
-            });
-          }
-          if (doc.categorybanners && Array.isArray(doc.categorybanners)) {
-            doc.categorybanners.forEach((url, index) => {
-              categoryCardBanners.push({
-                title: `Category Banner ${index + 1}`,
                 imageUrl: url,
                 priority: index,
                 redirectTarget: doc.redirectTarget
@@ -158,25 +148,25 @@ class ProductService {
           if (!cat.bannerImage) {
             const cleanName = cat.name.trim().toLowerCase();
             const cleanNameNoHyphen = cleanName.replaceAll('-', '').replaceAll(' ', '');
-            
+
             // Try to match by target or title
             let matchedBanner = categoryCardBanners.find(b => {
               const titleLower = (b.title || '').toLowerCase();
               const targetLower = (b.redirectTarget || '').toLowerCase();
-              return titleLower.includes(cleanName) || 
-                     targetLower === cleanName ||
-                     titleLower.includes(cleanNameNoHyphen);
+              return titleLower.includes(cleanName) ||
+                targetLower === cleanName ||
+                titleLower.includes(cleanNameNoHyphen);
             });
-            
+
             if (!matchedBanner) {
               // Try matching by image URL path keywords
               matchedBanner = categoryCardBanners.find(b => {
                 const urlLower = (b.imageUrl || '').toLowerCase();
-                return urlLower.includes(`/${cleanName}.`) || 
-                       urlLower.includes(`/${cleanName}%`) || 
-                       urlLower.includes(`_${cleanName}`) || 
-                       urlLower.includes(cleanName) ||
-                       urlLower.includes(cleanNameNoHyphen);
+                return urlLower.includes(`/${cleanName}.`) ||
+                  urlLower.includes(`/${cleanName}%`) ||
+                  urlLower.includes(`_${cleanName}`) ||
+                  urlLower.includes(cleanName) ||
+                  urlLower.includes(cleanNameNoHyphen);
               });
             }
 
@@ -192,7 +182,7 @@ class ProductService {
 
     try {
       await cacheService.set(cacheKey, categories, 86400); // Cache for 24 hours
-    } catch (_) {}
+    } catch (_) { }
 
     return categories;
   }

@@ -382,7 +382,7 @@ exports.createCategory = async (req, res, next) => {
       const { uploadToGCS } = require('../utils/gcs');
       const timestamp = Date.now();
       const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-      const destination = `categories/${slug}_${timestamp}.webp`;
+      const destination = `categorycardbanners/${slug}_${timestamp}.webp`;
       bannerImage = await uploadToGCS(req.file.buffer, destination, 'image/webp');
     }
 
@@ -432,7 +432,7 @@ exports.createSubCategory = async (req, res, next) => {
       const { uploadToGCS } = require('../utils/gcs');
       const timestamp = Date.now();
       const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-      const destination = `subcategories/${slug}_${timestamp}.webp`;
+      const destination = `categorycardbanners/sub/${slug}_${timestamp}.webp`;
       bannerImage = await uploadToGCS(req.file.buffer, destination, 'image/webp');
     }
 
@@ -483,7 +483,7 @@ exports.updateCategory = async (req, res, next) => {
       const { uploadToGCS } = require('../utils/gcs');
       const timestamp = Date.now();
       const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-      const destination = `categories/${slug}_${timestamp}.webp`;
+      const destination = `categorycardbanners/${slug}_${timestamp}.webp`;
       category.bannerImage = await uploadToGCS(req.file.buffer, destination, 'image/webp');
     } else if (req.body.bannerImage === '') {
       category.bannerImage = undefined;
@@ -569,7 +569,7 @@ exports.updateSubCategory = async (req, res, next) => {
       const { uploadToGCS } = require('../utils/gcs');
       const timestamp = Date.now();
       const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-      const destination = `subcategories/${slug}_${timestamp}.webp`;
+      const destination = `categorycardbanners/sub/${slug}_${timestamp}.webp`;
       category.subCategories[subIndex].bannerImage = await uploadToGCS(req.file.buffer, destination, 'image/webp');
     } else if (req.body.bannerImage === '') {
       category.subCategories[subIndex].bannerImage = undefined;
