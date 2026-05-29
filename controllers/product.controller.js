@@ -528,27 +528,182 @@ exports.createSubCategory = async (req, res, next) => {
   }
 };
 
-// Get signed GCS upload URL for catalogue PDF (Admin)
-exports.getCatalogueUploadUrl = async (req, res, next) => {
+// Initialize a chunked upload session (Admin)
+exports.initChunkedUpload = async (req, res, next) => {
   try {
-    const { name } = req.query;
-    if (!name) {
-      return res.status(400).json({ success: false, message: 'Category name is required' });
+    const fs = require('fs');
+    const path = require('path');
+    const { fileName, totalChunks, categoryName } = req.body;
+    if (!fileName || !totalChunks || !categoryName) {
+      return res.status(400).json({ success: false, message: 'fileName, totalChunks, and categoryName are required' });
     }
 
-    const { getSignedUploadUrl } = require('../utils/gcs');
-    const timestamp = Date.now();
-    const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-    const destination = `categorycatalogues/${slug}_${timestamp}.pdf`;
+    const uploadId = new mongoose.Types.ObjectId().toString();
+    const chunksDir = path.join(__dirname, '../uploads/chunks', uploadId);
 
-    const { uploadUrl, publicUrl } = await getSignedUploadUrl(destination, 'application/pdf');
+    // Create the directory for this upload session
+    await fs.promises.mkdir(chunksDir, { recursive: true });
+
+    // Store metadata in a JSON file in the upload folder
+    const metadata = {
+      fileName,
+      totalChunks: parseInt(totalChunks),
+      categoryName,
+      createdAt: new Date(),
+    };
+    await fs.promises.writeFile(path.join(chunksDir, 'metadata.json'), JSON.stringify(metadata));
 
     res.json({
       success: true,
-      uploadUrl,
-      publicUrl
+      uploadId,
     });
   } catch (error) {
+    next(error);
+  }
+};
+
+// Upload a single chunk (Admin)
+exports.uploadChunk = async (req, res, next) => {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const { uploadId, chunkIndex } = req.body;
+    if (!uploadId || chunkIndex === undefined) {
+      return res.status(400).json({ success: false, message: 'uploadId and chunkIndex are required' });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'No chunk file uploaded' });
+    }
+
+    const chunksDir = path.join(__dirname, '../uploads/chunks', uploadId);
+
+    // Check if initialization directory exists
+    if (!fs.existsSync(chunksDir)) {
+      return res.status(400).json({ success: false, message: 'Upload session not initialized or expired' });
+    }
+
+    // Write chunk data to disk named after the chunkIndex
+    const chunkPath = path.join(chunksDir, `chunk_${chunkIndex}.tmp`);
+    await fs.promises.writeFile(chunkPath, req.file.buffer);
+
+    res.json({
+      success: true,
+      message: `Chunk ${chunkIndex} uploaded successfully`,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Complete chunked upload: merge chunks and stream to GCS (Admin)
+exports.completeChunkedUpload = async (req, res, next) => {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const { uploadId } = req.body;
+    if (!uploadId) {
+      return res.status(400).json({ success: false, message: 'uploadId is required' });
+    }
+
+    const chunksDir = path.join(__dirname, '../uploads/chunks', uploadId);
+
+    if (!fs.existsSync(chunksDir)) {
+      return res.status(400).json({ success: false, message: 'Upload session not found' });
+    }
+
+    // Read metadata
+    const metadataPath = path.join(chunksDir, 'metadata.json');
+    if (!fs.existsSync(metadataPath)) {
+      return res.status(400).json({ success: false, message: 'Session metadata missing' });
+    }
+
+    const metadata = JSON.parse(await fs.promises.readFile(metadataPath, 'utf-8'));
+    const { totalChunks, categoryName } = metadata;
+
+    // Check that all chunk files exist
+    for (let i = 0; i < totalChunks; i++) {
+      const chunkPath = path.join(chunksDir, `chunk_${i}.tmp`);
+      if (!fs.existsSync(chunkPath)) {
+        return res.status(400).json({ success: false, message: `Missing chunk ${i}` });
+      }
+    }
+
+    // Setup GCS stream
+    const { Storage } = require('@google-cloud/storage');
+    const timestamp = Date.now();
+    const slug = categoryName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+    const destination = `categorycatalogues/${slug}_${timestamp}.pdf`;
+
+    let storage;
+    if (process.env.GCS_KEY_JSON) {
+      storage = new Storage({
+        projectId: process.env.GCS_PROJECT_ID,
+        credentials: JSON.parse(process.env.GCS_KEY_JSON)
+      });
+    } else {
+      let keyPath = process.env.GCS_KEY_FILE_PATH || './config/gcs-key.json';
+      if (!path.isAbsolute(keyPath)) {
+        keyPath = path.join(__dirname, '..', keyPath);
+      }
+      storage = new Storage({
+        projectId: process.env.GCS_PROJECT_ID,
+        keyFilename: keyPath,
+      });
+    }
+    const bucketName = process.env.GCS_BUCKET_NAME;
+    const bucket = storage.bucket(bucketName);
+    const file = bucket.file(destination);
+
+    const gcsStream = file.createWriteStream({
+      metadata: { contentType: 'application/pdf' },
+      resumable: false,
+    });
+
+    await new Promise((resolve, reject) => {
+      gcsStream.on('error', (err) => reject(err));
+      gcsStream.on('finish', () => resolve());
+
+      (async () => {
+        try {
+          for (let i = 0; i < totalChunks; i++) {
+            const chunkPath = path.join(chunksDir, `chunk_${i}.tmp`);
+            const chunkBuffer = await fs.promises.readFile(chunkPath);
+            
+            if (!gcsStream.write(chunkBuffer)) {
+              await new Promise((resolveDrain) => gcsStream.once('drain', resolveDrain));
+            }
+          }
+          gcsStream.end();
+        } catch (err) {
+          gcsStream.destroy(err);
+          reject(err);
+        }
+      })();
+    });
+
+    try {
+      await file.makePublic();
+    } catch (_) {}
+
+    const fileUrl = `https://storage.googleapis.com/${bucketName}/${file.name}`;
+
+    // Clean up
+    await fs.promises.rm(chunksDir, { recursive: true, force: true });
+
+    res.json({
+      success: true,
+      fileUrl,
+    });
+  } catch (error) {
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      const chunksDir = path.join(__dirname, '../uploads/chunks', req.body.uploadId);
+      if (fs.existsSync(chunksDir)) {
+        await fs.promises.rm(chunksDir, { recursive: true, force: true });
+      }
+    } catch (_) {}
     next(error);
   }
 };

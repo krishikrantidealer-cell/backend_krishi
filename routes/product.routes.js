@@ -16,8 +16,10 @@ router.get('/discovery', productController.getHomeDiscovery);
 // Get all categories and sub-categories
 router.get('/categories', productController.getCategories);
 
-// Get signed GCS upload URL for catalogue PDF
-router.get('/categories/catalogue-upload-url', protect, authorizeRoles('admin'), productController.getCatalogueUploadUrl);
+// Chunked Upload Routes for Categories Catalogues
+router.post('/categories/upload/init', protect, authorizeRoles('admin'), productController.initChunkedUpload);
+router.post('/categories/upload/chunk', protect, authorizeRoles('admin'), upload.single('file'), productController.uploadChunk);
+router.post('/categories/upload/complete', protect, authorizeRoles('admin'), productController.completeChunkedUpload);
 
 // Create a new category
 router.post('/categories', protect, authorizeRoles('admin'), upload.fields([
