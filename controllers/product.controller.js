@@ -195,9 +195,36 @@ exports.getHomeDiscovery = async (req, res, next) => {
         }
       }
 
+      // Dynamically match subcollection images if they are undefined/null
+      const updatedSubCollections = (col.subCollections || []).map(sub => {
+        let subImage = sub.image;
+        if ((!subImage || subImage === 'undefined' || subImage === 'null') && customCollectionBanners.length > 0) {
+          const subNameLower = sub.name.trim().toLowerCase();
+          const matchingBanner = customCollectionBanners.find(b => {
+            const titleLower = (b.title || '').toLowerCase();
+            const targetLower = (b.redirectTarget || '').toLowerCase();
+            const urlLower = (b.imageUrl || '').toLowerCase();
+            return titleLower.includes(subNameLower) || 
+                   targetLower === subNameLower || 
+                   urlLower.includes(`/${subNameLower}.`) || 
+                   urlLower.includes(`/${subNameLower}%`) ||
+                   urlLower.includes(`_${subNameLower}`) ||
+                   urlLower.includes(subNameLower);
+          });
+          if (matchingBanner) {
+            subImage = matchingBanner.imageUrl;
+          }
+        }
+        return {
+          ...sub,
+          image: subImage
+        };
+      });
+
       return {
         ...col,
         bannerImage,
+        subCollections: updatedSubCollections,
         products
       };
     }));
