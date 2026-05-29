@@ -117,7 +117,78 @@ class ProductService {
       if (cached) return cached;
     } catch (_) {}
 
+    const mongoose = require('mongoose');
     const categories = await Category.find({}).lean();
+
+    // Dynamically fallback to matching category card banners from seeded Banners collection if missing
+    const missingBanners = categories.some(cat => !cat.bannerImage);
+    if (missingBanners) {
+      try {
+        const Banner = mongoose.models.Banner || mongoose.model('Banner');
+        const bannersDocs = await Banner.find({ isActive: true, type: { $in: ['category_card', 'category'] } }).lean();
+        
+        const categoryCardBanners = [];
+        bannersDocs.forEach(doc => {
+          if (doc.categorycardbanners && Array.isArray(doc.categorycardbanners)) {
+            doc.categorycardbanners.forEach((url, index) => {
+              categoryCardBanners.push({
+                title: `Category Card Banner ${index + 1}`,
+                imageUrl: url,
+                priority: index,
+                redirectTarget: doc.redirectTarget
+              });
+            });
+          }
+          if (doc.categorybanners && Array.isArray(doc.categorybanners)) {
+            doc.categorybanners.forEach((url, index) => {
+              categoryCardBanners.push({
+                title: `Category Banner ${index + 1}`,
+                imageUrl: url,
+                priority: index,
+                redirectTarget: doc.redirectTarget
+              });
+            });
+          }
+          if (doc.imageUrl) {
+            categoryCardBanners.push(doc);
+          }
+        });
+
+        categories.forEach(cat => {
+          if (!cat.bannerImage) {
+            const cleanName = cat.name.trim().toLowerCase();
+            const cleanNameNoHyphen = cleanName.replaceAll('-', '').replaceAll(' ', '');
+            
+            // Try to match by target or title
+            let matchedBanner = categoryCardBanners.find(b => {
+              const titleLower = (b.title || '').toLowerCase();
+              const targetLower = (b.redirectTarget || '').toLowerCase();
+              return titleLower.includes(cleanName) || 
+                     targetLower === cleanName ||
+                     titleLower.includes(cleanNameNoHyphen);
+            });
+            
+            if (!matchedBanner) {
+              // Try matching by image URL path keywords
+              matchedBanner = categoryCardBanners.find(b => {
+                const urlLower = (b.imageUrl || '').toLowerCase();
+                return urlLower.includes(`/${cleanName}.`) || 
+                       urlLower.includes(`/${cleanName}%`) || 
+                       urlLower.includes(`_${cleanName}`) || 
+                       urlLower.includes(cleanName) ||
+                       urlLower.includes(cleanNameNoHyphen);
+              });
+            }
+
+            if (matchedBanner) {
+              cat.bannerImage = matchedBanner.imageUrl;
+            }
+          }
+        });
+      } catch (err) {
+        console.error('Error matching category banners:', err);
+      }
+    }
 
     try {
       await cacheService.set(cacheKey, categories, 86400); // Cache for 24 hours

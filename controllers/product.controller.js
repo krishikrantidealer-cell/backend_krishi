@@ -427,7 +427,16 @@ exports.createSubCategory = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Subcategory already exists' });
     }
 
-    category.subCategories.push({ name: name.trim() });
+    let bannerImage;
+    if (req.file) {
+      const { uploadToGCS } = require('../utils/gcs');
+      const timestamp = Date.now();
+      const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+      const destination = `subcategories/${slug}_${timestamp}.webp`;
+      bannerImage = await uploadToGCS(req.file.buffer, destination, 'image/webp');
+    }
+
+    category.subCategories.push({ name: name.trim(), bannerImage });
     await category.save();
 
     try {
@@ -555,6 +564,17 @@ exports.updateSubCategory = async (req, res, next) => {
     }
 
     category.subCategories[subIndex].name = name.trim();
+
+    if (req.file) {
+      const { uploadToGCS } = require('../utils/gcs');
+      const timestamp = Date.now();
+      const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+      const destination = `subcategories/${slug}_${timestamp}.webp`;
+      category.subCategories[subIndex].bannerImage = await uploadToGCS(req.file.buffer, destination, 'image/webp');
+    } else if (req.body.bannerImage === '') {
+      category.subCategories[subIndex].bannerImage = undefined;
+    }
+
     await category.save();
 
     try {

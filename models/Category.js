@@ -5,6 +5,10 @@ const subCategorySchema = new mongoose.Schema({
     type: String,
     required: true,
     trim: true
+  },
+  bannerImage: {
+    type: String,
+    trim: true
   }
 });
 

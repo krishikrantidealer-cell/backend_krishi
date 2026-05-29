@@ -20,7 +20,7 @@ router.get('/categories', productController.getCategories);
 router.post('/categories', protect, authorizeRoles('admin'), upload.single('image'), productController.createCategory);
 
 // Create a new sub-category inside a category
-router.post('/categories/:id/subcategories', protect, authorizeRoles('admin'), productController.createSubCategory);
+router.post('/categories/:id/subcategories', protect, authorizeRoles('admin'), upload.single('image'), productController.createSubCategory);
 
 // Update a category
 router.put('/categories/:id', protect, authorizeRoles('admin'), upload.single('image'), productController.updateCategory);
@@ -29,7 +29,7 @@ router.put('/categories/:id', protect, authorizeRoles('admin'), upload.single('i
 router.delete('/categories/:id', protect, authorizeRoles('admin'), productController.deleteCategory);
 
 // Update a sub-category
-router.put('/categories/:id/subcategories/:subId', protect, authorizeRoles('admin'), productController.updateSubCategory);
+router.put('/categories/:id/subcategories/:subId', protect, authorizeRoles('admin'), upload.single('image'), productController.updateSubCategory);
 
 // Delete a sub-category
 router.delete('/categories/:id/subcategories/:subId', protect, authorizeRoles('admin'), productController.deleteSubCategory);
