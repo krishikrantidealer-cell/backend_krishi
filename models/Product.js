@@ -61,6 +61,15 @@ const productSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     index: true
   },
+  categoryIds: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Category',
+    index: true
+  }],
+  subCategoryIds: [{
+    type: mongoose.Schema.Types.ObjectId,
+    index: true
+  }],
   images: [{
     type: String
   }],
@@ -120,6 +129,17 @@ const productSchema = new mongoose.Schema({
 
 // Automatically calculate min/max price, generate tags, and set default availability before saving
 productSchema.pre('save', async function() {
+  if (this.categoryIds && this.categoryIds.length > 0) {
+    this.categoryId = this.categoryIds[0];
+  } else if (this.categoryId) {
+    this.categoryIds = [this.categoryId];
+  }
+
+  if (this.subCategoryIds && this.subCategoryIds.length > 0) {
+    this.subCategoryId = this.subCategoryIds[0];
+  } else if (this.subCategoryId) {
+    this.subCategoryIds = [this.subCategoryId];
+  }
   // Automatically map raw ObjectIDs to Collection/Subcollection Names
   if (this.isModified('assignedCollections') && this.assignedCollections && this.assignedCollections.length > 0) {
     let Collection;

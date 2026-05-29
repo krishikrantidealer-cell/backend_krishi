@@ -57,8 +57,29 @@ exports.getProducts = async (req, res, next) => {
     const { cursor, limit, search, categoryId, subCategoryId, minPrice, maxPrice, isFeatured, collection } = req.query;
     
     const filters = {};
-    if (categoryId) filters.categoryId = categoryId;
-    if (subCategoryId) filters.subCategoryId = subCategoryId;
+    const conditions = [];
+
+    if (categoryId) {
+      conditions.push({
+        $or: [
+          { categoryId: categoryId },
+          { categoryIds: categoryId }
+        ]
+      });
+    }
+    if (subCategoryId) {
+      conditions.push({
+        $or: [
+          { subCategoryId: subCategoryId },
+          { subCategoryIds: subCategoryId }
+        ]
+      });
+    }
+
+    if (conditions.length > 0) {
+      filters.$and = conditions;
+    }
+
     if (isFeatured !== undefined) filters.isFeatured = isFeatured === 'true';
     if (collection) filters.assignedCollections = collection;
     
@@ -788,11 +809,14 @@ exports.deleteCategory = async (req, res, next) => {
 
     await Category.findByIdAndDelete(id);
 
-    // Unset categoryId and subCategoryId for matching products
+    // Unset categoryId/subCategoryId and pull categoryId from categoryIds array for matching products
     const Product = require('../models/Product');
     await Product.updateMany(
-      { categoryId: id },
-      { $unset: { categoryId: "", subCategoryId: "" } }
+      { $or: [{ categoryId: id }, { categoryIds: id }] },
+      { 
+        $pull: { categoryIds: id },
+        $unset: { categoryId: "", subCategoryId: "" }
+      }
     );
 
     try {
@@ -880,11 +904,14 @@ exports.deleteSubCategory = async (req, res, next) => {
     category.subCategories.splice(subIndex, 1);
     await category.save();
 
-    // Unset subCategoryId for matching products
+    // Unset subCategoryId and pull subCategoryId from subCategoryIds array for matching products
     const Product = require('../models/Product');
     await Product.updateMany(
-      { subCategoryId: subId },
-      { $unset: { subCategoryId: "" } }
+      { $or: [{ subCategoryId: subId }, { subCategoryIds: subId }] },
+      { 
+        $pull: { subCategoryIds: subId },
+        $unset: { subCategoryId: "" }
+      }
     );
 
     try {
