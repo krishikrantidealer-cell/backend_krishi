@@ -437,19 +437,32 @@ exports.createCategory = async (req, res, next) => {
       typeof sub === 'string' ? { name: sub.trim() } : { name: sub.name.trim() }
     );
 
+    const imageFile = req.files && req.files['image'] ? req.files['image'][0] : null;
+    const pdfFile = req.files && req.files['cataloguePdf'] ? req.files['cataloguePdf'][0] : null;
+
     let bannerImage;
-    if (req.file) {
+    if (imageFile) {
       const { uploadToGCS } = require('../utils/gcs');
       const timestamp = Date.now();
       const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
       const destination = `categorycardbanners/${slug}_${timestamp}.webp`;
-      bannerImage = await uploadToGCS(req.file.buffer, destination, 'image/webp');
+      bannerImage = await uploadToGCS(imageFile.buffer, destination, 'image/webp');
+    }
+
+    let cataloguePdf;
+    if (pdfFile) {
+      const { uploadToGCS } = require('../utils/gcs');
+      const timestamp = Date.now();
+      const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+      const destination = `categorycatalogues/${slug}_${timestamp}.pdf`;
+      cataloguePdf = await uploadToGCS(pdfFile.buffer, destination, 'application/pdf');
     }
 
     const category = await Category.create({
       name: name.trim(),
       subCategories: formattedSubCategories,
-      bannerImage
+      bannerImage,
+      cataloguePdf
     });
 
     try {
@@ -536,17 +549,31 @@ exports.updateCategory = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Another category with this name already exists' });
     }
 
+    const imageFile = req.files && req.files['image'] ? req.files['image'][0] : null;
+    const pdfFile = req.files && req.files['cataloguePdf'] ? req.files['cataloguePdf'][0] : null;
+
     category.name = name.trim();
 
     // Check if we need to clear or upload a new banner image
-    if (req.file) {
+    if (imageFile) {
       const { uploadToGCS } = require('../utils/gcs');
       const timestamp = Date.now();
       const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
       const destination = `categorycardbanners/${slug}_${timestamp}.webp`;
-      category.bannerImage = await uploadToGCS(req.file.buffer, destination, 'image/webp');
+      category.bannerImage = await uploadToGCS(imageFile.buffer, destination, 'image/webp');
     } else if (req.body.bannerImage === '') {
       category.bannerImage = undefined;
+    }
+
+    // Check if we need to clear or upload a new catalogue PDF
+    if (pdfFile) {
+      const { uploadToGCS } = require('../utils/gcs');
+      const timestamp = Date.now();
+      const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+      const destination = `categorycatalogues/${slug}_${timestamp}.pdf`;
+      category.cataloguePdf = await uploadToGCS(pdfFile.buffer, destination, 'application/pdf');
+    } else if (req.body.cataloguePdf === '') {
+      category.cataloguePdf = undefined;
     }
 
     await category.save();

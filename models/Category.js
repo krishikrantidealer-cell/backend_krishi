@@ -23,6 +23,10 @@ const categorySchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  cataloguePdf: {
+    type: String,
+    trim: true
+  },
   subCategories: [subCategorySchema]
 }, {
   timestamps: true
