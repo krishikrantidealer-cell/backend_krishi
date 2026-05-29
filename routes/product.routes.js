@@ -17,13 +17,13 @@ router.get('/discovery', productController.getHomeDiscovery);
 router.get('/categories', productController.getCategories);
 
 // Create a new category
-router.post('/categories', protect, authorizeRoles('admin'), productController.createCategory);
+router.post('/categories', protect, authorizeRoles('admin'), upload.single('image'), productController.createCategory);
 
 // Create a new sub-category inside a category
 router.post('/categories/:id/subcategories', protect, authorizeRoles('admin'), productController.createSubCategory);
 
 // Update a category
-router.put('/categories/:id', protect, authorizeRoles('admin'), productController.updateCategory);
+router.put('/categories/:id', protect, authorizeRoles('admin'), upload.single('image'), productController.updateCategory);
 
 // Delete a category
 router.delete('/categories/:id', protect, authorizeRoles('admin'), productController.deleteCategory);

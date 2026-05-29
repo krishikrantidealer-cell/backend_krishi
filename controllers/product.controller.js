@@ -364,13 +364,32 @@ exports.createCategory = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Category already exists' });
     }
 
-    const formattedSubCategories = (subCategories || []).map(sub => 
+    let subCategoriesList = subCategories;
+    if (typeof subCategories === 'string') {
+      try {
+        subCategoriesList = JSON.parse(subCategories);
+      } catch (_) {
+        subCategoriesList = [];
+      }
+    }
+
+    const formattedSubCategories = (subCategoriesList || []).map(sub => 
       typeof sub === 'string' ? { name: sub.trim() } : { name: sub.name.trim() }
     );
 
+    let bannerImage;
+    if (req.file) {
+      const { uploadToGCS } = require('../utils/gcs');
+      const timestamp = Date.now();
+      const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+      const destination = `categories/${slug}_${timestamp}.webp`;
+      bannerImage = await uploadToGCS(req.file.buffer, destination, 'image/webp');
+    }
+
     const category = await Category.create({
       name: name.trim(),
-      subCategories: formattedSubCategories
+      subCategories: formattedSubCategories,
+      bannerImage
     });
 
     try {
@@ -449,6 +468,18 @@ exports.updateCategory = async (req, res, next) => {
     }
 
     category.name = name.trim();
+
+    // Check if we need to clear or upload a new banner image
+    if (req.file) {
+      const { uploadToGCS } = require('../utils/gcs');
+      const timestamp = Date.now();
+      const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+      const destination = `categories/${slug}_${timestamp}.webp`;
+      category.bannerImage = await uploadToGCS(req.file.buffer, destination, 'image/webp');
+    } else if (req.body.bannerImage === '') {
+      category.bannerImage = undefined;
+    }
+
     await category.save();
 
     try {

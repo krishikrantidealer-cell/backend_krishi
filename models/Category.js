@@ -15,6 +15,10 @@ const categorySchema = new mongoose.Schema({
     unique: true,
     trim: true
   },
+  bannerImage: {
+    type: String,
+    trim: true
+  },
   subCategories: [subCategorySchema]
 }, {
   timestamps: true
