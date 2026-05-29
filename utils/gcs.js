@@ -136,9 +136,31 @@ const deleteFromGCS = async (fileUrl) => {
   }
 };
 
+/**
+ * Generates a signed URL for uploading a file directly to GCS
+ */
+const getSignedUploadUrl = async (destination, contentType) => {
+  if (!bucket) {
+    throw new Error('GCS Bucket is not configured. Please check your .env file.');
+  }
+
+  const [url] = await bucket.file(destination).getSignedUrl({
+    version: 'v4',
+    action: 'write',
+    expires: Date.now() + 15 * 60 * 1000, // 15 minutes
+    contentType: contentType,
+  });
+
+  return {
+    uploadUrl: url,
+    publicUrl: `https://storage.googleapis.com/${bucket.name}/${destination}`
+  };
+};
+
 module.exports = {
   uploadToGCS,
   processAndUploadProductImage,
   processAndUploadKycDocument,
   deleteFromGCS,
+  getSignedUploadUrl,
 };

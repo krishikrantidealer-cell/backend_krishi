@@ -456,6 +456,8 @@ exports.createCategory = async (req, res, next) => {
       const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
       const destination = `categorycatalogues/${slug}_${timestamp}.pdf`;
       cataloguePdf = await uploadToGCS(pdfFile.buffer, destination, 'application/pdf');
+    } else if (req.body.cataloguePdf) {
+      cataloguePdf = req.body.cataloguePdf;
     }
 
     const category = await Category.create({
@@ -526,6 +528,31 @@ exports.createSubCategory = async (req, res, next) => {
   }
 };
 
+// Get signed GCS upload URL for catalogue PDF (Admin)
+exports.getCatalogueUploadUrl = async (req, res, next) => {
+  try {
+    const { name } = req.query;
+    if (!name) {
+      return res.status(400).json({ success: false, message: 'Category name is required' });
+    }
+
+    const { getSignedUploadUrl } = require('../utils/gcs');
+    const timestamp = Date.now();
+    const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+    const destination = `categorycatalogues/${slug}_${timestamp}.pdf`;
+
+    const { uploadUrl, publicUrl } = await getSignedUploadUrl(destination, 'application/pdf');
+
+    res.json({
+      success: true,
+      uploadUrl,
+      publicUrl
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // Update a category (Admin)
 exports.updateCategory = async (req, res, next) => {
   try {
@@ -574,6 +601,8 @@ exports.updateCategory = async (req, res, next) => {
       category.cataloguePdf = await uploadToGCS(pdfFile.buffer, destination, 'application/pdf');
     } else if (req.body.cataloguePdf === '') {
       category.cataloguePdf = undefined;
+    } else if (req.body.cataloguePdf) {
+      category.cataloguePdf = req.body.cataloguePdf;
     }
 
     await category.save();
