@@ -7,6 +7,50 @@ const Banner = require('../models/Banner');
 const Category = require('../models/Category');
 const cacheService = require('../utils/cache');
 
+const normalizeWord = (w) => {
+  return w.toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '')
+    .replace(/s$/, ''); // singularize (removes ending 's')
+};
+
+const getWords = (str) => {
+  return str.split(/[^a-zA-Z0-9]+/)
+    .filter(Boolean)
+    .map(normalizeWord)
+    .filter(Boolean);
+};
+
+const matchSubCollectionToBanner = (subName, banner) => {
+  const subNameLower = subName.trim().toLowerCase();
+  const titleLower = (banner.title || '').toLowerCase();
+  const targetLower = (banner.redirectTarget || '').toLowerCase();
+  const urlLower = (banner.imageUrl || '').toLowerCase();
+  
+  if (
+    titleLower.includes(subNameLower) || 
+    targetLower === subNameLower || 
+    urlLower.includes(`/${subNameLower}.`) || 
+    urlLower.includes(`/${subNameLower}%`) ||
+    urlLower.includes(`_${subNameLower}`) ||
+    urlLower.includes(subNameLower)
+  ) {
+    return true;
+  }
+  
+  const baseTitle = banner.title.includes('/') ? banner.title.split('/').pop() : banner.title;
+  const subWords = getWords(subName);
+  const bannerWords = getWords(baseTitle);
+  
+  if (subWords.length > 0 && bannerWords.length > 0) {
+    if (subWords.every(w => bannerWords.includes(w)) || bannerWords.every(w => subWords.includes(w))) {
+      return true;
+    }
+  }
+  
+  return false;
+};
+
 // Get all products with cursor-based pagination
 exports.getProducts = async (req, res, next) => {
   try {
@@ -199,18 +243,7 @@ exports.getHomeDiscovery = async (req, res, next) => {
       const updatedSubCollections = (col.subCollections || []).map(sub => {
         let subImage = sub.image;
         if ((!subImage || subImage === 'undefined' || subImage === 'null') && customCollectionBanners.length > 0) {
-          const subNameLower = sub.name.trim().toLowerCase();
-          const matchingBanner = customCollectionBanners.find(b => {
-            const titleLower = (b.title || '').toLowerCase();
-            const targetLower = (b.redirectTarget || '').toLowerCase();
-            const urlLower = (b.imageUrl || '').toLowerCase();
-            return titleLower.includes(subNameLower) || 
-                   targetLower === subNameLower || 
-                   urlLower.includes(`/${subNameLower}.`) || 
-                   urlLower.includes(`/${subNameLower}%`) ||
-                   urlLower.includes(`_${subNameLower}`) ||
-                   urlLower.includes(subNameLower);
-          });
+          const matchingBanner = customCollectionBanners.find(b => matchSubCollectionToBanner(sub.name, b));
           if (matchingBanner) {
             subImage = matchingBanner.imageUrl;
           }
