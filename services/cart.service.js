@@ -71,14 +71,6 @@ function getCorrectPrice(variant, totalVolume) {
     }
   }
 
-  // Fallback to legacy hardcoded logic
-  if (totalVolume > 50.0) {
-    return variant.price50_plus || variant.price;
-  } else if (totalVolume > 30.0) {
-    return variant.price30_50 || variant.price;
-  } else if (totalVolume >= 10.0) {
-    return variant.price10_30 || variant.price;
-  }
   return variant.price;
 }
 
