@@ -97,7 +97,8 @@ class SmsService {
       sourceAddress,
       dltTemplateId,
       entityId,
-      messageType: 'OTP'
+      messageType: 'SERVICE_IMPLICIT',
+      otp: true
     };
 
     try {
