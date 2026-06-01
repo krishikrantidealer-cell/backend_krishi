@@ -2,17 +2,27 @@ const admin = require('firebase-admin');
 const User = require('../models/User');
 const Notification = require('../models/Notification');
 
-// IMPORTANT: The user must place 'serviceAccountKey.json' in the backend root
 try {
-  const serviceAccount = require('../serviceAccountKey.json');
   if (!admin.apps.length) {
-    admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount)
-    });
-    console.log("Firebase Admin initialized successfully.");
+    let credential;
+    if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+      credential = admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT));
+      console.log("Firebase Admin initialized via FIREBASE_SERVICE_ACCOUNT env var.");
+    } else {
+      try {
+        const serviceAccount = require('../serviceAccountKey.json');
+        credential = admin.credential.cert(serviceAccount);
+        console.log("Firebase Admin initialized via local serviceAccountKey.json.");
+      } catch (err) {
+        // Fallback to Application Default Credentials on GCP
+        credential = admin.credential.applicationDefault();
+        console.log("Firebase Admin initialized via Application Default Credentials.");
+      }
+    }
+    admin.initializeApp({ credential });
   }
 } catch (error) {
-  console.error("Firebase Admin initialization failed. Please add serviceAccountKey.json to the backend root.", error.message);
+  console.error("Firebase Admin initialization failed:", error.message);
 }
 
 class NotificationService {

@@ -1,6 +1,5 @@
 require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
 const mongoose = require('mongoose');
-const { Storage } = require('@google-cloud/storage');
 const Banner = require('../models/Banner');
 
 const typeMapping = {
@@ -22,31 +21,10 @@ async function seedBanners() {
     await Banner.deleteMany({});
     console.log("Existing banners cleared.");
 
-    let storage;
-    if (process.env.GCS_KEY_JSON) {
-      storage = new Storage({
-        projectId: process.env.GCS_PROJECT_ID,
-        credentials: JSON.parse(process.env.GCS_KEY_JSON)
-      });
-    } else {
-      const path = require('path');
-      let keyPath = process.env.GCS_KEY_FILE_PATH || './config/gcs-key.json';
-      if (!path.isAbsolute(keyPath)) {
-        keyPath = path.join(__dirname, '../', keyPath);
-      }
-      storage = new Storage({
-        projectId: process.env.GCS_PROJECT_ID,
-        keyFilename: keyPath,
-      });
+    const { bucket } = require('./gcs');
+    if (!bucket) {
+      throw new Error("No GCS bucket configured. Check GCS_BUCKET_NAME env var.");
     }
-
-    const bucketName = process.env.GCS_BUCKET_NAME;
-    if (!bucketName) {
-      throw new Error("No GCS_BUCKET_NAME found in .env");
-    }
-
-    console.log(`Connecting to GCS Bucket: ${bucketName}...`);
-    const bucket = storage.bucket(bucketName);
     const [files] = await bucket.getFiles();
     console.log(`Retrieved ${files.length} files from bucket. Parsing banners...`);
 

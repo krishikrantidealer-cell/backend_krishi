@@ -650,30 +650,11 @@ exports.completeChunkedUpload = async (req, res, next) => {
       }
     }
 
-    // Setup GCS stream
-    const { Storage } = require('@google-cloud/storage');
+    const { bucket } = require('../utils/gcs');
     const timestamp = Date.now();
     const slug = categoryName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
     const destination = `categorycatalogues/${slug}_${timestamp}.pdf`;
 
-    let storage;
-    if (process.env.GCS_KEY_JSON) {
-      storage = new Storage({
-        projectId: process.env.GCS_PROJECT_ID,
-        credentials: JSON.parse(process.env.GCS_KEY_JSON)
-      });
-    } else {
-      let keyPath = process.env.GCS_KEY_FILE_PATH || './config/gcs-key.json';
-      if (!path.isAbsolute(keyPath)) {
-        keyPath = path.join(__dirname, '..', keyPath);
-      }
-      storage = new Storage({
-        projectId: process.env.GCS_PROJECT_ID,
-        keyFilename: keyPath,
-      });
-    }
-    const bucketName = process.env.GCS_BUCKET_NAME;
-    const bucket = storage.bucket(bucketName);
     const file = bucket.file(destination);
 
     const gcsStream = file.createWriteStream({

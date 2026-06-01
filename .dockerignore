@@ -1,0 +1,11 @@
+node_modules
+npm-debug.log
+.env
+serviceAccountKey.json
+config/gcs-key.json
+.git
+.gitignore
+README.md
+render.yaml
+Dockerfile
+.dockerignore

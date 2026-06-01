@@ -32,6 +32,15 @@ if (process.env.GCS_KEY_JSON) {
   } catch (err) {
     console.error('Local GCS Key file not found:', err.message);
   }
+} else {
+  // Option C: Native GCP Environment (Cloud Run / GAE) - uses IAM service account roles automatically
+  try {
+    storage = new Storage({
+      projectId: process.env.GCS_PROJECT_ID
+    });
+  } catch (err) {
+    console.error('Failed to initialize Storage with application default credentials:', err.message);
+  }
 }
 
 // Safety check to prevent crash on startup if ENV is not set yet
@@ -158,6 +167,8 @@ const getSignedUploadUrl = async (destination, contentType) => {
 };
 
 module.exports = {
+  storage,
+  bucket,
   uploadToGCS,
   processAndUploadProductImage,
   processAndUploadKycDocument,
