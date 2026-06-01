@@ -105,7 +105,8 @@ class SmsService {
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Basic ${auth}`
-        }
+        },
+        timeout: 15000 // 15 seconds timeout
       });
       console.log(`[SMS-SERVICE] Airtel IQ response:`, response.data);
       return response.data;
