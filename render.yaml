@@ -26,3 +26,17 @@ services:
         sync: false
       - key: GCS_KEY_JSON
         sync: false
+      - key: AIRTEL_IQ_CUSTOMER_ID
+        sync: false
+      - key: AIRTEL_IQ_USERNAME
+        sync: false
+      - key: AIRTEL_IQ_PASSWORD
+        sync: false
+      - key: AIRTEL_IQ_SOURCE_ADDRESS
+        sync: false
+      - key: AIRTEL_IQ_DLT_TEMPLATE_ID
+        sync: false
+      - key: AIRTEL_IQ_ENTITY_ID
+        sync: false
+      - key: AIRTEL_IQ_MESSAGE_TEMPLATE
+        value: "{otp} is your login OTP for Krishikranti Organics. This OTP is valid for 10 minutes. Do not share this OTP with anyone."

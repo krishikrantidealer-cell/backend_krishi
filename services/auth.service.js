@@ -21,6 +21,7 @@ class AuthService {
     });
 
     // 2. Send SMS via SmsService (which handles Redis-based rate limiting internally)
+
     await smsService.sendOTP(phoneNumber, otp);
 
     return otp; // Return for development/testing
@@ -57,8 +58,6 @@ class AuthService {
       });
       throw new Error('Invalid OTP.');
     }
-
-
 
     // OTP is correct, delete it (single-use)
     await redisClient.del(otpKey);
