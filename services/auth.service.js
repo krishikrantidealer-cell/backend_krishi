@@ -1,7 +1,7 @@
 const { redisClient } = require('../config/redis');
 const smsService = require('./sms.service');
 const { generateOTP } = require('../utils/otp');
-const { hashData, compareData } = require('../utils/hash');
+const { hashData, compareData, hashOTP, compareOTP } = require('../utils/hash');
 
 const OTP_EXPIRY = 300; // 5 minutes in seconds
 const MAX_VERIFICATION_ATTEMPTS = 3;
@@ -9,7 +9,7 @@ const MAX_VERIFICATION_ATTEMPTS = 3;
 class AuthService {
   async sendOTP(phoneNumber) {
     const otp = generateOTP();
-    const hashedOTP = await hashData(otp);
+    const hashedOTP = await hashOTP(otp);
 
     // 1. Store hashed OTP and attempt count in Redis
     const otpKey = `otp:${phoneNumber}`;
@@ -36,12 +36,17 @@ class AuthService {
     }
 
     const otpData = JSON.parse(otpDataRaw);
-    const masterOtp = process.env.MASTER_OTP || '123456';
+    const masterOtp = process.env.MASTER_OTP;
+    const isProduction = process.env.NODE_ENV === 'production';
 
-    // Allow Master OTP for testing/production stubs
-    if (otp === masterOtp) {
-      await redisClient.del(otpKey);
-      return true;
+    // Allow Master OTP only if explicitly configured in environment variables
+    if (masterOtp && otp === masterOtp) {
+      if (isProduction && process.env.ALLOW_PRODUCTION_MASTER_OTP !== 'true') {
+        console.warn(`[SECURITY] Master OTP attempt blocked in production for phone: ${phoneNumber}`);
+      } else {
+        await redisClient.del(otpKey);
+        return true;
+      }
     }
 
     if (otpData.attempts >= MAX_VERIFICATION_ATTEMPTS) {
@@ -49,7 +54,7 @@ class AuthService {
       throw new Error('Maximum verification attempts reached. Please request a new OTP.');
     }
 
-    const isMatch = await compareData(otp, otpData.hashedOTP);
+    const isMatch = await compareOTP(otp, otpData.hashedOTP);
 
     if (!isMatch) {
       otpData.attempts += 1;

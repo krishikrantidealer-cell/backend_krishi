@@ -17,7 +17,7 @@ const apiLimiter = rateLimit({
 
 const authLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 10, // Back to strict limit for public
+  max: 100, // Relaxed to 100 to support cellular CGNAT users while blocking botnets
   standardHeaders: true,
   legacyHeaders: false,
   skip: (req) => req.body && req.body.phoneNumber === '9999999999',
