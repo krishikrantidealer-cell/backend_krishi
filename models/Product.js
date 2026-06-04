@@ -22,7 +22,10 @@ const variantSchema = new mongoose.Schema({
     id: { type: String },
     name: { type: String }
   }],
-  basePacking: { type: String }
+  basePacking: { type: String },
+  // Canonical unit for the base packing: 'lit', 'kg', or 'pcs'
+  // Used by mobile app to display the correct rate suffix (₹/lit, ₹/kg, ₹/pcs)
+  basePackingUnit: { type: String, default: 'lit' }
 });
 
 const productSchema = new mongoose.Schema({
