@@ -28,6 +28,18 @@ router.post(
   cartController.addItem
 );
 
+// Sync cart items in batch
+router.post(
+  '/sync',
+  [
+    body('items').isArray().withMessage('Items must be an array'),
+    body('items.*.variantId').isMongoId().withMessage('Valid variant ID is required'),
+    body('items.*.quantity').isInt({ min: 0 }).withMessage('Quantity must be 0 or more')
+  ],
+  validate,
+  cartController.syncCart
+);
+
 // Update item quantity
 router.patch(
   '/items/:itemId',

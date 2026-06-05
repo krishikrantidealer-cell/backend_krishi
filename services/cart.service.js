@@ -267,6 +267,53 @@ class CartService {
       return cart;
     });
   }
+
+  async syncCart(userId, itemsList) {
+    return runLocked(userId, async () => {
+      let cart = await Cart.findOne({ user: userId }).populate('items.product', 'title brandName technicalName vendor images variants');
+      if (!cart) {
+        cart = new Cart({ user: userId, items: [], totalAmount: 0 });
+      }
+
+      for (const itemUpdate of itemsList) {
+        const { variantId, quantity } = itemUpdate;
+        const targetQuantity = parseInt(quantity);
+
+        const existingItemIndex = cart.items.findIndex(item => item.variantId.toString() === variantId);
+
+        if (targetQuantity <= 0) {
+          if (existingItemIndex > -1) {
+            cart.items.splice(existingItemIndex, 1);
+          }
+        } else {
+          if (existingItemIndex > -1) {
+            cart.items[existingItemIndex].quantity = targetQuantity;
+          } else {
+            const product = await Product.findOne({ 'variants._id': variantId });
+            if (!product) continue;
+
+            const variant = product.variants.id(variantId);
+            if (!variant) continue;
+
+            cart.items.push({
+              product: product._id,
+              variantId: variantId,
+              quantity: targetQuantity,
+              price: variant.price
+            });
+          }
+        }
+      }
+
+      // Repopulate newly added products so calculateTotal can read variants
+      await cart.populate('items.product', 'title brandName technicalName vendor images variants');
+
+      this.calculateTotal(cart);
+      await this.recalculateCoupon(cart, userId);
+      await cart.save();
+      return cart;
+    });
+  }
 }
 
 module.exports = new CartService();

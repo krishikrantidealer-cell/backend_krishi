@@ -32,6 +32,16 @@ exports.addItem = async (req, res, next) => {
   }
 };
 
+exports.syncCart = async (req, res, next) => {
+  try {
+    const { items } = req.body;
+    const cart = await cartService.syncCart(req.user._id, items);
+    res.json({ success: true, message: 'Cart synced', cart });
+  } catch (error) {
+    next(error);
+  }
+};
+
 exports.updateQuantity = async (req, res, next) => {
   try {
     const { quantity } = req.body;
