@@ -275,6 +275,8 @@ class CartService {
         cart = new Cart({ user: userId, items: [], totalAmount: 0 });
       }
 
+      let hasNewItem = false;
+
       for (const itemUpdate of itemsList) {
         const { variantId, quantity } = itemUpdate;
         const targetQuantity = parseInt(quantity);
@@ -301,12 +303,15 @@ class CartService {
               quantity: targetQuantity,
               price: variant.price
             });
+            hasNewItem = true;
           }
         }
       }
 
-      // Repopulate newly added products so calculateTotal can read variants
-      await cart.populate('items.product', 'title brandName technicalName vendor images variants');
+      // Repopulate newly added products ONLY if a new item was pushed into the array
+      if (hasNewItem) {
+        await cart.populate('items.product', 'title brandName technicalName vendor images variants');
+      }
 
       this.calculateTotal(cart);
       await this.recalculateCoupon(cart, userId);
