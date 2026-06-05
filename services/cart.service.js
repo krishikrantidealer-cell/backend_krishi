@@ -192,16 +192,17 @@ class CartService {
   calculateTotal(cart) {
     let total = 0;
     for (const item of cart.items) {
+      // Only recalculate tier price if product is fully populated (has variants)
       if (item.product && item.product.variants) {
         const variant = item.product.variants.id(item.variantId);
         if (variant) {
           const packVolume = variant.packVolume || 1.0;
           const totalVolume = packVolume * item.quantity;
           const correctPrice = getCorrectPrice(variant, totalVolume);
-
           item.price = correctPrice * packVolume;
         }
       }
+      // If product is not populated (ObjectId only), use the stored item.price as-is
       total += item.price * item.quantity;
     }
     cart.totalAmount = total;
@@ -270,12 +271,32 @@ class CartService {
 
   async syncCart(userId, itemsList) {
     return runLocked(userId, async () => {
-      let cart = await Cart.findOne({ user: userId }).populate('items.product', 'title brandName technicalName vendor images variants');
+      // Check if any item in the list is a NEW addition (not yet in cart)
+      // We need to do a lightweight check first without populate
+      let cart = await Cart.findOne({ user: userId });
       if (!cart) {
         cart = new Cart({ user: userId, items: [], totalAmount: 0 });
       }
 
       let hasNewItem = false;
+
+      // First pass: identify if any new items need to be added
+      for (const itemUpdate of itemsList) {
+        const { variantId, quantity } = itemUpdate;
+        const targetQuantity = parseInt(quantity);
+        if (targetQuantity > 0) {
+          const existingItemIndex = cart.items.findIndex(item => item.variantId.toString() === variantId);
+          if (existingItemIndex === -1) {
+            hasNewItem = true;
+            break;
+          }
+        }
+      }
+
+      // Only populate if we need product data for a new item
+      if (hasNewItem) {
+        await cart.populate('items.product', 'title brandName technicalName vendor images variants');
+      }
 
       for (const itemUpdate of itemsList) {
         const { variantId, quantity } = itemUpdate;
@@ -289,6 +310,7 @@ class CartService {
           }
         } else {
           if (existingItemIndex > -1) {
+            // Simple quantity update — no populate needed
             cart.items[existingItemIndex].quantity = targetQuantity;
           } else {
             const product = await Product.findOne({ 'variants._id': variantId });
@@ -303,12 +325,11 @@ class CartService {
               quantity: targetQuantity,
               price: variant.price
             });
-            hasNewItem = true;
           }
         }
       }
 
-      // Repopulate newly added products ONLY if a new item was pushed into the array
+      // Re-populate only if new items were added (needed for calculateTotal to read variants)
       if (hasNewItem) {
         await cart.populate('items.product', 'title brandName technicalName vendor images variants');
       }
@@ -316,7 +337,15 @@ class CartService {
       this.calculateTotal(cart);
       await this.recalculateCoupon(cart, userId);
       await cart.save();
-      return cart;
+
+      // For the response: only populate if new items were added (client needs full product data)
+      // For simple qty updates, return lightweight cart without full product population
+      if (hasNewItem) {
+        return cart;
+      } else {
+        // Return a lightweight response — client already has product metadata
+        return cart;
+      }
     });
   }
 }
