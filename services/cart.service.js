@@ -271,11 +271,57 @@ class CartService {
 
   async syncCart(userId, itemsList) {
     return runLocked(userId, async () => {
-      // Check if any item in the list is a NEW addition (not yet in cart)
-      // We need to do a lightweight check first without populate
-      let cart = await Cart.findOne({ user: userId });
-      if (!cart) {
-        cart = new Cart({ user: userId, items: [], totalAmount: 0 });
+      // --- Fast Path: Pure quantity updates with no coupon applied ---
+      // Check upfront if ALL updates are simple qty changes (no deletions, no new items)
+      // If so, use a single atomic findOneAndUpdate to halve the number of DB round trips.
+      const cart = await Cart.findOne({ user: userId }).lean();
+
+      const hasNoCoupon = !cart?.appliedCoupon;
+      const allSimpleUpdates = cart && itemsList.every(({ variantId, quantity }) => {
+        const qty = parseInt(quantity);
+        if (qty <= 0) return false; // deletion — needs full path
+        return cart.items.some(item => item.variantId.toString() === variantId);
+      });
+
+      if (hasNoCoupon && allSimpleUpdates) {
+        // Build atomic $set operations for each quantity update
+        const bulkOps = [];
+        let newTotal = 0;
+
+        // Calculate new total using stored prices
+        const updatedQtyMap = {};
+        for (const { variantId, quantity } of itemsList) {
+          updatedQtyMap[variantId] = parseInt(quantity);
+        }
+
+        for (const item of cart.items) {
+          const vId = item.variantId.toString();
+          const qty = updatedQtyMap[vId] ?? item.quantity;
+          newTotal += item.price * qty;
+        }
+
+        // Build positional update for each variant
+        const update = { $set: { totalAmount: newTotal, finalAmount: newTotal } };
+        for (const { variantId, quantity } of itemsList) {
+          const idx = cart.items.findIndex(i => i.variantId.toString() === variantId);
+          if (idx !== -1) {
+            update.$set[`items.${idx}.quantity`] = parseInt(quantity);
+          }
+        }
+
+        const updatedCart = await Cart.findOneAndUpdate(
+          { user: userId },
+          update,
+          { new: true }
+        );
+
+        return updatedCart;
+      }
+
+      // --- Full Path: New items, deletions, or coupon recalculation ---
+      let fullCart = await Cart.findOne({ user: userId });
+      if (!fullCart) {
+        fullCart = new Cart({ user: userId, items: [], totalAmount: 0 });
       }
 
       let hasNewItem = false;
@@ -285,7 +331,7 @@ class CartService {
         const { variantId, quantity } = itemUpdate;
         const targetQuantity = parseInt(quantity);
         if (targetQuantity > 0) {
-          const existingItemIndex = cart.items.findIndex(item => item.variantId.toString() === variantId);
+          const existingItemIndex = fullCart.items.findIndex(item => item.variantId.toString() === variantId);
           if (existingItemIndex === -1) {
             hasNewItem = true;
             break;
@@ -295,23 +341,22 @@ class CartService {
 
       // Only populate if we need product data for a new item
       if (hasNewItem) {
-        await cart.populate('items.product', 'title brandName technicalName vendor images variants');
+        await fullCart.populate('items.product', 'title brandName technicalName vendor images variants');
       }
 
       for (const itemUpdate of itemsList) {
         const { variantId, quantity } = itemUpdate;
         const targetQuantity = parseInt(quantity);
 
-        const existingItemIndex = cart.items.findIndex(item => item.variantId.toString() === variantId);
+        const existingItemIndex = fullCart.items.findIndex(item => item.variantId.toString() === variantId);
 
         if (targetQuantity <= 0) {
           if (existingItemIndex > -1) {
-            cart.items.splice(existingItemIndex, 1);
+            fullCart.items.splice(existingItemIndex, 1);
           }
         } else {
           if (existingItemIndex > -1) {
-            // Simple quantity update — no populate needed
-            cart.items[existingItemIndex].quantity = targetQuantity;
+            fullCart.items[existingItemIndex].quantity = targetQuantity;
           } else {
             const product = await Product.findOne({ 'variants._id': variantId });
             if (!product) continue;
@@ -319,7 +364,7 @@ class CartService {
             const variant = product.variants.id(variantId);
             if (!variant) continue;
 
-            cart.items.push({
+            fullCart.items.push({
               product: product._id,
               variantId: variantId,
               quantity: targetQuantity,
@@ -331,21 +376,13 @@ class CartService {
 
       // Re-populate only if new items were added (needed for calculateTotal to read variants)
       if (hasNewItem) {
-        await cart.populate('items.product', 'title brandName technicalName vendor images variants');
+        await fullCart.populate('items.product', 'title brandName technicalName vendor images variants');
       }
 
-      this.calculateTotal(cart);
-      await this.recalculateCoupon(cart, userId);
-      await cart.save();
-
-      // For the response: only populate if new items were added (client needs full product data)
-      // For simple qty updates, return lightweight cart without full product population
-      if (hasNewItem) {
-        return cart;
-      } else {
-        // Return a lightweight response — client already has product metadata
-        return cart;
-      }
+      this.calculateTotal(fullCart);
+      await this.recalculateCoupon(fullCart, userId);
+      await fullCart.save();
+      return fullCart;
     });
   }
 }
