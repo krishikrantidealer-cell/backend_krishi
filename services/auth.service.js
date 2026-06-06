@@ -8,7 +8,10 @@ const MAX_VERIFICATION_ATTEMPTS = 3;
 
 class AuthService {
   async sendOTP(phoneNumber) {
-    const otp = generateOTP();
+    // For the demo/test number, always use a fixed OTP so reviewers can log in reliably.
+    const TEST_PHONE = '9999999999';
+    const TEST_OTP = '123456';
+    const otp = phoneNumber === TEST_PHONE ? TEST_OTP : generateOTP();
     const hashedOTP = await hashOTP(otp);
 
     // 1. Store hashed OTP and attempt count in Redis
