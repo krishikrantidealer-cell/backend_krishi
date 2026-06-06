@@ -186,17 +186,19 @@ class OrderService {
     if (filters.paymentStatus) query.paymentStatus = filters.paymentStatus;
     
     return await Order.find(query)
-      .populate('user', 'firstName lastName phoneNumber')
+      .populate('user', 'firstName lastName phoneNumber role kycStatus isKycComplete shopName')
       .populate('items.product')
       .sort({ createdAt: -1 });
   }
 
-  async updateOrderStatus(orderId, status, awbNumber = null) {
+  async updateOrderStatus(orderId, status, awbNumber = null, courierName = null, trackingUrl = null) {
     const order = await Order.findById(orderId);
     if (!order) throw new Error('Order not found');
 
     order.orderStatus = status;
     if (awbNumber) order.awbNumber = awbNumber;
+    if (courierName) order.courierName = courierName;
+    if (trackingUrl) order.trackingUrl = trackingUrl;
 
     if (status === 'Processing') order.processingAt = new Date();
     else if (status === 'Shipped') order.shippedAt = new Date();
