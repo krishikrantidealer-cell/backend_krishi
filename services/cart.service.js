@@ -76,16 +76,33 @@ function getCorrectPrice(variant, totalVolume) {
 
 class CartService {
   async getCart(userId) {
+    const start = performance.now();
+    const tFind0 = performance.now();
     let cart = await Cart.findOne({ user: userId }).populate('items.product', 'title brandName technicalName vendor images variants');
+    const tFind1 = performance.now();
+    
     if (!cart) {
+      const tCreate0 = performance.now();
       cart = await Cart.create({ user: userId, items: [], totalAmount: 0 });
+      console.log(`[LATENCY] [getCart] Created new cart in ${(performance.now() - tCreate0).toFixed(2)}ms`);
       return cart;
     }
 
+    const tCalc0 = performance.now();
     // Always recalculate dynamic tier prices on fetch to ensure accuracy
     this.calculateTotal(cart);
     await this.recalculateCoupon(cart, userId);
-    await cart.save();
+    const tCalc1 = performance.now();
+
+    const tSave0 = performance.now();
+    let isSaved = false;
+    if (cart.isModified()) {
+      await cart.save();
+      isSaved = true;
+    }
+    const tSave1 = performance.now();
+
+    console.log(`[LATENCY] [getCart] DB Find/Populate: ${(tFind1 - tFind0).toFixed(2)}ms | Recalculate: ${(tCalc1 - tCalc0).toFixed(2)}ms | DB Save (${isSaved ? 'executed' : 'skipped'}): ${(tSave1 - tSave0).toFixed(2)}ms | Total: ${(performance.now() - start).toFixed(2)}ms`);
 
     return cart;
   }
@@ -199,29 +216,35 @@ class CartService {
           const packVolume = variant.packVolume || 1.0;
           const totalVolume = packVolume * item.quantity;
           const correctPrice = getCorrectPrice(variant, totalVolume);
-          item.price = correctPrice * packVolume;
+          const computedPrice = correctPrice * packVolume;
+          if (item.price !== computedPrice) {
+            item.price = computedPrice;
+          }
         }
       }
       // If product is not populated (ObjectId only), use the stored item.price as-is
       total += item.price * item.quantity;
     }
-    cart.totalAmount = total;
+    if (cart.totalAmount !== total) {
+      cart.totalAmount = total;
+    }
   }
 
   async recalculateCoupon(cart, userId) {
     if (!cart.appliedCoupon) {
-      cart.discountAmount = 0;
-      cart.finalAmount = cart.totalAmount;
-      cart.freeItems = [];
+      if (cart.discountAmount !== 0) cart.discountAmount = 0;
+      if (cart.finalAmount !== cart.totalAmount) cart.finalAmount = cart.totalAmount;
+      if (cart.freeItems && cart.freeItems.length > 0) cart.freeItems = [];
       return;
     }
 
     try {
       // Re-validate coupon against the NEW cart total
       const result = await couponService.applyCoupon(userId, cart.appliedCoupon, cart.totalAmount, cart);
-      cart.discountAmount = result.discountAmount;
-      cart.finalAmount = result.finalAmount;
-      cart.freeItems = result.freeProductAdded ? [{
+      if (cart.discountAmount !== result.discountAmount) cart.discountAmount = result.discountAmount;
+      if (cart.finalAmount !== result.finalAmount) cart.finalAmount = result.finalAmount;
+      
+      const newFreeItems = result.freeProductAdded ? [{
         name: result.freeProductAdded,
         imageUrl: result.freeProductImage || null,
         technicalName: result.freeProductTechnicalName || null,
@@ -229,12 +252,18 @@ class CartService {
         quantity: result.freeProductQuantity || 1,
         isFree: true
       }] : [];
+
+      // Check if free items changed
+      const freeItemsChanged = JSON.stringify(cart.freeItems) !== JSON.stringify(newFreeItems);
+      if (freeItemsChanged) {
+        cart.freeItems = newFreeItems;
+      }
     } catch (error) {
       // If the cart no longer meets the coupon requirements (e.g. minimum purchase), remove it
-      cart.appliedCoupon = undefined;
-      cart.discountAmount = 0;
-      cart.finalAmount = cart.totalAmount;
-      cart.freeItems = [];
+      if (cart.appliedCoupon !== undefined) cart.appliedCoupon = undefined;
+      if (cart.discountAmount !== 0) cart.discountAmount = 0;
+      if (cart.finalAmount !== cart.totalAmount) cart.finalAmount = cart.totalAmount;
+      if (cart.freeItems && cart.freeItems.length > 0) cart.freeItems = [];
     }
   }
 

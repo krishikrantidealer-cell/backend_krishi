@@ -1,8 +1,11 @@
 const cartService = require('../services/cart.service');
 
 exports.getCart = async (req, res, next) => {
+  const start = performance.now();
   try {
     const cart = await cartService.getCart(req.user._id);
+    const duration = performance.now() - start;
+    console.log(`[LATENCY] [Controller] getCart completed in ${duration.toFixed(2)}ms`);
     res.json({ success: true, cart });
   } catch (error) {
     next(error);
