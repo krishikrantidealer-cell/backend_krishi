@@ -76,33 +76,20 @@ function getCorrectPrice(variant, totalVolume) {
 
 class CartService {
   async getCart(userId) {
-    const start = performance.now();
-    const tFind0 = performance.now();
     let cart = await Cart.findOne({ user: userId }).populate('items.product', 'title brandName technicalName vendor images variants');
-    const tFind1 = performance.now();
     
     if (!cart) {
-      const tCreate0 = performance.now();
       cart = await Cart.create({ user: userId, items: [], totalAmount: 0 });
-      console.log(`[LATENCY] [getCart] Created new cart in ${(performance.now() - tCreate0).toFixed(2)}ms`);
       return cart;
     }
 
-    const tCalc0 = performance.now();
     // Always recalculate dynamic tier prices on fetch to ensure accuracy
     this.calculateTotal(cart);
     await this.recalculateCoupon(cart, userId);
-    const tCalc1 = performance.now();
 
-    const tSave0 = performance.now();
-    let isSaved = false;
     if (cart.isModified()) {
       await cart.save();
-      isSaved = true;
     }
-    const tSave1 = performance.now();
-
-    console.log(`[LATENCY] [getCart] DB Find/Populate: ${(tFind1 - tFind0).toFixed(2)}ms | Recalculate: ${(tCalc1 - tCalc0).toFixed(2)}ms | DB Save (${isSaved ? 'executed' : 'skipped'}): ${(tSave1 - tSave0).toFixed(2)}ms | Total: ${(performance.now() - start).toFixed(2)}ms`);
 
     return cart;
   }
@@ -299,14 +286,11 @@ class CartService {
   }
 
   async syncCart(userId, itemsList) {
-    const syncStart = performance.now();
     return runLocked(userId, async () => {
       // --- Fast Path: Pure quantity updates with no coupon applied ---
       // Check upfront if ALL updates are simple qty changes (no deletions, no new items)
       // If so, use a single atomic findOneAndUpdate to halve the number of DB round trips.
-      const tFind0 = performance.now();
       const cart = await Cart.findOne({ user: userId }).lean();
-      const tFind1 = performance.now();
 
       const hasNoCoupon = !cart?.appliedCoupon;
       const allSimpleUpdates = cart && itemsList.every(({ variantId, quantity }) => {
@@ -341,14 +325,11 @@ class CartService {
           }
         }
 
-        const tUpdate0 = performance.now();
         const updatedCart = await Cart.findOneAndUpdate(
           { user: userId },
           update,
           { new: true }
         );
-        const tUpdate1 = performance.now();
-        console.log(`[LATENCY] [SyncCart] FastPath - DB Find: ${(tFind1 - tFind0).toFixed(2)}ms | DB Update: ${(tUpdate1 - tUpdate0).toFixed(2)}ms | Total service sync: ${(performance.now() - syncStart).toFixed(2)}ms`);
 
         return updatedCart;
       }

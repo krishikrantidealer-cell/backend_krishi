@@ -1,11 +1,8 @@
 const cartService = require('../services/cart.service');
 
 exports.getCart = async (req, res, next) => {
-  const start = performance.now();
   try {
     const cart = await cartService.getCart(req.user._id);
-    const duration = performance.now() - start;
-    console.log(`[LATENCY] [Controller] getCart completed in ${duration.toFixed(2)}ms`);
     res.json({ success: true, cart });
   } catch (error) {
     next(error);
@@ -36,12 +33,9 @@ exports.addItem = async (req, res, next) => {
 };
 
 exports.syncCart = async (req, res, next) => {
-  const start = performance.now();
   try {
     const { items } = req.body;
     const cart = await cartService.syncCart(req.user._id, items);
-    const duration = performance.now() - start;
-    console.log(`[LATENCY] [Controller] syncCart completed in ${duration.toFixed(2)}ms`);
     res.json({ success: true, message: 'Cart synced', cart });
   } catch (error) {
     next(error);

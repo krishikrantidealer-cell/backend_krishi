@@ -14,9 +14,7 @@ const protect = async (req, res, next) => {
 
   // Check Redis blacklist
   const tokenService = require('../services/token.service');
-  const t0 = performance.now();
   const isBlacklisted = await tokenService.isTokenBlacklisted(token);
-  const t1 = performance.now();
   
   if (isBlacklisted) {
     return res.status(401).json({ message: 'Token is no longer valid (logged out)' });
@@ -29,10 +27,7 @@ const protect = async (req, res, next) => {
   }
 
   try {
-    const t2 = performance.now();
     const user = await User.findById(decoded.userId).select('-password');
-    const t3 = performance.now();
-    console.log(`[LATENCY] [Auth] Redis blacklist check: ${(t1 - t0).toFixed(2)}ms | DB user fetch: ${(t3 - t2).toFixed(2)}ms`);
     if (!user) {
       return res.status(401).json({ message: 'User not found' });
     }
