@@ -270,11 +270,14 @@ class CartService {
   }
 
   async syncCart(userId, itemsList) {
+    const syncStart = performance.now();
     return runLocked(userId, async () => {
       // --- Fast Path: Pure quantity updates with no coupon applied ---
       // Check upfront if ALL updates are simple qty changes (no deletions, no new items)
       // If so, use a single atomic findOneAndUpdate to halve the number of DB round trips.
+      const tFind0 = performance.now();
       const cart = await Cart.findOne({ user: userId }).lean();
+      const tFind1 = performance.now();
 
       const hasNoCoupon = !cart?.appliedCoupon;
       const allSimpleUpdates = cart && itemsList.every(({ variantId, quantity }) => {
@@ -309,11 +312,14 @@ class CartService {
           }
         }
 
+        const tUpdate0 = performance.now();
         const updatedCart = await Cart.findOneAndUpdate(
           { user: userId },
           update,
           { new: true }
         );
+        const tUpdate1 = performance.now();
+        console.log(`[LATENCY] [SyncCart] FastPath - DB Find: ${(tFind1 - tFind0).toFixed(2)}ms | DB Update: ${(tUpdate1 - tUpdate0).toFixed(2)}ms | Total service sync: ${(performance.now() - syncStart).toFixed(2)}ms`);
 
         return updatedCart;
       }
