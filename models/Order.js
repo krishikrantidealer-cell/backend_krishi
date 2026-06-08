@@ -32,8 +32,11 @@ const orderItemSchema = new mongoose.Schema({
 });
 
 const shippingAddressSchema = new mongoose.Schema({
+  name: String,
+  phoneNumber: String,
   villageArea: String,
   cityTehsil: String,
+  state: String,
   pincode: String
 });
 
