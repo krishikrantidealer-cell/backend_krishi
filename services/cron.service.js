@@ -14,7 +14,7 @@ exports.initCronJobs = () => {
     try {
       console.log('[Cron] Starting Automated Order Status Sync...');
       const activeOrders = await Order.find({
-        orderStatus: { $in: ['Pending', 'Processing', 'Shipped', 'Out for Delivery'] }
+        orderStatus: { $in: ['Processing', 'Shipped', 'Out for Delivery'] }
       });
 
       if (activeOrders.length === 0) {

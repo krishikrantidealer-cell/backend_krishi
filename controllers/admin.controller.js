@@ -11,7 +11,7 @@ exports.getDashboardAnalytics = async (req, res, next) => {
 
     // 2. Order metrics
     const totalOrders = await Order.countDocuments();
-    const pendingOrders = await Order.countDocuments({ orderStatus: 'Pending' });
+    const pendingOrders = await Order.countDocuments({ orderStatus: 'Processing' });
     
     // Revenue calculations
     const deliveredOrders = await Order.find({ orderStatus: 'Delivered' });

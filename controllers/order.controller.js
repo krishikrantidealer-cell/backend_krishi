@@ -70,7 +70,7 @@ exports.getMyOrders = async (req, res, next) => {
     // Non-blocking background sync for active orders to maintain list accuracy without API lag
     if (orders && Array.isArray(orders)) {
       orders
-        .filter(o => ['Pending', 'Processing', 'Shipped', 'Out for Delivery'].includes(o.orderStatus))
+        .filter(o => ['Processing', 'Shipped', 'Out for Delivery'].includes(o.orderStatus))
         .forEach(o => {
           orderService.syncDelhiveryTracking(req.user._id, o._id).catch(() => {});
         });
@@ -205,7 +205,7 @@ exports.adminUpdateOrderStatus = async (req, res, next) => {
     const { status, awbNumber, courierName, trackingUrl } = req.body;
     const { id } = req.params;
 
-    const allowedStatuses = ['Pending', 'Processing', 'Shipped', 'Out for Delivery', 'Delivered', 'Cancelled', 'RTO'];
+    const allowedStatuses = ['Processing', 'Shipped', 'Out for Delivery', 'Delivered', 'Cancelled', 'RTO'];
     if (!allowedStatuses.includes(status)) {
       return res.status(400).json({ success: false, message: 'Invalid order status' });
     }
