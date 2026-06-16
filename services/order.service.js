@@ -5,6 +5,14 @@ const couponService = require('./coupon.service');
 
 class OrderService {
   async createOrderFromCart(userId, paymentMethod = 'Online', shippingAddress = null, paymentData = {}) {
+    const user = await User.findById(userId);
+    if (!user) {
+      throw new Error('User not found');
+    }
+    if (!user.isKycComplete) {
+      throw new Error('KYC verification is pending. Please wait for administrator approval to place orders.');
+    }
+
     // 0. Secure Signature Verification (Prevents Fraud)
     const keySecret = process.env.RAZORPAY_KEY_SECRET;
     if (
@@ -46,7 +54,6 @@ class OrderService {
     });
 
     // 3. Figure out the shipping address
-    const user = await User.findById(userId);
     const address = shippingAddress || user.address;
 
     if (!address || !address.pincode) {
@@ -111,6 +118,14 @@ class OrderService {
   }
 
   async initializeRazorpayPayment(userId, paymentMethod = 'Online', partialPercent = null) {
+    const user = await User.findById(userId);
+    if (!user) {
+      throw new Error('User not found');
+    }
+    if (!user.isKycComplete) {
+      throw new Error('KYC verification is pending. Please wait for administrator approval to place orders.');
+    }
+
     const Cart = require('../models/Cart');
     const axios = require('axios');
 

@@ -8,7 +8,10 @@ class UserService {
     if (filters.role) query.role = filters.role;
     if (filters.kycStatus) query.kycStatus = filters.kycStatus;
     
-    return await User.find(query).select('-password').sort({ createdAt: -1 });
+    return await User.find(query)
+      .populate('assignedAgent', 'firstName lastName phoneNumber email')
+      .select('-password')
+      .sort({ createdAt: -1 });
   }
 
   async getProfile(userId) {
@@ -82,14 +85,18 @@ class UserService {
     return user;
   }
   async submitKyc(userId, kycData) {
-    const { userType, shopName, gstNumber, licenceImage } = kycData;
+    const { userType, shopName, gstNumber, licenceImage, shopImage } = kycData;
 
-    if (!userType || !shopName || !gstNumber) {
-      throw new Error('User type, shop name, and GST number are required');
+    if (!userType || !shopName) {
+      throw new Error('User type and shop name are required');
     }
 
     if (!licenceImage || typeof licenceImage !== 'string' || licenceImage.trim() === '') {
       throw new Error('Licence image is required');
+    }
+
+    if (!shopImage || typeof shopImage !== 'string' || shopImage.trim() === '') {
+      throw new Error('Shop image is required');
     }
 
     const user = await User.findByIdAndUpdate(
@@ -100,8 +107,9 @@ class UserService {
           shopName,
           gstNumber,
           licenceImage,
-          kycStatus: 'verified',
-          isKycComplete: true
+          shopImage,
+          kycStatus: 'pending',
+          isKycComplete: false
         }
       },
       { new: true, runValidators: true }
@@ -202,6 +210,56 @@ class UserService {
       body,
       '/profile'
     ).catch(err => console.error("Error sending KYC notification:", err));
+
+    return user;
+  }
+
+  async assignAgent(userId, agentId) {
+    const user = await User.findById(userId);
+    if (!user) throw new Error('User not found');
+
+    if (agentId) {
+      const agent = await User.findById(agentId);
+      if (!agent) throw new Error('Agent not found');
+      if (agent.role !== 'sales') {
+        throw new Error('Assigned user must be a sales agent');
+      }
+      user.assignedAgent = agentId;
+    } else {
+      user.assignedAgent = null;
+    }
+
+    await user.save();
+    return await User.findById(userId).populate('assignedAgent', 'firstName lastName phoneNumber email');
+  }
+
+  async createSalesAgent(agentData) {
+    const { firstName, lastName, email, phoneNumber, password } = agentData;
+
+    if (!firstName || !lastName || !email || !phoneNumber || !password) {
+      throw new Error('All fields (first name, last name, email, phone number, password) are required');
+    }
+
+    // Check if user already exists with email or phone number
+    const existingEmail = await User.findOne({ email });
+    if (existingEmail) throw new Error('Email already registered');
+
+    const existingPhone = await User.findOne({ phoneNumber });
+    if (existingPhone) throw new Error('Phone number already registered');
+
+    const { hashData } = require('../utils/hash');
+    const hashedPassword = await hashData(password);
+
+    const user = await User.create({
+      firstName,
+      lastName,
+      email,
+      phoneNumber,
+      password: hashedPassword,
+      role: 'sales',
+      isVerified: true,
+      isProfileComplete: true
+    });
 
     return user;
   }

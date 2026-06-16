@@ -45,19 +45,43 @@ exports.submitKyc = async (req, res, next) => {
   try {
     const kycData = req.body;
 
-    // Handle File Upload to GCS
-    if (!req.file) {
-      return res.status(400).json({ success: false, message: 'Licence image file is required' });
+    // Verify user can upload KYC (i.e. not verified or currently under review)
+    const existingUser = await userService.getProfile(req.user._id);
+    const hasSubmitted = existingUser.licenceImage && existingUser.licenceImage.trim() !== '';
+    if (existingUser.isKycComplete || (hasSubmitted && existingUser.kycStatus !== 'rejected')) {
+      return res.status(403).json({
+        success: false,
+        message: 'KYC documents are already submitted or verified. You cannot upload new documents until the admin rejects the current submission.'
+      });
     }
 
-    const licenceImageUrl = await processAndUploadKycDocument(
-      req.file.buffer,
-      req.file.originalname,
-      req.user._id
-    );
+    // Handle Multiple File Uploads to GCS
+    if (!req.files || !req.files['licenceImage'] || !req.files['shopImage']) {
+      return res.status(400).json({
+        success: false,
+        message: 'Both licence image and shop image files are required'
+      });
+    }
 
-    // Add the GCS URL to kycData before calling service
+    const licenceFile = req.files['licenceImage'][0];
+    const shopFile = req.files['shopImage'][0];
+
+    const [licenceImageUrl, shopImageUrl] = await Promise.all([
+      processAndUploadKycDocument(
+        licenceFile.buffer,
+        licenceFile.originalname,
+        req.user._id
+      ),
+      processAndUploadKycDocument(
+        shopFile.buffer,
+        shopFile.originalname,
+        req.user._id
+      )
+    ]);
+
+    // Add the GCS URLs to kycData before calling service
     kycData.licenceImage = licenceImageUrl;
+    kycData.shopImage = shopImageUrl;
 
     const user = await userService.submitKyc(req.user._id, kycData);
 
@@ -164,6 +188,38 @@ exports.adminUpdateKycStatus = async (req, res, next) => {
 
     const user = await userService.updateKycStatus(userId, status, reason);
     res.json({ success: true, message: `KYC status updated to ${status}`, user });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.adminAssignAgent = async (req, res, next) => {
+  try {
+    const { agentId } = req.body;
+    const { userId } = req.params;
+
+    const user = await userService.assignAgent(userId, agentId);
+    res.json({ success: true, message: 'Agent assigned successfully', user });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.adminCreateSalesAgent = async (req, res, next) => {
+  try {
+    const user = await userService.createSalesAgent(req.body);
+    res.status(201).json({
+      success: true,
+      message: 'Sales agent created successfully',
+      user: {
+        id: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        phoneNumber: user.phoneNumber,
+        role: user.role
+      }
+    });
   } catch (error) {
     next(error);
   }

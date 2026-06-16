@@ -55,11 +55,14 @@ router.post(
 // Submit KYC API
 router.post(
   '/kyc',
-  upload.single('licenceImage'),
+  upload.fields([
+    { name: 'licenceImage', maxCount: 1 },
+    { name: 'shopImage', maxCount: 1 }
+  ]),
   [
     body('userType').isIn(['Retailer and Distributor']).withMessage('Invalid user type'),
     body('shopName').trim().notEmpty().withMessage('Shop name is required'),
-    body('gstNumber').trim().notEmpty().withMessage('GST number is required')
+    body('gstNumber').optional({ checkFalsy: true }).trim()
   ],
   validate,
   userController.submitKyc
@@ -90,5 +93,11 @@ router.get('/', authorizeRoles('admin'), userController.getAllUsers);
 
 // Update KYC Status (Approve/Reject) (Admin only)
 router.put('/:userId/kyc', authorizeRoles('admin'), userController.adminUpdateKycStatus);
+
+// Assign Sales Agent (Admin only)
+router.put('/:userId/assign-agent', authorizeRoles('admin'), userController.adminAssignAgent);
+
+// Create Sales Agent (Admin only)
+router.post('/sales', authorizeRoles('admin'), userController.adminCreateSalesAgent);
 
 module.exports = router;

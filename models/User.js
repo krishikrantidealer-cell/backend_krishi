@@ -84,6 +84,10 @@ const userSchema = new mongoose.Schema({
     type: String, // URL to the uploaded image
     trim: true
   },
+  shopImage: {
+    type: String, // URL to the uploaded image
+    trim: true
+  },
   kycStatus: {
     type: String,
     enum: ['pending', 'submitted', 'verified', 'rejected'],
@@ -92,6 +96,15 @@ const userSchema = new mongoose.Schema({
   isKycComplete: {
     type: Boolean,
     default: false
+  },
+  assignedAgent: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
+  },
+  source: {
+    type: String,
+    default: 'App'
   },
   shippingAddresses: [{
     name: { type: String, required: true, trim: true },
