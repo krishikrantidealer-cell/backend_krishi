@@ -51,7 +51,7 @@ exports.submitKyc = async (req, res, next) => {
     if (existingUser.isKycComplete || (hasSubmitted && existingUser.kycStatus !== 'rejected')) {
       return res.status(403).json({
         success: false,
-        message: 'KYC documents are already submitted or verified. You cannot upload new documents until the admin rejects the current submission.'
+        message: 'Documents under review'
       });
     }
 
