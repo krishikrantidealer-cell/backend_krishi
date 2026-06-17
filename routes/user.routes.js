@@ -28,6 +28,8 @@ router.patch(
     body('profileImage').optional().trim().notEmpty().withMessage('Profile image URL cannot be empty'),
     body('addressType').optional().isIn(['Shop', 'Home', 'Godown', 'Other']).withMessage('Invalid address type'),
     body('address.villageArea').optional().trim().notEmpty().withMessage('Village/Area cannot be empty'),
+    body('address.addressLine2').optional().trim(),
+    body('address.address2').optional().trim(),
     body('address.cityTehsil').optional().trim().notEmpty().withMessage('City/Tehsil cannot be empty'),
     body('address.pincode').optional().isLength({ min: 6, max: 6 }).withMessage('Pincode must be 6 digits'),
     body('shopName').optional().trim().notEmpty().withMessage('Shop name cannot be empty'),
@@ -45,6 +47,8 @@ router.post(
     body('lastName').trim().notEmpty().withMessage('Last name is required'),
     body('addressType').isIn(['Shop', 'Home', 'Godown', 'Other']).withMessage('Invalid address type'),
     body('address.villageArea').trim().notEmpty().withMessage('Village/Area is required'),
+    body('address.addressLine2').optional().trim(),
+    body('address.address2').optional().trim(),
     body('address.cityTehsil').trim().notEmpty().withMessage('City/Tehsil is required'),
     body('address.pincode').isLength({ min: 6, max: 6 }).withMessage('Pincode must be 6 digits')
   ],
@@ -74,6 +78,8 @@ router.post(
   [
     body('name').trim().notEmpty().withMessage('Address name is required'),
     body('villageArea').trim().notEmpty().withMessage('Village/Area is required'),
+    body('addressLine2').optional().trim(),
+    body('address2').optional().trim(),
     body('cityTehsil').trim().notEmpty().withMessage('City/Tehsil is required'),
     body('pincode').isLength({ min: 6, max: 6 }).withMessage('Pincode must be 6 digits'),
     body('phoneNumber').trim().notEmpty().withMessage('Phone number is required')

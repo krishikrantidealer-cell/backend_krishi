@@ -49,6 +49,14 @@ const userSchema = new mongoose.Schema({
       type: String,
       trim: true
     },
+    addressLine2: {
+      type: String,
+      trim: true
+    },
+    address2: {
+      type: String,
+      trim: true
+    },
     cityTehsil: {
       type: String,
       trim: true
@@ -109,6 +117,8 @@ const userSchema = new mongoose.Schema({
   shippingAddresses: [{
     name: { type: String, required: true, trim: true },
     villageArea: { type: String, required: true, trim: true },
+    addressLine2: { type: String, trim: true },
+    address2: { type: String, trim: true },
     cityTehsil: { type: String, required: true, trim: true },
     state: { type: String, trim: true },
     pincode: { type: String, required: true, trim: true },

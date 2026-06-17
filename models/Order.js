@@ -35,6 +35,8 @@ const shippingAddressSchema = new mongoose.Schema({
   name: String,
   phoneNumber: String,
   villageArea: String,
+  addressLine2: String,
+  address2: String,
   cityTehsil: String,
   state: String,
   pincode: String
