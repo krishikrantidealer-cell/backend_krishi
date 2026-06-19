@@ -55,29 +55,50 @@ exports.submitKyc = async (req, res, next) => {
       });
     }
 
-    // Handle Multiple File Uploads to GCS
-    if (!req.files || !req.files['licenceImage'] || !req.files['shopImage']) {
+    // Handle Optional/Fallback GCS Uploads
+    let licenceImageUrl = existingUser.licenceImage;
+    let shopImageUrl = existingUser.shopImage;
+
+    const licenceFile = req.files && req.files['licenceImage'] ? req.files['licenceImage'][0] : null;
+    const shopFile = req.files && req.files['shopImage'] ? req.files['shopImage'][0] : null;
+
+    if (!licenceFile && (!licenceImageUrl || licenceImageUrl.trim() === '')) {
       return res.status(400).json({
         success: false,
-        message: 'Both licence image and shop image files are required'
+        message: 'Licence image is required'
       });
     }
 
-    const licenceFile = req.files['licenceImage'][0];
-    const shopFile = req.files['shopImage'][0];
+    if (!shopFile && (!shopImageUrl || shopImageUrl.trim() === '')) {
+      return res.status(400).json({
+        success: false,
+        message: 'Shop image is required'
+      });
+    }
 
-    const [licenceImageUrl, shopImageUrl] = await Promise.all([
-      processAndUploadKycDocument(
-        licenceFile.buffer,
-        licenceFile.originalname,
-        req.user._id
-      ),
-      processAndUploadKycDocument(
-        shopFile.buffer,
-        shopFile.originalname,
-        req.user._id
-      )
-    ]);
+    const uploadPromises = [];
+
+    if (licenceFile) {
+      uploadPromises.push(
+        processAndUploadKycDocument(
+          licenceFile.buffer,
+          licenceFile.originalname,
+          req.user._id
+        ).then(url => { licenceImageUrl = url; })
+      );
+    }
+
+    if (shopFile) {
+      uploadPromises.push(
+        processAndUploadKycDocument(
+          shopFile.buffer,
+          shopFile.originalname,
+          req.user._id
+        ).then(url => { shopImageUrl = url; })
+      );
+    }
+
+    await Promise.all(uploadPromises);
 
     // Add the GCS URLs to kycData before calling service
     kycData.licenceImage = licenceImageUrl;

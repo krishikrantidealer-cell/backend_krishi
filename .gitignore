@@ -4,3 +4,6 @@
 *.log
 .DS_Store
 serviceAccountKey.json
+*service-account*.json
+*-service-account*.json
+*-key.json

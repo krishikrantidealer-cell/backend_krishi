@@ -2,6 +2,7 @@ const Order = require('../models/Order');
 const Cart = require('../models/Cart');
 const User = require('../models/User');
 const couponService = require('./coupon.service');
+const sheetsService = require('./sheets.service');
 
 class OrderService {
   async createOrderFromCart(userId, paymentMethod = 'Online', shippingAddress = null, paymentData = {}) {
@@ -114,6 +115,12 @@ class OrderService {
     cart.finalAmount = 0;
     cart.freeItems = [];
     await cart.save();
+
+    // 8. Sync new order to Google Sheets (fire-and-forget)
+    sheetsService.appendOrder(order).catch(err =>
+      console.error('[Sheets] Failed to append new order:', err.message)
+    );
+
     return order;
   }
 
@@ -223,6 +230,11 @@ class OrderService {
     else if (status === 'RTO') order.rtoAt = new Date();
 
     await order.save();
+
+    // Sync updated order status to Google Sheets (fire-and-forget)
+    sheetsService.updateOrderRow(order).catch(err =>
+      console.error('[Sheets] Failed to update order row:', err.message)
+    );
 
     // Trigger Notification
     const notificationService = require('./notification.service');

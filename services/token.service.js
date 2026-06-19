@@ -1,4 +1,5 @@
 const Session = require('../models/Session');
+const User = require('../models/User');
 const { redisClient } = require('../config/redis');
 const { hashData, compareData } = require('../utils/hash');
 const { generateAccessToken, generateRefreshToken, verifyRefreshToken } = require('../utils/jwt');
@@ -60,6 +61,14 @@ class TokenService {
     }
 
     const { userId, deviceId } = decoded;
+
+    // Verify user still exists in database
+    const userExists = await User.exists({ _id: userId });
+    if (!userExists) {
+      await this.deleteSession(userId, deviceId);
+      throw new Error('User not found');
+    }
+
     const redisKey = `session:${userId}:${deviceId}`;
 
     // 1. Check Redis first (fast path)
