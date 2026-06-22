@@ -216,3 +216,68 @@ exports.adminUpdateOrderStatus = async (req, res, next) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+exports.sheetsWebhook = async (req, res, next) => {
+  try {
+    const { orderId, status, secret } = req.body;
+
+    const expectedSecret = process.env.SHEETS_WEBHOOK_SECRET || 'default_secret_key_123';
+    const clientSecret = req.headers['x-sheets-secret'] || secret || req.query.secret;
+
+    if (clientSecret !== expectedSecret) {
+      return res.status(401).json({ success: false, message: 'Unauthorized webhook request' });
+    }
+
+    if (!orderId || !status) {
+      return res.status(400).json({ success: false, message: 'Missing orderId or status in payload' });
+    }
+
+    const allowedStatuses = ['Processing', 'Shipped', 'Out for Delivery', 'Delivered', 'Cancelled', 'RTO'];
+    if (!allowedStatuses.includes(status)) {
+      return res.status(400).json({ success: false, message: 'Invalid order status' });
+    }
+
+    const order = await Order.findOne({ orderId });
+    if (!order) {
+      return res.status(404).json({ success: false, message: 'Order not found' });
+    }
+
+    // If status is the same, no action needed
+    if (order.orderStatus === status) {
+      return res.json({ success: true, message: 'Status already matches', orderStatus: order.orderStatus });
+    }
+
+    order.orderStatus = status;
+    if (status === 'Processing') order.processingAt = new Date();
+    else if (status === 'Shipped') order.shippedAt = new Date();
+    else if (status === 'Out for Delivery') order.outForDeliveryAt = new Date();
+    else if (status === 'Delivered') order.deliveredAt = new Date();
+    else if (status === 'Cancelled') order.cancelledAt = new Date();
+    else if (status === 'RTO') order.rtoAt = new Date();
+
+    await order.save();
+
+    // Trigger Notification in background
+    notificationService.sendUtilityNotification(
+      order.user,
+      `Order Status Update: ${status} 📦`,
+      `Your order ${order.orderId} status has been updated to ${status} via Google Sheets.`,
+      `/order_details/${order._id}`
+    ).catch(err => console.error("Error sending order status notification:", err));
+
+    res.json({ success: true, message: `Order ${orderId} updated to ${status} from sheet`, orderStatus: status });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.adminSyncSheets = async (req, res, next) => {
+  try {
+    const sheetsService = require('../services/sheets.service');
+    const syncRes = await sheetsService.syncAllOrdersToSheet();
+    res.json({ success: true, message: 'All orders synced to Google Sheets successfully', count: syncRes.count });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+

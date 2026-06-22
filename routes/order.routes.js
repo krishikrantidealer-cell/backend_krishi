@@ -9,6 +9,9 @@ const router = express.Router();
 // Public Webhook endpoint for Delhivery / Shiprocket automated push updates
 router.post('/webhook', orderController.delhiveryWebhook);
 
+// Public Webhook endpoint for Google Sheets status updates
+router.post('/webhook/sheets', orderController.sheetsWebhook);
+
 // All subsequent order routes require authentication
 router.use(protect);
 
@@ -42,5 +45,8 @@ router.get('/admin/all', authorizeRoles('admin'), orderController.getAllOrders);
 
 // Update order status (Admin only)
 router.put('/admin/:id/status', authorizeRoles('admin'), orderController.adminUpdateOrderStatus);
+
+// Force sync all orders to Google Sheets (Admin only)
+router.post('/admin/sheets/sync', authorizeRoles('admin'), orderController.adminSyncSheets);
 
 module.exports = router;

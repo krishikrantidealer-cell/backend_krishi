@@ -107,7 +107,7 @@ class CouponService {
       freeProductImage: freeProductImage,
       freeProductTechnicalName: freeProductTechnicalName,
       freeProductVariant: freeProductVariant,
-      freeProductQuantity: coupon.freeProductQuantity || 1,
+      freeProductQuantity: 1,
       message: 'Coupon applied successfully'
     };
   }

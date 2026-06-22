@@ -43,6 +43,13 @@ class OrderService {
 
     // 2. Take a snapshot of the cart items
     const orderItems = cart.items.map(item => {
+      let variantName = 'Standard';
+      if (item.product && item.product.variants) {
+        const variant = item.product.variants.id(item.variantId);
+        if (variant) {
+          variantName = variant.size || 'Standard';
+        }
+      }
       return {
         product: item.product._id,
         variantId: item.variantId,
@@ -50,7 +57,8 @@ class OrderService {
         vendor: item.product.vendor,
         image: item.product.images && item.product.images.length > 0 ? item.product.images[0] : null,
         quantity: item.quantity,
-        price: item.price
+        price: item.price,
+        variant: variantName
       };
     });
 
@@ -96,7 +104,12 @@ class OrderService {
         imageUrl: freeProductImage,
         quantity: freeProductQuantity,
         isFree: true
-      }] : [],
+      }] : (cart.freeItems && cart.freeItems.length > 0 ? cart.freeItems.map(f => ({
+        name: f.name,
+        imageUrl: f.imageUrl || null,
+        quantity: f.quantity || 1,
+        isFree: true
+      })) : []),
       shippingAddress: address,
       paymentMethod,
       paymentStatus: paymentMethod === 'Online'

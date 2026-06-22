@@ -28,6 +28,10 @@ const orderItemSchema = new mongoose.Schema({
   price: {
     type: Number,
     required: true
+  },
+  variant: {
+    type: String,
+    default: 'Standard'
   }
 });
 
