@@ -3,6 +3,7 @@ const Cart = require('../models/Cart');
 const User = require('../models/User');
 const couponService = require('./coupon.service');
 const sheetsService = require('./sheets.service');
+const whatsappService = require('./whatsapp.service');
 
 class OrderService {
   async createOrderFromCart(userId, paymentMethod = 'Online', shippingAddress = null, paymentData = {}) {
@@ -134,6 +135,11 @@ class OrderService {
       console.error('[Sheets] Failed to append new order:', err.message)
     );
 
+    // 9. Send WhatsApp notification to admin (fire-and-forget)
+    whatsappService.notifyNewOrder(order, user).catch(err =>
+      console.error('[WhatsApp] Failed to send new order notification:', err.message)
+    );
+
     return order;
   }
 
@@ -247,6 +253,11 @@ class OrderService {
     // Sync updated order status to Google Sheets (fire-and-forget)
     sheetsService.updateOrderRow(order).catch(err =>
       console.error('[Sheets] Failed to update order row:', err.message)
+    );
+
+    // Send WhatsApp notification to admin (fire-and-forget)
+    whatsappService.notifyOrderStatusUpdate(order).catch(err =>
+      console.error('[WhatsApp] Failed to send status update notification:', err.message)
     );
 
     // Trigger Notification
