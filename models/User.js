@@ -114,6 +114,10 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: 'App'
   },
+  deepLinkUrl: {
+    type: String,
+    default: null
+  },
   shippingAddresses: [{
     name: { type: String, required: true, trim: true },
     villageArea: { type: String, required: true, trim: true },

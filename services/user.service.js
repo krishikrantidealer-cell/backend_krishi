@@ -7,6 +7,7 @@ class UserService {
     const query = {};
     if (filters.role) query.role = filters.role;
     if (filters.kycStatus) query.kycStatus = filters.kycStatus;
+    if (filters.assignedAgent) query.assignedAgent = filters.assignedAgent;
     
     return await User.find(query)
       .populate('assignedAgent', 'firstName lastName phoneNumber email')
@@ -57,7 +58,7 @@ class UserService {
   }
 
   async completeProfile(userId, profileData) {
-    const { firstName, lastName, addressType, address } = profileData;
+    const { firstName, lastName, addressType, address, source, deepLinkUrl } = profileData;
 
     if (!firstName || !lastName || !addressType || !address) {
       throw new Error('All profile fields are required');
@@ -71,6 +72,8 @@ class UserService {
           lastName,
           addressType,
           address,
+          source: source || 'App',
+          deepLinkUrl: deepLinkUrl || null,
           isProfileComplete: true,
           isVerified: true
         }
@@ -262,6 +265,51 @@ class UserService {
     });
 
     return user;
+  }
+
+  async updateSalesAgent(agentId, updateData) {
+    const { firstName, lastName, email, phoneNumber, password } = updateData;
+
+    const user = await User.findById(agentId);
+    if (!user) throw new Error('Sales agent not found');
+    if (user.role !== 'sales') throw new Error('User is not a sales agent');
+
+    // Check email unique if changed
+    if (email && email !== user.email) {
+      const existingEmail = await User.findOne({ email });
+      if (existingEmail) throw new Error('Email already registered');
+      user.email = email;
+    }
+
+    // Check phone unique if changed
+    if (phoneNumber && phoneNumber !== user.phoneNumber) {
+      const existingPhone = await User.findOne({ phoneNumber });
+      if (existingPhone) throw new Error('Phone number already registered');
+      user.phoneNumber = phoneNumber;
+    }
+
+    if (firstName) user.firstName = firstName;
+    if (lastName) user.lastName = lastName;
+
+    if (password && password.trim() !== '') {
+      const { hashData } = require('../utils/hash');
+      user.password = await hashData(password);
+    }
+
+    await user.save();
+    return user;
+  }
+
+  async deleteSalesAgent(agentId) {
+    const user = await User.findById(agentId);
+    if (!user) throw new Error('Sales agent not found');
+    if (user.role !== 'sales') throw new Error('User is not a sales agent');
+
+    // Unassign this agent from any leads or dealers they are assigned to
+    await User.updateMany({ assignedAgent: agentId }, { $set: { assignedAgent: null } });
+
+    await User.findByIdAndDelete(agentId);
+    return true;
   }
 }
 

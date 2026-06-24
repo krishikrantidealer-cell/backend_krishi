@@ -225,6 +225,7 @@ class OrderService {
     const query = {};
     if (filters.status) query.orderStatus = filters.status;
     if (filters.paymentStatus) query.paymentStatus = filters.paymentStatus;
+    if (filters.users) query.user = { $in: filters.users };
     
     return await Order.find(query)
       .populate('user', 'firstName lastName phoneNumber role kycStatus isKycComplete shopName')

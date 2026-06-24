@@ -191,6 +191,9 @@ exports.getAllUsers = async (req, res, next) => {
       role: req.query.role,
       kycStatus: req.query.kycStatus
     };
+    if (req.user.role === 'sales') {
+      filters.assignedAgent = req.user._id;
+    }
     const users = await userService.getAllUsers(filters);
     res.json({ success: true, users });
   } catch (error) {
@@ -240,6 +243,40 @@ exports.adminCreateSalesAgent = async (req, res, next) => {
         phoneNumber: user.phoneNumber,
         role: user.role
       }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.adminUpdateSalesAgent = async (req, res, next) => {
+  try {
+    const { agentId } = req.params;
+    const user = await userService.updateSalesAgent(agentId, req.body);
+    res.json({
+      success: true,
+      message: 'Sales agent updated successfully',
+      user: {
+        id: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        phoneNumber: user.phoneNumber,
+        role: user.role
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.adminDeleteSalesAgent = async (req, res, next) => {
+  try {
+    const { agentId } = req.params;
+    await userService.deleteSalesAgent(agentId);
+    res.json({
+      success: true,
+      message: 'Sales agent deleted successfully'
     });
   } catch (error) {
     next(error);

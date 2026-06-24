@@ -94,8 +94,8 @@ router.patch('/addresses/:addressId/default', userController.setDefaultAddress);
 // --- ADMIN ROUTES ---
 const { authorizeRoles } = require('../middlewares/auth.middleware');
 
-// Get all users (Admin only)
-router.get('/', authorizeRoles('admin'), userController.getAllUsers);
+// Get all users (Admin and Sales)
+router.get('/', authorizeRoles('admin', 'sales'), userController.getAllUsers);
 
 // Update KYC Status (Approve/Reject) (Admin only)
 router.put('/:userId/kyc', authorizeRoles('admin'), userController.adminUpdateKycStatus);
@@ -105,5 +105,11 @@ router.put('/:userId/assign-agent', authorizeRoles('admin'), userController.admi
 
 // Create Sales Agent (Admin only)
 router.post('/sales', authorizeRoles('admin'), userController.adminCreateSalesAgent);
+
+// Update Sales Agent (Admin only)
+router.put('/sales/:agentId', authorizeRoles('admin'), userController.adminUpdateSalesAgent);
+
+// Delete Sales Agent (Admin only)
+router.delete('/sales/:agentId', authorizeRoles('admin'), userController.adminDeleteSalesAgent);
 
 module.exports = router;

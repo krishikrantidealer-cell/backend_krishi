@@ -40,8 +40,8 @@ router.post('/:id/cancel', orderController.cancelOrder);
 // --- ADMIN ROUTES ---
 const { authorizeRoles } = require('../middlewares/auth.middleware');
 
-// Get all orders (Admin only)
-router.get('/admin/all', authorizeRoles('admin'), orderController.getAllOrders);
+// Get all orders (Admin and Sales)
+router.get('/admin/all', authorizeRoles('admin', 'sales'), orderController.getAllOrders);
 
 // Update order status (Admin only)
 router.put('/admin/:id/status', authorizeRoles('admin'), orderController.adminUpdateOrderStatus);

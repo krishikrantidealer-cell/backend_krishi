@@ -193,6 +193,12 @@ exports.getAllOrders = async (req, res, next) => {
       status: req.query.status,
       paymentStatus: req.query.paymentStatus
     };
+    if (req.user.role === 'sales') {
+      const User = require('../models/User');
+      const assignedUsers = await User.find({ assignedAgent: req.user._id }).select('_id');
+      const assignedUserIds = assignedUsers.map(u => u._id);
+      filters.users = assignedUserIds;
+    }
     const orders = await orderService.getAllOrders(filters);
     res.json({ success: true, orders });
   } catch (error) {
