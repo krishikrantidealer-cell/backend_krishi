@@ -106,6 +106,13 @@ exports.submitKyc = async (req, res, next) => {
 
     const user = await userService.submitKyc(req.user._id, kycData);
 
+    try {
+      const { sendToAll } = require('../services/websocket.service');
+      sendToAll({ type: 'LEADS_UPDATE' });
+    } catch (wsErr) {
+      console.error('[WS] Failed to broadcast KYC submission:', wsErr.message);
+    }
+
     res.json({
       success: true,
       message: 'KYC submitted successfully',
@@ -211,6 +218,19 @@ exports.adminUpdateKycStatus = async (req, res, next) => {
     }
 
     const user = await userService.updateKycStatus(userId, status, reason);
+
+    try {
+      const { sendToAll, sendToUser } = require('../services/websocket.service');
+      sendToAll({ type: 'LEADS_UPDATE' });
+      sendToAll({ type: 'DEALERS_UPDATE' });
+      if (user.assignedAgent) {
+        sendToUser(user.assignedAgent.toString(), { type: 'LEADS_UPDATE' });
+        sendToUser(user.assignedAgent.toString(), { type: 'DEALERS_UPDATE' });
+      }
+    } catch (wsErr) {
+      console.error('[WS] Failed to broadcast KYC status update:', wsErr.message);
+    }
+
     res.json({ success: true, message: `KYC status updated to ${status}`, user });
   } catch (error) {
     next(error);
@@ -223,6 +243,36 @@ exports.adminAssignAgent = async (req, res, next) => {
     const { userId } = req.params;
 
     const user = await userService.assignAgent(userId, agentId);
+
+    try {
+      const { sendToAll, sendToUser } = require('../services/websocket.service');
+      sendToAll({ type: 'LEADS_UPDATE' });
+      sendToAll({ type: 'DEALERS_UPDATE' });
+      if (agentId) {
+        sendToUser(agentId, { type: 'LEADS_UPDATE' });
+        sendToUser(agentId, { type: 'DEALERS_UPDATE' });
+
+        // Create database notification for the sales agent
+        const title = 'New Lead Assigned 👤';
+        const nameStr = (user.firstName || user.lastName)
+          ? `${user.firstName || ''} ${user.lastName || ''}`.trim()
+          : user.shopName || user.phoneNumber;
+        const body = `You have been assigned to lead: ${nameStr}.`;
+
+        await Notification.create({
+          user: agentId,
+          title,
+          body,
+          category: 'utility',
+          actionRoute: user.kycStatus === 'verified' ? '/dealers/profile' : '/leads/profile'
+        });
+
+        sendToUser(agentId, { type: 'NOTIFICATION_RECEIVED' });
+      }
+    } catch (wsErr) {
+      console.error('[WS] Failed to broadcast agent assignment:', wsErr.message);
+    }
+
     res.json({ success: true, message: 'Agent assigned successfully', user });
   } catch (error) {
     next(error);
@@ -278,6 +328,80 @@ exports.adminDeleteSalesAgent = async (req, res, next) => {
       success: true,
       message: 'Sales agent deleted successfully'
     });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.adminToggleBlockUser = async (req, res, next) => {
+  try {
+    const { userId } = req.params;
+    const user = await userService.getProfile(userId);
+    
+    // Toggle block status
+    user.isBlocked = !user.isBlocked;
+    await user.save();
+
+    const isBlockedNow = user.isBlocked;
+
+    try {
+      const { sendToUser, sendToAll } = require('../services/websocket.service');
+      if (isBlockedNow) {
+        // Force logout the blocked user
+        sendToUser(userId, { type: 'FORCE_LOGOUT' });
+
+        // Notify assigned agent if any
+        if (user.assignedAgent) {
+          const agentIdStr = user.assignedAgent.toString();
+          
+          const title = 'Assigned User Blocked 🚫';
+          const nameStr = (user.firstName || user.lastName) 
+            ? `${user.firstName || ''} ${user.lastName || ''}`.trim()
+            : user.shopName || user.phoneNumber;
+          const body = `${nameStr} has been blocked by the Administrator.`;
+          
+          await Notification.create({
+            user: user.assignedAgent,
+            title,
+            body,
+            category: 'utility',
+            actionRoute: user.kycStatus === 'verified' ? '/dealers' : '/leads'
+          });
+
+          sendToUser(agentIdStr, { type: 'NOTIFICATION_RECEIVED' });
+        }
+      }
+      
+      // Notify all clients to update lead/dealer views
+      sendToAll({ type: 'LEADS_UPDATE' });
+      sendToAll({ type: 'DEALERS_UPDATE' });
+    } catch (wsErr) {
+      console.error('[WS] Error in block propagation:', wsErr.message);
+    }
+
+    res.json({
+      success: true,
+      message: `User is now ${isBlockedNow ? 'blocked' : 'unblocked'}.`,
+      user: {
+        id: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        isBlocked: user.isBlocked,
+        kycStatus: user.kycStatus
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.markNotificationsAsRead = async (req, res, next) => {
+  try {
+    await Notification.updateMany(
+      { user: req.user._id, isRead: false },
+      { $set: { isRead: true } }
+    );
+    res.json({ success: true, message: 'Notifications marked as read' });
   } catch (error) {
     next(error);
   }

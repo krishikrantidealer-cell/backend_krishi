@@ -16,6 +16,7 @@ router.post('/fcm-token', userController.updateFcmToken);
 
 // Fetch persistent notification history
 router.get('/notifications', userController.getMyNotifications);
+router.put('/notifications/read', userController.markNotificationsAsRead);
 
 router.get('/profile', userController.getProfile);
 
@@ -102,6 +103,9 @@ router.put('/:userId/kyc', authorizeRoles('admin'), userController.adminUpdateKy
 
 // Assign Sales Agent (Admin only)
 router.put('/:userId/assign-agent', authorizeRoles('admin'), userController.adminAssignAgent);
+
+// Toggle Block User (Admin only)
+router.put('/:userId/block', authorizeRoles('admin'), userController.adminToggleBlockUser);
 
 // Create Sales Agent (Admin only)
 router.post('/sales', authorizeRoles('admin'), userController.adminCreateSalesAgent);

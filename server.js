@@ -21,8 +21,13 @@ const startServer = async () => {
 
     // Import app ONLY after Redis is connected
     const app = require('./app');
+    const http = require('http');
+    const server = http.createServer(app);
+    const { initWebSocket } = require('./services/websocket.service');
 
-    app.listen(PORT, () => {
+    initWebSocket(server);
+
+    server.listen(PORT, () => {
       console.log(`Server running in ${process.env.NODE_ENV} mode on port ${PORT}`);
       
       // Start background tasks (Order Tracker, etc.)

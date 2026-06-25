@@ -132,6 +132,10 @@ const userSchema = new mongoose.Schema({
   fcmToken: {
     type: String,
     trim: true
+  },
+  isBlocked: {
+    type: Boolean,
+    default: false
   }
 }, {
   timestamps: true

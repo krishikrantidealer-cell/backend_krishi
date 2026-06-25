@@ -13,6 +13,10 @@ class AuthController {
         return res.status(401).json({ success: false, message: 'Invalid credentials' });
       }
 
+      if (user.isBlocked) {
+        return res.status(403).json({ success: false, message: 'Your account has been blocked. Access denied.' });
+      }
+
       if (user.role !== 'admin' && user.role !== 'sales') {
         return res.status(403).json({ success: false, message: 'Access denied: insufficient permissions' });
       }
@@ -74,14 +78,29 @@ class AuthController {
       await authService.verifyOTP(phoneNumber, otp);
 
       let user = await User.findOne({ phoneNumber });
+      if (user && user.isBlocked) {
+        return res.status(403).json({ success: false, message: 'Your account has been blocked. Access denied.' });
+      }
+      let isNewUser = false;
       if (!user) {
         user = await User.create({ 
           phoneNumber,
           isVerified: true 
         });
+        isNewUser = true;
       } else if (!user.isVerified) {
         user.isVerified = true;
         await user.save();
+        isNewUser = true;
+      }
+
+      if (isNewUser) {
+        try {
+          const { sendToAll } = require('../services/websocket.service');
+          sendToAll({ type: 'LEADS_UPDATE' });
+        } catch (wsErr) {
+          console.error('[WS] Failed to broadcast new lead:', wsErr.message);
+        }
       }
 
       const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress;
