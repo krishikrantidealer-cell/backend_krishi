@@ -98,8 +98,8 @@ const { authorizeRoles } = require('../middlewares/auth.middleware');
 // Get all users (Admin and Sales)
 router.get('/', authorizeRoles('admin', 'sales'), userController.getAllUsers);
 
-// Update KYC Status (Approve/Reject) (Admin only)
-router.put('/:userId/kyc', authorizeRoles('admin'), userController.adminUpdateKycStatus);
+// Update KYC Status (Approve/Reject) (Admin and Sales)
+router.put('/:userId/kyc', authorizeRoles('admin', 'sales'), userController.adminUpdateKycStatus);
 
 // Assign Sales Agent (Admin only)
 router.put('/:userId/assign-agent', authorizeRoles('admin'), userController.adminAssignAgent);

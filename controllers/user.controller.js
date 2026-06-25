@@ -253,18 +253,21 @@ exports.adminAssignAgent = async (req, res, next) => {
         sendToUser(agentId, { type: 'DEALERS_UPDATE' });
 
         // Create database notification for the sales agent
-        const title = 'New Lead Assigned 👤';
+        const isDealer = user.kycStatus === 'verified';
+        const title = isDealer ? 'New Dealer Assigned 🤝' : 'New Lead Assigned 👤';
         const nameStr = (user.firstName || user.lastName)
           ? `${user.firstName || ''} ${user.lastName || ''}`.trim()
           : user.shopName || user.phoneNumber;
-        const body = `You have been assigned to lead: ${nameStr}.`;
+        const body = isDealer 
+          ? `You have been assigned to dealer: ${nameStr}.`
+          : `You have been assigned to lead: ${nameStr}.`;
 
         await Notification.create({
           user: agentId,
           title,
           body,
           category: 'utility',
-          actionRoute: user.kycStatus === 'verified' ? '/dealers/profile' : '/leads/profile'
+          actionRoute: isDealer ? '/dealers/profile' : '/leads/profile'
         });
 
         sendToUser(agentId, { type: 'NOTIFICATION_RECEIVED' });
