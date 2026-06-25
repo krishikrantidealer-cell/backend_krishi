@@ -349,9 +349,19 @@ exports.adminToggleBlockUser = async (req, res, next) => {
 
     try {
       const { sendToUser, sendToAll } = require('../services/websocket.service');
+      const notificationService = require('../services/notification.service');
+      
       if (isBlockedNow) {
         // Force logout the blocked user
         sendToUser(userId, { type: 'FORCE_LOGOUT' });
+
+        // Send Push / Utility Notification to the user themselves
+        await notificationService.sendUtilityNotification(
+          userId,
+          'Account Suspended 🚫',
+          'Your account has been suspended by the administrator. Contact support for assistance.',
+          '/login'
+        );
 
         // Notify assigned agent if any
         if (user.assignedAgent) {
@@ -373,6 +383,14 @@ exports.adminToggleBlockUser = async (req, res, next) => {
 
           sendToUser(agentIdStr, { type: 'NOTIFICATION_RECEIVED' });
         }
+      } else {
+        // Send Push / Utility Notification to the user themselves when unblocked
+        await notificationService.sendUtilityNotification(
+          userId,
+          'Account Reactivated 🔓',
+          'Your account has been reactivated. You can now log back in.',
+          '/login'
+        );
       }
       
       // Notify all clients to update lead/dealer views
