@@ -328,6 +328,9 @@ exports.adminCreateOrder = async (req, res, next) => {
     const advance = paymentMethod === 'Partial' ? (advanceAmount || 0) : computed_total;
     const remaining = computed_total - advance;
 
+    // Map FullPayment → Online (same mode, Online is the existing DB enum value)
+    const dbPaymentMethod = paymentMethod === 'FullPayment' ? 'Online' : paymentMethod;
+
     const Order = require('../models/Order');
 
     const order = await Order.create({
@@ -345,12 +348,12 @@ exports.adminCreateOrder = async (req, res, next) => {
       })),
       totalAmount: computed_total,
       shippingAddress,
-      paymentMethod,
-      paymentId: paymentId.trim(),
+      paymentMethod: dbPaymentMethod,
+      razorpayPaymentId: paymentId.trim(),   // reuse this field for panel payment refs
       advanceAmount: advance,
       remainingAmount: remaining,
       orderStatus: orderStatus || 'Processing',
-      paymentStatus: paymentStatus || (paymentMethod === 'FullPayment' ? 'Paid' : 'Partially Paid'),
+      paymentStatus: paymentStatus || (dbPaymentMethod === 'Online' ? 'Paid' : 'Partially Paid'),
       placedAt: new Date(),
       processingAt: new Date(),
     });
