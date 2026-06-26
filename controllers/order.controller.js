@@ -302,6 +302,7 @@ exports.adminCreateOrder = async (req, res, next) => {
       totalAmount,
       orderStatus,
       paymentStatus,
+      salesCouponCode,   // NEW: optional price-override coupon code
     } = req.body;
 
     // Validate required fields
@@ -321,10 +322,65 @@ exports.adminCreateOrder = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'paymentId (transaction reference) is required' });
     }
 
+    // -----------------------------------------------------------------------
+    // Sales coupon: validate and apply price override to the matching variant
+    // -----------------------------------------------------------------------
+    let appliedSalesCoupon = null;
+    let resolvedItems = items.map(i => ({ ...i })); // shallow-copy so we can mutate
+
+    if (salesCouponCode) {
+      const SalesAgentCoupon = require('../models/SalesAgentCoupon');
+      const coupon = await SalesAgentCoupon.findOne({
+        code: salesCouponCode.trim().toUpperCase(),
+      });
+
+      if (!coupon) {
+        return res.status(400).json({ success: false, message: 'Sales coupon not found' });
+      }
+
+      // If user is a sales agent, verify they created this coupon
+      if (req.user.role === 'sales' && coupon.createdBy.toString() !== req.user._id.toString()) {
+        return res.status(403).json({ success: false, message: 'You can only apply coupons created by yourself' });
+      }
+
+      if (!coupon.isActive) {
+        return res.status(400).json({ success: false, message: 'Sales coupon is inactive' });
+      }
+      if (coupon.isUsed) {
+        return res.status(400).json({
+          success: false,
+          message: `Sales coupon has already been used in order ${coupon.usedInOrderId}`,
+        });
+      }
+      if (coupon.expiresAt && new Date() > coupon.expiresAt) {
+        return res.status(400).json({ success: false, message: 'Sales coupon has expired' });
+      }
+
+      // Apply override: find the matching variant in items
+      const variantIdStr = coupon.variantId.toString();
+      let matched = false;
+      resolvedItems = resolvedItems.map(item => {
+        if (item.variantId && item.variantId.toString() === variantIdStr) {
+          matched = true;
+          return { ...item, price: coupon.overridePrice };
+        }
+        return item;
+      });
+
+      if (!matched) {
+        return res.status(400).json({
+          success: false,
+          message: `Sales coupon targets variant "${coupon.variantSize}" of "${coupon.productTitle}" which is not in this order`,
+        });
+      }
+
+      appliedSalesCoupon = coupon;
+    }
+
     // Generate a short unique orderId
     const shortId = `KD-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 5).toUpperCase()}`;
 
-    const computed_total = totalAmount || items.reduce((s, i) => s + (i.price * i.quantity), 0);
+    const computed_total = totalAmount || resolvedItems.reduce((s, i) => s + (i.price * i.quantity), 0);
     const advance = paymentMethod === 'Partial' ? (advanceAmount || 0) : computed_total;
     const remaining = computed_total - advance;
 
@@ -336,7 +392,7 @@ exports.adminCreateOrder = async (req, res, next) => {
     const order = await Order.create({
       user: userId,
       orderId: shortId,
-      items: items.map(i => ({
+      items: resolvedItems.map(i => ({
         product: i.product,
         variantId: i.variantId,
         title: i.title || 'Product',
@@ -357,6 +413,15 @@ exports.adminCreateOrder = async (req, res, next) => {
       placedAt: new Date(),
       processingAt: new Date(),
     });
+
+    // Mark the sales coupon as used (non-blocking — don't fail the order if this errors)
+    if (appliedSalesCoupon) {
+      appliedSalesCoupon.isUsed = true;
+      appliedSalesCoupon.usedInOrderId = shortId;
+      appliedSalesCoupon.save().catch(err =>
+        console.error('Failed to mark sales coupon as used:', err)
+      );
+    }
 
     // Non-blocking notification to dealer
     notificationService.sendUtilityNotification(
