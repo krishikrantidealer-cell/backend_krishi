@@ -83,7 +83,7 @@ const orderSchema = new mongoose.Schema({
   },
   paymentMethod: {
     type: String,
-    enum: ['Online', 'Partial'],
+    enum: ['Online', 'Partial', 'FullPayment'],
     required: true
   },
   paymentStatus: {
@@ -92,6 +92,10 @@ const orderSchema = new mongoose.Schema({
     default: 'Pending'
   },
   razorpayPaymentId: {
+    type: String,
+    trim: true
+  },
+  paymentId: {
     type: String,
     trim: true
   },

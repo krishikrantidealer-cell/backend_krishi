@@ -40,6 +40,9 @@ router.post('/:id/cancel', orderController.cancelOrder);
 // --- ADMIN ROUTES ---
 const { authorizeRoles } = require('../middlewares/auth.middleware');
 
+// Admin/Sales: create order directly with items (bypasses cart)
+router.post('/admin/create', authorizeRoles('admin', 'sales'), orderController.adminCreateOrder);
+
 // Get all orders (Admin and Sales)
 router.get('/admin/all', authorizeRoles('admin', 'sales'), orderController.getAllOrders);
 

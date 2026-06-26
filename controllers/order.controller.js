@@ -287,3 +287,86 @@ exports.adminSyncSheets = async (req, res, next) => {
   }
 };
 
+// ---------------------------------------------------------------------------
+// Admin / Sales – Create order directly from panel (bypasses cart)
+// ---------------------------------------------------------------------------
+exports.adminCreateOrder = async (req, res, next) => {
+  try {
+    const {
+      userId,
+      items,
+      shippingAddress,
+      paymentMethod,
+      paymentId,
+      advanceAmount,
+      totalAmount,
+      orderStatus,
+      paymentStatus,
+    } = req.body;
+
+    // Validate required fields
+    if (!userId) {
+      return res.status(400).json({ success: false, message: 'userId is required' });
+    }
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ success: false, message: 'items array is required and must not be empty' });
+    }
+    if (!shippingAddress) {
+      return res.status(400).json({ success: false, message: 'shippingAddress is required' });
+    }
+    if (!paymentMethod) {
+      return res.status(400).json({ success: false, message: 'paymentMethod is required' });
+    }
+    if (!paymentId || paymentId.trim() === '') {
+      return res.status(400).json({ success: false, message: 'paymentId (transaction reference) is required' });
+    }
+
+    // Generate a short unique orderId
+    const shortId = `KD-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 5).toUpperCase()}`;
+
+    const computed_total = totalAmount || items.reduce((s, i) => s + (i.price * i.quantity), 0);
+    const advance = paymentMethod === 'Partial' ? (advanceAmount || 0) : computed_total;
+    const remaining = computed_total - advance;
+
+    const Order = require('../models/Order');
+
+    const order = await Order.create({
+      user: userId,
+      orderId: shortId,
+      items: items.map(i => ({
+        product: i.product,
+        variantId: i.variantId,
+        title: i.title || 'Product',
+        vendor: i.vendor || undefined,
+        technicalName: i.technicalName || undefined,
+        image: i.image || undefined,
+        quantity: i.quantity,
+        price: i.price,
+      })),
+      totalAmount: computed_total,
+      shippingAddress,
+      paymentMethod,
+      paymentId: paymentId.trim(),
+      advanceAmount: advance,
+      remainingAmount: remaining,
+      orderStatus: orderStatus || 'Processing',
+      paymentStatus: paymentStatus || (paymentMethod === 'FullPayment' ? 'Paid' : 'Partially Paid'),
+      placedAt: new Date(),
+      processingAt: new Date(),
+    });
+
+    // Non-blocking notification to dealer
+    notificationService.sendUtilityNotification(
+      userId,
+      'Order Placed by Sales Agent 🎉',
+      `Your order #${shortId} has been placed. Total: ₹${computed_total}.`,
+      `/order_details/${order._id}`
+    ).catch(err => console.error('Admin create order notification error:', err));
+
+    res.status(201).json({ success: true, message: 'Order created successfully', order });
+  } catch (error) {
+    console.error('adminCreateOrder error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
