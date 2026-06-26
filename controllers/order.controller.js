@@ -356,25 +356,20 @@ exports.adminCreateOrder = async (req, res, next) => {
         return res.status(400).json({ success: false, message: 'Sales coupon has expired' });
       }
 
-      // Apply override: find the matching variant in items
-      const variantIdStr = coupon.variantId.toString();
-      let matched = false;
-      resolvedItems = resolvedItems.map(item => {
-        if (item.variantId && item.variantId.toString() === variantIdStr) {
-          matched = true;
-          return { ...item, price: coupon.overridePrice };
-        }
-        return item;
-      });
-
-      if (!matched) {
-        return res.status(400).json({
-          success: false,
-          message: `Sales coupon targets variant "${coupon.variantSize}" of "${coupon.productTitle}" which is not in this order`,
-        });
-      }
-
+      // Apply overrides: loop through all target variants in the coupon
       appliedSalesCoupon = coupon;
+
+      coupon.overrides.forEach(ov => {
+        const variantIdStr = ov.variantId.toString();
+        let itemMatched = false;
+        resolvedItems = resolvedItems.map(item => {
+          if (item.variantId && item.variantId.toString() === variantIdStr) {
+            itemMatched = true;
+            return { ...item, price: ov.overridePrice };
+          }
+          return item;
+        });
+      });
     }
 
     // Generate a short unique orderId

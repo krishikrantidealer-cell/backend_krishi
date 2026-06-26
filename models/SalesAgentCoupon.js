@@ -1,5 +1,24 @@
 const mongoose = require('mongoose');
 
+const overrideSchema = new mongoose.Schema({
+  productId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Product',
+    required: true
+  },
+  variantId: {
+    type: mongoose.Schema.Types.ObjectId,
+    required: true
+  },
+  productTitle: String,   // Denormalized
+  variantSize: String,    // Denormalized
+  originalPrice: Number,
+  overridePrice: {
+    type: Number,
+    required: true
+  }
+});
+
 const salesAgentCouponSchema = new mongoose.Schema({
   code: {
     type: String,
@@ -13,29 +32,13 @@ const salesAgentCouponSchema = new mongoose.Schema({
     ref: 'User',
     required: true
   },
-  productId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Product',
-    required: true
-  },
-  variantId: {
-    type: mongoose.Schema.Types.ObjectId,
-    required: true
-  },
-  productTitle: String,   // Denormalized for display
-  variantSize: String,    // Denormalized for display (e.g. "500ml")
-  originalPrice: Number,  // Stored for reference / display
-  overridePrice: {
-    type: Number,
-    required: true
-  },
+  overrides: [overrideSchema],
   isUsed: {
     type: Boolean,
     default: false
   },
   usedInOrderId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Order'
+    type: String
   },
   isActive: {
     type: Boolean,
