@@ -311,6 +311,29 @@ class UserService {
     await User.findByIdAndDelete(agentId);
     return true;
   }
+
+  async deleteUser(userId) {
+    const user = await User.findById(userId);
+    if (!user) throw new Error('User not found');
+
+    // We only allow deleting users with role 'user' through this method
+    // Sales agents have their own delete method
+    if (user.role !== 'user') throw new Error('Cannot delete this type of user here');
+
+    // Clean up related data
+    const Cart = require('../models/Cart');
+    const Favourite = require('../models/Favourite');
+    const Notification = require('../models/Notification');
+
+    await Promise.all([
+      Cart.deleteMany({ user: userId }),
+      Favourite.deleteMany({ user: userId }),
+      Notification.deleteMany({ user: userId })
+    ]);
+
+    await User.findByIdAndDelete(userId);
+    return true;
+  }
 }
 
 module.exports = new UserService();

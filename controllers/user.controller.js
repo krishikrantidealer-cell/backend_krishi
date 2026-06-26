@@ -336,6 +336,40 @@ exports.adminDeleteSalesAgent = async (req, res, next) => {
   }
 };
 
+exports.adminDeleteUser = async (req, res, next) => {
+  try {
+    const { userId } = req.params;
+
+    // Authorization check for sales agents
+    if (req.user.role === 'sales') {
+      const targetUser = await userService.getProfile(userId);
+      if (!targetUser.assignedAgent || targetUser.assignedAgent.toString() !== req.user._id.toString()) {
+        return res.status(403).json({
+          success: false,
+          message: 'Not authorized to delete this user. Only assigned agents or admins can delete.'
+        });
+      }
+    }
+
+    await userService.deleteUser(userId);
+
+    try {
+      const { sendToAll } = require('../services/websocket.service');
+      sendToAll({ type: 'LEADS_UPDATE' });
+      sendToAll({ type: 'DEALERS_UPDATE' });
+    } catch (wsErr) {
+      console.error('[WS] Failed to broadcast user deletion:', wsErr.message);
+    }
+
+    res.json({
+      success: true,
+      message: 'User deleted successfully'
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 exports.adminToggleBlockUser = async (req, res, next) => {
   try {
     const { userId } = req.params;
