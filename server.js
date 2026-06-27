@@ -17,9 +17,13 @@ const startServer = async () => {
       console.error('Migration failed:', migErr.message);
     }
 
-    await connectRedis();
+    try {
+      await connectRedis();
+    } catch (redisErr) {
+      console.error('⚠️ Redis connection failed during startup, continuing without Redis:', redisErr.message);
+    }
 
-    // Import app ONLY after Redis is connected
+    // Import app
     const app = require('./app');
     const http = require('http');
     const server = http.createServer(app);
