@@ -22,15 +22,22 @@ class SmsService {
       // Skip cooldown and daily limits
     } else {
       // 1. Check Cooldown (60s)
-      const onCooldown = await redisClient.get(cooldownKey);
-      if (onCooldown) {
-        throw new Error(`Please wait ${SMS_COOLDOWN} seconds before requesting another OTP.`);
-      }
+      // 1. Check Cooldown (60s) & 2. Check Daily Limit
+      try {
+        const onCooldown = await redisClient.get(cooldownKey);
+        if (onCooldown) {
+          throw new Error(`Please wait ${SMS_COOLDOWN} seconds before requesting another OTP.`);
+        }
 
-      // 2. Check Daily Limit
-      dailyCount = await redisClient.get(dailyKey);
-      if (dailyCount && parseInt(dailyCount) >= SMS_DAILY_LIMIT) {
-        throw new Error('Daily OTP limit reached. Please try again after 24 hours.');
+        dailyCount = await redisClient.get(dailyKey);
+        if (dailyCount && parseInt(dailyCount) >= SMS_DAILY_LIMIT) {
+          throw new Error('Daily OTP limit reached. Please try again after 24 hours.');
+        }
+      } catch (redisErr) {
+        if (redisErr.message.includes('seconds before requesting') || redisErr.message.includes('Daily OTP limit reached')) {
+          throw redisErr;
+        }
+        console.error('[Redis Error] SMS rate-limit check failed, bypassing guards:', redisErr.message);
       }
     }
 
@@ -45,14 +52,18 @@ class SmsService {
       }
 
       // 4. Update Redis Guards on success
-      await redisClient.set(cooldownKey, '1', { EX: SMS_COOLDOWN });
+      try {
+        await redisClient.set(cooldownKey, '1', { EX: SMS_COOLDOWN });
 
-      if (phoneNumber === testNumber) return true; // Don't increment for test number
-      
-      if (!dailyCount) {
-        await redisClient.set(dailyKey, '1', { EX: SMS_DAILY_WINDOW });
-      } else {
-        await redisClient.incr(dailyKey);
+        if (phoneNumber !== testNumber) {
+          if (!dailyCount) {
+            await redisClient.set(dailyKey, '1', { EX: SMS_DAILY_WINDOW });
+          } else {
+            await redisClient.incr(dailyKey);
+          }
+        }
+      } catch (redisErr) {
+        console.error('[Redis Error] Failed to update SMS guards in Redis:', redisErr.message);
       }
 
       return true;

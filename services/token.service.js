@@ -17,7 +17,11 @@ class TokenService {
       const oldestSession = await Session.findOne({ userId }).sort({ createdAt: 1 });
       if (oldestSession) {
         // Invalidate in Redis before deleting from DB
-        await redisClient.del(`session:${userId}:${oldestSession.deviceId}`);
+        try {
+          await redisClient.del(`session:${userId}:${oldestSession.deviceId}`);
+        } catch (redisErr) {
+          console.error('[Redis Error] Failed to delete old session in Redis:', redisErr.message);
+        }
         await Session.deleteOne({ _id: oldestSession._id });
       }
     }
@@ -42,9 +46,13 @@ class TokenService {
     );
 
     // Store in Redis for fast lookup
-    await redisClient.set(`session:${userId}:${deviceId}`, refreshTokenHash, {
-      EX: REFRESH_TOKEN_EXPIRY
-    });
+    try {
+      await redisClient.set(`session:${userId}:${deviceId}`, refreshTokenHash, {
+        EX: REFRESH_TOKEN_EXPIRY
+      });
+    } catch (redisErr) {
+      console.error('[Redis Error] Failed to store session in Redis:', redisErr.message);
+    }
 
     const accessToken = generateAccessToken({ userId, deviceId });
 
@@ -72,7 +80,12 @@ class TokenService {
     const redisKey = `session:${userId}:${deviceId}`;
 
     // 1. Check Redis first (fast path)
-    let storedHash = await redisClient.get(redisKey);
+    let storedHash;
+    try {
+      storedHash = await redisClient.get(redisKey);
+    } catch (redisErr) {
+      console.error('[Redis Error] Failed to get session from Redis, falling back to MongoDB:', redisErr.message);
+    }
 
     // 2. Fallback to MongoDB if Redis cache is empty (unlikely but robust)
     if (!storedHash) {
@@ -80,7 +93,11 @@ class TokenService {
       if (!session) throw new Error('Session not found');
       storedHash = session.refreshTokenHash;
       // Repopulate Redis
-      await redisClient.set(redisKey, storedHash, { EX: REFRESH_TOKEN_EXPIRY });
+      try {
+        await redisClient.set(redisKey, storedHash, { EX: REFRESH_TOKEN_EXPIRY });
+      } catch (redisErr) {
+        console.error('[Redis Error] Failed to repopulate session in Redis:', redisErr.message);
+      }
     }
 
     // 3. Reuse detection
@@ -109,9 +126,13 @@ class TokenService {
     );
 
     // 6. Update Redis
-    await redisClient.set(redisKey, newRefreshTokenHash, {
-      EX: REFRESH_TOKEN_EXPIRY
-    });
+    try {
+      await redisClient.set(redisKey, newRefreshTokenHash, {
+        EX: REFRESH_TOKEN_EXPIRY
+      });
+    } catch (redisErr) {
+      console.error('[Redis Error] Failed to update session in Redis:', redisErr.message);
+    }
 
     return { accessToken: newAccessToken, refreshToken: newRefreshToken };
   }
@@ -120,7 +141,11 @@ class TokenService {
    * Invalidate a single session
    */
   async deleteSession(userId, deviceId) {
-    await redisClient.del(`session:${userId}:${deviceId}`);
+    try {
+      await redisClient.del(`session:${userId}:${deviceId}`);
+    } catch (redisErr) {
+      console.error('[Redis Error] Failed to delete session from Redis:', redisErr.message);
+    }
     await Session.deleteOne({ userId, deviceId });
   }
 
@@ -130,7 +155,11 @@ class TokenService {
   async deleteAllSessions(userId) {
     const sessions = await Session.find({ userId });
     for (const session of sessions) {
-      await redisClient.del(`session:${userId}:${session.deviceId}`);
+      try {
+        await redisClient.del(`session:${userId}:${session.deviceId}`);
+      } catch (redisErr) {
+        console.error('[Redis Error] Failed to delete session from Redis:', redisErr.message);
+      }
     }
     await Session.deleteMany({ userId });
   }
@@ -140,20 +169,26 @@ class TokenService {
    */
   async blacklistAccessToken(token, expiresInSeconds) {
     const key = `blacklist:${token}`;
-    await redisClient.set(key, '1', {
-      EX: expiresInSeconds > 0 ? expiresInSeconds : 3600 // default 1h if expired
-    });
+    try {
+      await redisClient.set(key, '1', {
+        EX: expiresInSeconds > 0 ? expiresInSeconds : 3600 // default 1h if expired
+      });
+    } catch (redisErr) {
+      console.error('[Redis Error] Failed to blacklist access token in Redis:', redisErr.message);
+    }
   }
 
   /**
    * Check if an access token is blacklisted
    */
-  /**
-   * Check if an access token is blacklisted
-   */
   async isTokenBlacklisted(token) {
-    const result = await redisClient.get(`blacklist:${token}`);
-    return result === '1';
+    try {
+      const result = await redisClient.get(`blacklist:${token}`);
+      return result === '1';
+    } catch (redisErr) {
+      console.error('[Redis Error] Failed to check token blacklist in Redis, falling back to false:', redisErr.message);
+      return false;
+    }
   }
 
   /**

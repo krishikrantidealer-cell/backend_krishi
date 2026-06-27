@@ -28,6 +28,7 @@ const apiLimiter = rateLimit({
   legacyHeaders: false,
   store: new RedisStore({
     sendCommand: (...args) => redisClient.sendCommand(args),
+    passOnStoreError: true,
   }),
   message: {
     message: 'Too many requests, please try again after 15 minutes'
@@ -43,6 +44,7 @@ const authLimiter = rateLimit({
   store: new RedisStore({
     sendCommand: (...args) => redisClient.sendCommand(args),
     prefix: 'auth_limit:',
+    passOnStoreError: true,
   }),
   message: {
     message: 'Too many login attempts from this IP, please try again after an hour'

@@ -16,12 +16,17 @@ class AuthService {
 
     // 1. Store hashed OTP and attempt count in Redis
     const otpKey = `otp:${phoneNumber}`;
-    await redisClient.set(otpKey, JSON.stringify({
-      hashedOTP,
-      attempts: 0
-    }), {
-      EX: OTP_EXPIRY
-    });
+    try {
+      await redisClient.set(otpKey, JSON.stringify({
+        hashedOTP,
+        attempts: 0
+      }), {
+        EX: OTP_EXPIRY
+      });
+    } catch (redisErr) {
+      console.error('[Redis Error] Failed to store OTP in Redis:', redisErr.message);
+      throw new Error('Verification service is temporarily unavailable. Please try again later.');
+    }
 
     // 2. Send SMS via SmsService (which handles Redis-based rate limiting internally)
 
@@ -32,7 +37,13 @@ class AuthService {
 
   async verifyOTP(phoneNumber, otp) {
     const otpKey = `otp:${phoneNumber}`;
-    const otpDataRaw = await redisClient.get(otpKey);
+    let otpDataRaw;
+    try {
+      otpDataRaw = await redisClient.get(otpKey);
+    } catch (redisErr) {
+      console.error('[Redis Error] Failed to get OTP from Redis:', redisErr.message);
+      throw new Error('Verification service is temporarily unavailable. Please try again later.');
+    }
 
     if (!otpDataRaw) {
       throw new Error('OTP expired or not found.');
@@ -47,13 +58,21 @@ class AuthService {
       if (isProduction && process.env.ALLOW_PRODUCTION_MASTER_OTP !== 'true') {
         console.warn(`[SECURITY] Master OTP attempt blocked in production for phone: ${phoneNumber}`);
       } else {
-        await redisClient.del(otpKey);
+        try {
+          await redisClient.del(otpKey);
+        } catch (redisErr) {
+          console.error('[Redis Error] Failed to delete OTP in Redis:', redisErr.message);
+        }
         return true;
       }
     }
 
     if (otpData.attempts >= MAX_VERIFICATION_ATTEMPTS) {
-      await redisClient.del(otpKey);
+      try {
+        await redisClient.del(otpKey);
+      } catch (redisErr) {
+        console.error('[Redis Error] Failed to delete OTP in Redis:', redisErr.message);
+      }
       throw new Error('Maximum verification attempts reached. Please request a new OTP.');
     }
 
@@ -61,14 +80,22 @@ class AuthService {
 
     if (!isMatch) {
       otpData.attempts += 1;
-      await redisClient.set(otpKey, JSON.stringify(otpData), {
-        KEEPTTL: true
-      });
+      try {
+        await redisClient.set(otpKey, JSON.stringify(otpData), {
+          KEEPTTL: true
+        });
+      } catch (redisErr) {
+        console.error('[Redis Error] Failed to update OTP attempts in Redis:', redisErr.message);
+      }
       throw new Error('Invalid OTP.');
     }
 
     // OTP is correct, delete it (single-use)
-    await redisClient.del(otpKey);
+    try {
+      await redisClient.del(otpKey);
+    } catch (redisErr) {
+      console.error('[Redis Error] Failed to delete OTP in Redis:', redisErr.message);
+    }
     return true;
   }
 }
