@@ -336,6 +336,87 @@ exports.adminDeleteSalesAgent = async (req, res, next) => {
   }
 };
 
+exports.adminSubmitKyc = async (req, res, next) => {
+  try {
+    const { userId } = req.params;
+    const kycData = req.body;
+
+    const existingUser = await userService.getProfile(userId);
+    let licenceImageUrl = existingUser.licenceImage;
+    let shopImageUrl = existingUser.shopImage;
+
+    const licenceFile = req.files && req.files['licenceImage'] ? req.files['licenceImage'][0] : null;
+    const shopFile = req.files && req.files['shopImage'] ? req.files['shopImage'][0] : null;
+
+    const uploadPromises = [];
+
+    if (licenceFile) {
+      uploadPromises.push(
+        processAndUploadKycDocument(
+          licenceFile.buffer,
+          licenceFile.originalname,
+          userId
+        ).then(url => { licenceImageUrl = url; })
+      );
+    }
+
+    if (shopFile) {
+      uploadPromises.push(
+        processAndUploadKycDocument(
+          shopFile.buffer,
+          shopFile.originalname,
+          userId
+        ).then(url => { shopImageUrl = url; })
+      );
+    }
+
+    await Promise.all(uploadPromises);
+
+    kycData.licenceImage = licenceImageUrl;
+    kycData.shopImage = shopImageUrl;
+
+    const user = await userService.submitKyc(userId, kycData);
+
+    try {
+      const { sendToAll } = require('../services/websocket.service');
+      sendToAll({ type: 'LEADS_UPDATE' });
+    } catch (wsErr) {
+      console.error('[WS] Failed to broadcast admin KYC submission:', wsErr.message);
+    }
+
+    res.json({
+      success: true,
+      message: 'KYC submitted successfully by Admin',
+      user
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.adminUpdateUser = async (req, res, next) => {
+  try {
+    const { userId } = req.params;
+    const user = await userService.updateProfile(userId, req.body);
+
+    try {
+      const { sendToAll } = require('../services/websocket.service');
+      sendToAll({ type: 'LEADS_UPDATE' });
+      sendToAll({ type: 'DEALERS_UPDATE' });
+    } catch (wsErr) {
+      console.error('[WS] Failed to broadcast user update:', wsErr.message);
+    }
+
+    res.json({
+      success: true,
+      message: 'User updated successfully',
+      user
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 exports.adminDeleteUser = async (req, res, next) => {
   try {
     const { userId } = req.params;

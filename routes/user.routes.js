@@ -101,6 +101,20 @@ router.get('/', authorizeRoles('admin', 'sales'), userController.getAllUsers);
 // Update KYC Status (Approve/Reject) (Admin and Sales)
 router.put('/:userId/kyc', authorizeRoles('admin', 'sales'), userController.adminUpdateKycStatus);
 
+// Submit KYC for user (Admin and Sales)
+router.post(
+  '/:userId/kyc',
+  authorizeRoles('admin', 'sales'),
+  upload.fields([
+    { name: 'licenceImage', maxCount: 1 },
+    { name: 'shopImage', maxCount: 1 }
+  ]),
+  userController.adminSubmitKyc
+);
+
+// Update User (Admin and Sales)
+router.put('/:userId', authorizeRoles('admin', 'sales'), userController.adminUpdateUser);
+
 // Delete User (Admin and Sales)
 router.delete('/:userId', authorizeRoles('admin', 'sales'), userController.adminDeleteUser);
 
