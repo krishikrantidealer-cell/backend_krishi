@@ -34,7 +34,9 @@ class UserService {
       'shopName',
       'gstNumber',
       'farmSize',
-      'cropTypes'
+      'cropTypes',
+      'leadStatus',
+      'leadNotes'
     ];
     const filteredUpdates = {};
 

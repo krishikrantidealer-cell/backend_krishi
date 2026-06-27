@@ -136,6 +136,27 @@ const userSchema = new mongoose.Schema({
   isBlocked: {
     type: Boolean,
     default: false
+  },
+  leadStatus: {
+    type: String,
+    enum: [
+      'kyc pending',
+      'call not picked',
+      'connected but not intrested',
+      'quotation sent',
+      'negotiation',
+      'follow-up',
+      'lost',
+      'intrested',
+      'customer busy',
+      'call switch off',
+      'prospect'
+    ],
+    default: 'prospect'
+  },
+  leadNotes: {
+    type: String,
+    default: ''
   }
 }, {
   timestamps: true

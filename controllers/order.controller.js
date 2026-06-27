@@ -359,17 +359,30 @@ exports.adminCreateOrder = async (req, res, next) => {
       // Apply overrides: loop through all target variants in the coupon
       appliedSalesCoupon = coupon;
 
-      coupon.overrides.forEach(ov => {
+      const Product = require('../models/Product');
+      for (const ov of coupon.overrides) {
         const variantIdStr = ov.variantId.toString();
-        let itemMatched = false;
+        
+        // Find product to determine packVolume and if dealerPrice is used
+        const product = await Product.findById(ov.productId);
+        let packVolume = 1.0;
+        let hasDealerPrice = false;
+        if (product && product.variants) {
+          const variant = product.variants.id(ov.variantId);
+          if (variant) {
+            packVolume = variant.packVolume || 1.0;
+            hasDealerPrice = variant.dealerPrice != null;
+          }
+        }
+
         resolvedItems = resolvedItems.map(item => {
           if (item.variantId && item.variantId.toString() === variantIdStr) {
-            itemMatched = true;
-            return { ...item, price: ov.overridePrice };
+            const finalPrice = hasDealerPrice ? ov.overridePrice : (ov.overridePrice * packVolume);
+            return { ...item, price: finalPrice };
           }
           return item;
         });
-      });
+      }
     }
 
     // Generate a short unique orderId
