@@ -4,6 +4,19 @@ const { redisClient } = require('../config/redis');
 
 const { verifyAccessToken } = require('../utils/jwt');
 
+const safeSendCommand = async (...args) => {
+  try {
+    return await redisClient.sendCommand(args);
+  } catch (err) {
+    console.error(`[Redis Command Error] "${args.join(' ')}" failed:`, err.message);
+    // Suppress startup SCRIPT LOAD failures to prevent unhandled promise rejection crashes
+    if (args[0] === 'SCRIPT' && args[1] === 'LOAD') {
+      return 'dummy_sha1_hash';
+    }
+    throw err;
+  }
+};
+
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: (req) => {
@@ -27,7 +40,7 @@ const apiLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   store: new RedisStore({
-    sendCommand: (...args) => redisClient.sendCommand(args),
+    sendCommand: safeSendCommand,
     passOnStoreError: true,
   }),
   message: {
@@ -42,7 +55,7 @@ const authLimiter = rateLimit({
   legacyHeaders: false,
   skip: (req) => req.body && req.body.phoneNumber === '9999999999',
   store: new RedisStore({
-    sendCommand: (...args) => redisClient.sendCommand(args),
+    sendCommand: safeSendCommand,
     prefix: 'auth_limit:',
     passOnStoreError: true,
   }),
