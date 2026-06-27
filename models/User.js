@@ -137,27 +137,20 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
-  leadStatus: {
+  status: {
     type: String,
-    enum: [
-      'kyc pending',
-      'call not picked',
-      'connected but not intrested',
-      'quotation sent',
-      'negotiation',
-      'follow-up',
-      'lost',
-      'intrested',
-      'customer busy',
-      'call switch off',
-      'prospect'
-    ],
     default: 'prospect'
   },
-  leadNotes: {
+  notes: {
     type: String,
     default: ''
-  }
+  },
+  notesHistory: [{
+    note: { type: String, required: true },
+    adminId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    adminName: { type: String },
+    createdAt: { type: Date, default: Date.now }
+  }]
 }, {
   timestamps: true
 });

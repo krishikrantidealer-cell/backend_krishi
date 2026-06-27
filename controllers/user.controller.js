@@ -397,7 +397,13 @@ exports.adminSubmitKyc = async (req, res, next) => {
 exports.adminUpdateUser = async (req, res, next) => {
   try {
     const { userId } = req.params;
-    const user = await userService.updateProfile(userId, req.body);
+    const updateData = { ...req.body };
+
+    // Pass admin info for notes history
+    updateData.adminId = req.user._id;
+    updateData.adminName = `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || 'Admin';
+
+    const user = await userService.updateProfile(userId, updateData);
 
     try {
       const { sendToAll } = require('../services/websocket.service');

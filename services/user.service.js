@@ -35,6 +35,8 @@ class UserService {
       'gstNumber',
       'farmSize',
       'cropTypes',
+      'status',
+      'notes',
       'leadStatus',
       'leadNotes'
     ];
@@ -42,21 +44,39 @@ class UserService {
 
     Object.keys(updateData).forEach(key => {
       if (allowedUpdates.includes(key)) {
-        filteredUpdates[key] = updateData[key];
+        if (key === 'leadStatus') {
+          filteredUpdates['status'] = updateData[key];
+        } else if (key === 'leadNotes') {
+          filteredUpdates['notes'] = updateData[key];
+        } else {
+          filteredUpdates[key] = updateData[key];
+        }
       }
     });
 
-    const user = await User.findByIdAndUpdate(
-      userId,
-      { $set: filteredUpdates },
-      { new: true, runValidators: true }
-    );
-
+    const user = await User.findById(userId);
     if (!user) {
       throw new Error('User not found');
     }
 
-    return user;
+    // Handle Notes History
+    if (filteredUpdates.notes && filteredUpdates.notes !== user.notes) {
+      const historyItem = {
+        note: filteredUpdates.notes,
+        createdAt: new Date()
+      };
+      if (updateData.adminId) historyItem.adminId = updateData.adminId;
+      if (updateData.adminName) historyItem.adminName = updateData.adminName;
+
+      user.notesHistory = user.notesHistory || [];
+      user.notesHistory.push(historyItem);
+    }
+
+    // Apply updates
+    Object.assign(user, filteredUpdates);
+    await user.save();
+
+    return await User.findById(userId).populate('assignedAgent', 'firstName lastName phoneNumber email');
   }
 
   async completeProfile(userId, profileData) {
