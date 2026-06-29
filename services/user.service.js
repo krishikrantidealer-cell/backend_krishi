@@ -250,6 +250,11 @@ class UserService {
         throw new Error('Assigned user must be a sales agent');
       }
       user.assignedAgent = agentId;
+
+      // When assigned to a sales agent, a 'prospect' lead becomes 'new'
+      if (user.status === 'prospect') {
+        user.status = 'new';
+      }
     } else {
       user.assignedAgent = null;
     }
