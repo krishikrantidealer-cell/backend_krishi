@@ -14,6 +14,7 @@ const couponRoutes = require('./routes/coupon.routes');
 const collectionRoutes = require('./routes/collection.routes');
 const adminRoutes = require('./routes/admin.routes');
 const salesCouponRoutes = require('./routes/salesCoupon.routes');
+const eventRoutes = require('./routes/event.routes');
 
 const app = express();
 const zlib = require('zlib');
@@ -92,6 +93,7 @@ app.use('/api/coupons', couponRoutes);
 app.use('/api/collections', collectionRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/sales-coupons', salesCouponRoutes);
+app.use('/api/events', eventRoutes);
 
 app.get('/health', async (req, res) => {
   const { redisClient } = require('./config/redis');
