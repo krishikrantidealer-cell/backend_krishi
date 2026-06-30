@@ -183,10 +183,22 @@ exports.ingestBatch = async (req, res, next) => {
 exports.getEvents = async (req, res, next) => {
   try {
     const limit = parseInt(req.query.limit) || 1000;
+    const { user } = req.query;
 
-    const events = await Event.aggregate([
-      { $sort: { timestamp: -1 } },
-      { $limit: limit },
+    const pipeline = [];
+    if (user) {
+      pipeline.push({
+        $match: {
+          $or: [
+            { user: user },
+            { user: user.toLowerCase() }
+          ]
+        }
+      });
+    }
+    pipeline.push({ $sort: { timestamp: -1 } });
+    pipeline.push({ $limit: limit });
+    pipeline.push(
       {
         $lookup: {
           from: 'users',
@@ -213,7 +225,9 @@ exports.getEvents = async (req, res, next) => {
           userDetails: { $arrayElemAt: ['$userDetails', 0] }
         }
       }
-    ]);
+    );
+
+    const events = await Event.aggregate(pipeline);
 
     res.json({ success: true, data: events });
   } catch (error) {
