@@ -6,6 +6,20 @@ const eventSchema = new mongoose.Schema({
     required: true,
     index: true
   },
+  eventId: {
+    type: String,
+    unique: true,
+    sparse: true,
+    index: true
+  },
+  sessionId: {
+    type: String,
+    index: true
+  },
+  schemaVersion: {
+    type: String,
+    default: '1.0.0'
+  },
   eventType: {
     type: String,
     required: true,
@@ -26,7 +40,8 @@ const eventSchema = new mongoose.Schema({
   timestamp: {
     type: Date,
     default: Date.now,
-    index: true
+    index: true,
+    expires: '90d' // Automatic cleanup: raw events are purged after 90 days
   },
   role: {
     type: String,

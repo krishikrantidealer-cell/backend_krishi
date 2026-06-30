@@ -1,5 +1,6 @@
 const WebSocket = require('ws');
 const url = require('url');
+const User = require('../models/User');
 
 let wss;
 const clients = new Map(); // userId -> Set of WS connections
@@ -7,18 +8,82 @@ const clients = new Map(); // userId -> Set of WS connections
 const initWebSocket = (server) => {
   wss = new WebSocket.Server({ server });
 
-  wss.on('connection', (ws, req) => {
+  wss.on('connection', async (ws, req) => {
     const parameters = url.parse(req.url, true).query;
     const userId = parameters.userId;
 
     if (userId) {
       ws.userId = userId;
+
+      // Fetch user info for targeted broadcasts and better display
+      try {
+        const user = await User.findById(userId).select('role firstName lastName shopName phoneNumber');
+        if (user) {
+          ws.userRole = user.role;
+          ws.userName = `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.shopName;
+          ws.userPhone = user.phoneNumber;
+        }
+      } catch (err) {
+        console.error(`[WS] Failed to fetch info for user ${userId}:`, err.message);
+      }
+
       if (!clients.has(userId)) {
         clients.set(userId, new Set());
       }
       clients.get(userId).add(ws);
-      console.log(`[WS] Client connected for user: ${userId}. Total connections: ${clients.get(userId).size}`);
+      console.log(`[WS] Client connected for user: ${userId} (${ws.userRole || 'unknown'}). Total: ${clients.get(userId).size}`);
+
+      // Send acknowledgement so the client knows it's fully connected
+      ws.send(JSON.stringify({
+        type: 'CONNECTION_ACK',
+        data: {
+          userId,
+          timestamp: new Date().toISOString()
+        }
+      }));
     }
+
+    ws.on('message', async (message) => {
+      try {
+        const data = JSON.parse(message);
+
+        if (data.type === 'PING') {
+          return ws.send(JSON.stringify({ type: 'PONG', timestamp: new Date().toISOString() }));
+        }
+
+        if (data.type === 'PRESENCE_UPDATE' && ws.userId) {
+          const { redisClient } = require('../config/redis');
+          if (redisClient && redisClient.isOpen) {
+            const presenceKey = `presence:${ws.userId}`;
+            const payload = data.data || {};
+
+            const presenceData = {
+              lastSeen: new Date().toISOString(),
+              currentScreen: payload.currentScreen || 'Active',
+              action: payload.lastAction || 'Active',
+              device: payload.platform || 'Unknown',
+              sessionId: payload.sessionId || 'unknown'
+            };
+
+            await redisClient.hSet(presenceKey, presenceData);
+            await redisClient.expire(presenceKey, 60);
+
+            // Targeted Broadcast: Only send presence to Admins and Sales agents
+            broadcastToRoles(['admin', 'sales'], {
+              type: 'PRESENCE_UPDATE',
+              data: {
+                user: ws.userId,
+                userName: ws.userName,
+                userPhone: ws.userPhone,
+                ...presenceData
+              }
+            });
+          }
+        }
+      } catch (err) {
+        // Ignore non-JSON messages
+      }
+    });
 
     ws.on('close', () => {
       if (userId && clients.has(userId)) {
@@ -61,8 +126,22 @@ const sendToAll = (data) => {
   });
 };
 
+/**
+ * Broadcast to specific roles only
+ */
+const broadcastToRoles = (roles, data) => {
+  if (!wss) return;
+  const message = JSON.stringify(data);
+  wss.clients.forEach(client => {
+    if (client.readyState === WebSocket.OPEN && roles.includes(client.userRole)) {
+      client.send(message);
+    }
+  });
+};
+
 module.exports = {
   initWebSocket,
   sendToUser,
-  sendToAll
+  sendToAll,
+  broadcastToRoles
 };

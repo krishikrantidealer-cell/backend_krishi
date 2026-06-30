@@ -6,6 +6,7 @@ const Product = require('../models/Product');
 const Banner = require('../models/Banner');
 const Category = require('../models/Category');
 const cacheService = require('../utils/cache');
+const auditService = require('../services/audit.service');
 
 const normalizeWord = (w) => {
   return w.toLowerCase()
@@ -327,6 +328,17 @@ exports.createProduct = async (req, res, next) => {
     }
 
     const product = await productService.createProduct(productData);
+
+    // Audit Log: Product Created
+    auditService.logAction({
+      adminId: req.user._id,
+      adminEmail: req.user.email,
+      action: 'PRODUCT_CREATED',
+      targetId: product._id,
+      targetModel: 'Product',
+      changes: { after: product }
+    }, req);
+
     res.status(201).json({
       success: true,
       message: 'Product created successfully',
@@ -406,7 +418,22 @@ exports.updateProduct = async (req, res, next) => {
       if (keepOriginal.length > 0) updateData.originalImages = keepOriginal;
     }
 
+    const oldProduct = await Product.findById(productId).lean();
     const product = await productService.updateProduct(productId, updateData);
+
+    // Audit Log: Product Updated
+    auditService.logAction({
+      adminId: req.user._id,
+      adminEmail: req.user.email,
+      action: 'PRODUCT_UPDATED',
+      targetId: product._id,
+      targetModel: 'Product',
+      changes: {
+        before: oldProduct,
+        after: product
+      }
+    }, req);
+
     res.json({
       success: true,
       message: 'Product updated successfully',
@@ -421,7 +448,19 @@ exports.updateProduct = async (req, res, next) => {
 exports.deleteProduct = async (req, res, next) => {
   try {
     const productId = req.params.id;
+    const oldProduct = await Product.findById(productId).lean();
     await productService.deleteProduct(productId);
+
+    // Audit Log: Product Deleted
+    auditService.logAction({
+      adminId: req.user._id,
+      adminEmail: req.user.email,
+      action: 'PRODUCT_DELETED',
+      targetId: productId,
+      targetModel: 'Product',
+      changes: { before: oldProduct }
+    }, req);
+
     res.json({
       success: true,
       message: 'Product deleted successfully'

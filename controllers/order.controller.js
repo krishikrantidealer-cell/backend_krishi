@@ -1,6 +1,7 @@
 const Order = require('../models/Order');
 const orderService = require('../services/order.service');
 const notificationService = require('../services/notification.service');
+const auditService = require('../services/audit.service');
 
 exports.initializePayment = async (req, res, next) => {
   try {
@@ -216,7 +217,22 @@ exports.adminUpdateOrderStatus = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Invalid order status' });
     }
 
+    const oldOrder = await Order.findById(id).lean();
     const order = await orderService.updateOrderStatus(id, status, awbNumber, courierName, trackingUrl);
+
+    // Audit Log: Order Status Updated
+    auditService.logAction({
+      adminId: req.user._id,
+      adminEmail: req.user.email,
+      action: 'ORDER_STATUS_UPDATE',
+      targetId: order._id,
+      targetModel: 'Order',
+      changes: {
+        before: { status: oldOrder.orderStatus },
+        after: { status: order.orderStatus }
+      }
+    }, req);
+
     res.json({ success: true, message: `Order status updated to ${status}`, order });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

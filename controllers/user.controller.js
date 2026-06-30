@@ -107,8 +107,8 @@ exports.submitKyc = async (req, res, next) => {
     const user = await userService.submitKyc(req.user._id, kycData);
 
     try {
-      const { sendToAll } = require('../services/websocket.service');
-      sendToAll({ type: 'LEADS_UPDATE' });
+      const { broadcastToRoles } = require('../services/websocket.service');
+      broadcastToRoles(['admin', 'sales'], { type: 'LEADS_UPDATE' });
     } catch (wsErr) {
       console.error('[WS] Failed to broadcast KYC submission:', wsErr.message);
     }
@@ -220,9 +220,9 @@ exports.adminUpdateKycStatus = async (req, res, next) => {
     const user = await userService.updateKycStatus(userId, status, reason);
 
     try {
-      const { sendToAll, sendToUser } = require('../services/websocket.service');
-      sendToAll({ type: 'LEADS_UPDATE' });
-      sendToAll({ type: 'DEALERS_UPDATE' });
+      const { broadcastToRoles, sendToUser } = require('../services/websocket.service');
+      broadcastToRoles(['admin', 'sales'], { type: 'LEADS_UPDATE' });
+      broadcastToRoles(['admin', 'sales'], { type: 'DEALERS_UPDATE' });
       if (user.assignedAgent) {
         sendToUser(user.assignedAgent.toString(), { type: 'LEADS_UPDATE' });
         sendToUser(user.assignedAgent.toString(), { type: 'DEALERS_UPDATE' });
@@ -245,9 +245,9 @@ exports.adminAssignAgent = async (req, res, next) => {
     const user = await userService.assignAgent(userId, agentId);
 
     try {
-      const { sendToAll, sendToUser } = require('../services/websocket.service');
-      sendToAll({ type: 'LEADS_UPDATE' });
-      sendToAll({ type: 'DEALERS_UPDATE' });
+      const { broadcastToRoles, sendToUser } = require('../services/websocket.service');
+      broadcastToRoles(['admin', 'sales'], { type: 'LEADS_UPDATE' });
+      broadcastToRoles(['admin', 'sales'], { type: 'DEALERS_UPDATE' });
       if (agentId) {
         sendToUser(agentId, { type: 'LEADS_UPDATE' });
         sendToUser(agentId, { type: 'DEALERS_UPDATE' });
@@ -378,8 +378,8 @@ exports.adminSubmitKyc = async (req, res, next) => {
     const user = await userService.submitKyc(userId, kycData);
 
     try {
-      const { sendToAll } = require('../services/websocket.service');
-      sendToAll({ type: 'LEADS_UPDATE' });
+      const { broadcastToRoles } = require('../services/websocket.service');
+      broadcastToRoles(['admin', 'sales'], { type: 'LEADS_UPDATE' });
     } catch (wsErr) {
       console.error('[WS] Failed to broadcast admin KYC submission:', wsErr.message);
     }
@@ -406,9 +406,9 @@ exports.adminUpdateUser = async (req, res, next) => {
     const user = await userService.updateProfile(userId, updateData);
 
     try {
-      const { sendToAll } = require('../services/websocket.service');
-      sendToAll({ type: 'LEADS_UPDATE' });
-      sendToAll({ type: 'DEALERS_UPDATE' });
+      const { broadcastToRoles } = require('../services/websocket.service');
+      broadcastToRoles(['admin', 'sales'], { type: 'LEADS_UPDATE' });
+      broadcastToRoles(['admin', 'sales'], { type: 'DEALERS_UPDATE' });
     } catch (wsErr) {
       console.error('[WS] Failed to broadcast user update:', wsErr.message);
     }
@@ -441,9 +441,9 @@ exports.adminDeleteUser = async (req, res, next) => {
     await userService.deleteUser(userId);
 
     try {
-      const { sendToAll } = require('../services/websocket.service');
-      sendToAll({ type: 'LEADS_UPDATE' });
-      sendToAll({ type: 'DEALERS_UPDATE' });
+      const { broadcastToRoles } = require('../services/websocket.service');
+      broadcastToRoles(['admin', 'sales'], { type: 'LEADS_UPDATE' });
+      broadcastToRoles(['admin', 'sales'], { type: 'DEALERS_UPDATE' });
     } catch (wsErr) {
       console.error('[WS] Failed to broadcast user deletion:', wsErr.message);
     }
@@ -469,7 +469,7 @@ exports.adminToggleBlockUser = async (req, res, next) => {
     const isBlockedNow = user.isBlocked;
 
     try {
-      const { sendToUser, sendToAll } = require('../services/websocket.service');
+      const { sendToUser, broadcastToRoles } = require('../services/websocket.service');
       const notificationService = require('../services/notification.service');
       
       if (isBlockedNow) {
@@ -515,8 +515,8 @@ exports.adminToggleBlockUser = async (req, res, next) => {
       }
       
       // Notify all clients to update lead/dealer views
-      sendToAll({ type: 'LEADS_UPDATE' });
-      sendToAll({ type: 'DEALERS_UPDATE' });
+      broadcastToRoles(['admin', 'sales'], { type: 'LEADS_UPDATE' });
+      broadcastToRoles(['admin', 'sales'], { type: 'DEALERS_UPDATE' });
     } catch (wsErr) {
       console.error('[WS] Error in block propagation:', wsErr.message);
     }
