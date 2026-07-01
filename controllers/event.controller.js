@@ -207,14 +207,35 @@ exports.getEvents = async (req, res, next) => {
 
     const query = {};
     if (user) {
+      let resolvedIdentifiers = [user, user.toLowerCase()];
+      try {
+        const matchedUsers = await User.find({
+          $or: [
+            { email: user },
+            { email: user.toLowerCase() },
+            { phoneNumber: user },
+            { firstName: new RegExp(user, 'i') },
+            { lastName: new RegExp(user, 'i') },
+            { shopName: new RegExp(user, 'i') }
+          ]
+        }).select('_id email phoneNumber').lean();
+        
+        matchedUsers.forEach(u => {
+          if (u.email) resolvedIdentifiers.push(u.email, u.email.toLowerCase());
+          if (u.phoneNumber) resolvedIdentifiers.push(u.phoneNumber);
+          if (u._id) resolvedIdentifiers.push(u._id.toString());
+        });
+      } catch (_) {}
+
+      resolvedIdentifiers = [...new Set(resolvedIdentifiers)];
+
       query.$or = [
-        { user: user },
-        { user: user.toLowerCase() },
-        { "payload.dealerId": user },
-        { "payload.dealerEmail": user },
-        { "payload.dealerPhone": user },
-        { "payload.userId": user },
-        { "payload.userEmail": user }
+        { user: { $in: resolvedIdentifiers } },
+        ...resolvedIdentifiers.map(id => ({ "payload.dealerId": id })),
+        ...resolvedIdentifiers.map(id => ({ "payload.dealerEmail": id })),
+        ...resolvedIdentifiers.map(id => ({ "payload.dealerPhone": id })),
+        ...resolvedIdentifiers.map(id => ({ "payload.userId": id })),
+        ...resolvedIdentifiers.map(id => ({ "payload.userEmail": id }))
       ];
     }
 
