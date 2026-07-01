@@ -192,13 +192,25 @@ exports.getAllOrders = async (req, res, next) => {
   try {
     const filters = {
       status: req.query.status,
-      paymentStatus: req.query.paymentStatus
+      paymentStatus: req.query.paymentStatus,
+      userId: req.query.userId || req.query.user || req.query.id
     };
+
+    console.log(`[AdminOrder] Fetching orders. Query:`, JSON.stringify(req.query), `Filters:`, JSON.stringify(filters));
+
     if (req.user.role === 'sales') {
       const User = require('../models/User');
       const assignedUsers = await User.find({ assignedAgent: req.user._id }).select('_id');
-      const assignedUserIds = assignedUsers.map(u => u._id);
-      filters.users = assignedUserIds;
+      const assignedUserIds = assignedUsers.map(u => u._id.toString());
+
+      if (filters.userId) {
+        if (!assignedUserIds.includes(filters.userId.toString())) {
+          console.warn(`[AdminOrder] Sales agent ${req.user._id} attempted to access unauthorized userId: ${filters.userId}`);
+          return res.json({ success: true, orders: [] });
+        }
+      } else {
+        filters.users = assignedUserIds;
+      }
     }
     const orders = await orderService.getAllOrders(filters);
     res.json({ success: true, orders });
@@ -303,6 +315,60 @@ exports.adminSyncSheets = async (req, res, next) => {
   }
 };
 
+exports.razorpayWebhook = async (req, res, next) => {
+  try {
+    const crypto = require('crypto');
+    const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
+    const signature = req.headers['x-razorpay-signature'];
+
+    // Verify webhook signature to ensure it's from Razorpay
+    if (webhookSecret && signature) {
+      const shasum = crypto.createHmac('sha256', webhookSecret);
+      shasum.update(JSON.stringify(req.body));
+      const digest = shasum.digest('hex');
+
+      if (signature !== digest) {
+        console.error('[Razorpay Webhook] Signature verification failed');
+        return res.status(400).json({ success: false, message: 'Invalid signature' });
+      }
+    }
+
+    const event = req.body.event;
+    const payload = req.body.payload;
+
+    console.log(`[Razorpay Webhook] Received event: ${event}`);
+
+    if (event === 'payment.captured' || event === 'order.paid') {
+      const payment = payload.payment.entity;
+      const razorpayOrderId = payment.order_id;
+      const razorpayPaymentId = payment.id;
+
+      // 1. Check if order already exists
+      const existingOrder = await Order.findOne({ razorpayPaymentId });
+      if (existingOrder) {
+        return res.json({ success: true, message: 'Order already exists' });
+      }
+
+      // 2. Look for a CheckoutSession (100% Reliability flow)
+      const CheckoutSession = require('../models/CheckoutSession');
+      const session = await CheckoutSession.findOne({ razorpayOrderId });
+
+      if (session) {
+        console.log(`[Razorpay Webhook] Recovering order from CheckoutSession: ${razorpayOrderId}`);
+        await orderService.confirmOrder(session, { razorpayPaymentId });
+        return res.json({ success: true, message: 'Order recovered from session' });
+      }
+
+      console.log(`[Razorpay Webhook] No session found for ${razorpayOrderId}. Manual verification might be required.`);
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('[Razorpay Webhook] Error:', error);
+    res.status(500).json({ success: false });
+  }
+};
+
 // ---------------------------------------------------------------------------
 // Admin / Sales – Create order directly from panel (bypasses cart)
 // ---------------------------------------------------------------------------
@@ -316,6 +382,9 @@ exports.adminCreateOrder = async (req, res, next) => {
       paymentId,
       advanceAmount,
       totalAmount,
+      discountAmount,    // Captured from frontend
+      couponCode,        // Captured from frontend
+      freeItems,         // Captured from frontend
       orderStatus,
       paymentStatus,
       salesCouponCode,   // NEW: optional price-override coupon code
@@ -338,6 +407,23 @@ exports.adminCreateOrder = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'paymentId (transaction reference) is required' });
     }
 
+    // Prevent duplicate orders for the same payment reference
+    // We only check if the paymentId is not a generic one like 'CASH' or 'UPI'
+    const genericIds = ['CASH', 'UPI', 'BANK TRANSFER', 'OFFLINE'];
+    if (!genericIds.includes(paymentId.trim().toUpperCase())) {
+      const existingOrder = await Order.findOne({
+        user: userId,
+        razorpayPaymentId: paymentId.trim()
+      });
+      if (existingOrder) {
+        return res.status(200).json({
+          success: true,
+          message: 'Order already exists for this payment reference',
+          order: existingOrder
+        });
+      }
+    }
+
     // -----------------------------------------------------------------------
     // Sales coupon: validate and apply price override to the matching variant
     // -----------------------------------------------------------------------
@@ -346,6 +432,8 @@ exports.adminCreateOrder = async (req, res, next) => {
 
     if (salesCouponCode) {
       const SalesAgentCoupon = require('../models/SalesAgentCoupon');
+      const Product = require('../models/Product');
+
       const coupon = await SalesAgentCoupon.findOne({
         code: salesCouponCode.trim().toUpperCase(),
       });
@@ -375,7 +463,6 @@ exports.adminCreateOrder = async (req, res, next) => {
       // Apply overrides: loop through all target variants in the coupon
       appliedSalesCoupon = coupon;
 
-      const Product = require('../models/Product');
       for (const ov of coupon.overrides) {
         const variantIdStr = ov.variantId.toString();
         
@@ -404,14 +491,16 @@ exports.adminCreateOrder = async (req, res, next) => {
     // Generate a short unique orderId
     const shortId = `KD-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 5).toUpperCase()}`;
 
-    const computed_total = totalAmount || resolvedItems.reduce((s, i) => s + (i.price * i.quantity), 0);
+    // Fix: totalAmount can be 0 (if coupon covers everything)
+    const computed_total = (totalAmount !== undefined && totalAmount !== null)
+      ? totalAmount
+      : resolvedItems.reduce((s, i) => s + (i.price * i.quantity), 0);
+
     const advance = paymentMethod === 'Partial' ? (advanceAmount || 0) : computed_total;
     const remaining = computed_total - advance;
 
     // Map FullPayment → Online (same mode, Online is the existing DB enum value)
     const dbPaymentMethod = paymentMethod === 'FullPayment' ? 'Online' : paymentMethod;
-
-    const Order = require('../models/Order');
 
     const order = await Order.create({
       user: userId,
@@ -427,6 +516,9 @@ exports.adminCreateOrder = async (req, res, next) => {
         price: i.price,
       })),
       totalAmount: computed_total,
+      discountAmount: discountAmount || 0,
+      couponCode: couponCode || (appliedSalesCoupon ? appliedSalesCoupon.code : undefined),
+      freeItems: freeItems || [],
       shippingAddress,
       paymentMethod: dbPaymentMethod,
       razorpayPaymentId: paymentId.trim(),   // reuse this field for panel payment refs
@@ -443,9 +535,15 @@ exports.adminCreateOrder = async (req, res, next) => {
       appliedSalesCoupon.isUsed = true;
       appliedSalesCoupon.usedInOrderId = shortId;
       appliedSalesCoupon.save().catch(err =>
-        console.error('Failed to mark sales coupon as used:', err)
+        console.error('Failed to mark sales coupon as used:', err.message)
       );
     }
+
+    // NEW: Sync new order to Google Sheets (fire-and-forget)
+    const sheetsService = require('../services/sheets.service');
+    sheetsService.appendOrder(order).catch(err =>
+      console.error('[Sheets] Failed to append new admin-created order:', err.message)
+    );
 
     // Non-blocking notification to dealer
     notificationService.sendUtilityNotification(

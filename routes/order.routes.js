@@ -12,6 +12,9 @@ router.post('/webhook', orderController.delhiveryWebhook);
 // Public Webhook endpoint for Google Sheets status updates
 router.post('/webhook/sheets', orderController.sheetsWebhook);
 
+// Public Webhook endpoint for Razorpay payment verification
+router.post('/webhook/razorpay', orderController.razorpayWebhook);
+
 // All subsequent order routes require authentication
 router.use(protect);
 

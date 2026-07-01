@@ -1,12 +1,71 @@
 const Order = require('../models/Order');
 const Cart = require('../models/Cart');
 const User = require('../models/User');
+const CheckoutSession = require('../models/CheckoutSession');
 const couponService = require('./coupon.service');
 const sheetsService = require('./sheets.service');
 const whatsappService = require('./whatsapp.service');
 
 class OrderService {
+  async confirmOrder(session, paymentData, overrideAddress = null) {
+    if (session.orderCreated) {
+      return await Order.findById(session.createdOrderId).populate('items.product');
+    }
+
+    console.log(`[OrderService] Confirming order for Session: ${session.razorpayOrderId}`);
+
+    // Create the Order from session data
+    const orderId = 'ORD-' + Date.now().toString().slice(-6) + Math.floor(Math.random() * 1000);
+
+    const order = await Order.create({
+      user: session.user,
+      orderId,
+      items: session.items,
+      totalAmount: session.totalAmount,
+      discountAmount: session.discountAmount,
+      couponCode: session.couponCode,
+      shippingAddress: overrideAddress || session.shippingAddress,
+      paymentMethod: session.paymentMethod,
+      paymentStatus: session.paymentMethod === 'Online' ? 'Paid' : 'Partially Paid',
+      razorpayPaymentId: paymentData.razorpayPaymentId,
+      advanceAmount: session.advanceAmount,
+      remainingAmount: session.remainingAmount
+    });
+
+    // Mark session as completed
+    session.orderCreated = true;
+    session.createdOrderId = order._id;
+    session.status = 'Completed';
+    await session.save();
+
+    // Clear cart (if it's still full)
+    const cart = await Cart.findOne({ user: session.user });
+    if (cart) {
+      cart.items = [];
+      cart.totalAmount = 0;
+      cart.appliedCoupon = undefined;
+      await cart.save();
+    }
+
+    // Sync & Notify
+    sheetsService.appendOrder(order).catch(err => console.error('[Sheets] confirmOrder error:', err.message));
+
+    User.findById(session.user).then(user => {
+        if (user) whatsappService.notifyNewOrder(order, user);
+    }).catch(() => {});
+
+    return order;
+  }
+
   async createOrderFromCart(userId, paymentMethod = 'Online', shippingAddress = null, paymentData = {}) {
+    // 0. Check if a CheckoutSession exists for this Razorpay Order (100% Reliability flow)
+    if (paymentData.razorpayOrderId) {
+      const session = await CheckoutSession.findOne({ razorpayOrderId: paymentData.razorpayOrderId });
+      if (session) {
+        return await this.confirmOrder(session, paymentData, shippingAddress);
+      }
+    }
+
     const user = await User.findById(userId);
     if (!user) {
       throw new Error('User not found');
@@ -25,6 +84,12 @@ class OrderService {
       paymentData.razorpayPaymentId &&
       paymentData.razorpaySignature
     ) {
+      // Check for duplicate order with this paymentId first (Idempotency)
+      const existingOrder = await Order.findOne({ razorpayPaymentId: paymentData.razorpayPaymentId });
+      if (existingOrder) {
+        return existingOrder;
+      }
+
       const crypto = require('crypto');
       const expectedSignature = crypto
         .createHmac('sha256', keySecret)
@@ -205,7 +270,50 @@ class OrderService {
         }
       });
 
-      return response.data;
+      const razorpayOrder = response.data;
+
+      // --- SAVE CHECKOUT SESSION (100% RELIABILITY ENGINE) ---
+      try {
+        const orderItems = cart.items.map(item => {
+          let variantName = 'Standard';
+          if (item.product && item.product.variants) {
+            const variant = item.product.variants.id(item.variantId);
+            if (variant) {
+              variantName = variant.size || 'Standard';
+            }
+          }
+          return {
+            product: item.product._id,
+            variantId: item.variantId,
+            title: item.product.title,
+            vendor: item.product.vendor,
+            image: item.product.images && item.product.images.length > 0 ? item.product.images[0] : null,
+            quantity: item.quantity,
+            price: item.price,
+            variant: variantName
+          };
+        });
+
+        await CheckoutSession.create({
+          user: userId,
+          razorpayOrderId: razorpayOrder.id,
+          items: orderItems,
+          totalAmount: finalAmount,
+          discountAmount: cart.discountAmount || 0,
+          couponCode: cart.appliedCoupon,
+          shippingAddress: user.address, // Capture current address
+          paymentMethod: paymentMethod,
+          advanceAmount: amountToPay,
+          remainingAmount: finalAmount - amountToPay
+        });
+        console.log(`[OrderService] Created CheckoutSession for Razorpay Order: ${razorpayOrder.id}`);
+      } catch (sessionErr) {
+        console.error(`[OrderService] Failed to create CheckoutSession:`, sessionErr.message);
+        // We don't throw here to avoid blocking the payment UI,
+        // but the "safety net" will be missing for this transaction.
+      }
+
+      return razorpayOrder;
     } catch (err) {
       const errorMsg = err.response && err.response.data && err.response.data.error 
         ? err.response.data.error.description 
@@ -225,8 +333,22 @@ class OrderService {
     const query = {};
     if (filters.status) query.orderStatus = filters.status;
     if (filters.paymentStatus) query.paymentStatus = filters.paymentStatus;
-    if (filters.users) query.user = { $in: filters.users };
+
+    const targetUser = filters.userId || filters.user;
+
+    if (targetUser) {
+      const mongoose = require('mongoose');
+      if (mongoose.Types.ObjectId.isValid(targetUser)) {
+        query.user = new mongoose.Types.ObjectId(targetUser);
+      } else {
+        query.user = targetUser;
+      }
+    } else if (filters.users && filters.users.length > 0) {
+      query.user = { $in: filters.users };
+    }
     
+    console.log(`[OrderService] Final MongoDB Query:`, JSON.stringify(query));
+
     return await Order.find(query)
       .populate('user', 'firstName lastName phoneNumber role kycStatus isKycComplete shopName')
       .populate('items.product')

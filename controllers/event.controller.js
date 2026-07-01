@@ -191,7 +191,12 @@ exports.getEvents = async (req, res, next) => {
         $match: {
           $or: [
             { user: user },
-            { user: user.toLowerCase() }
+            { user: user.toLowerCase() },
+            { "payload.dealerId": user },
+            { "payload.dealerEmail": user },
+            { "payload.dealerPhone": user },
+            { "payload.userId": user },
+            { "payload.userEmail": user }
           ]
         }
       });
