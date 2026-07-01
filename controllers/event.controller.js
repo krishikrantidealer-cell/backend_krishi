@@ -390,3 +390,89 @@ exports.getFunnelData = async (req, res, next) => {
     next(error);
   }
 };
+
+/**
+ * Fetch global metrics summary (total high priority, failed payment, abandoned cart users)
+ */
+exports.getSummaryMetrics = async (req, res, next) => {
+  try {
+    const cacheKey = 'stats:events:summary-metrics:v2';
+    
+    // 1. Try to fetch from Redis Cache first
+    if (redisClient && redisClient.isOpen) {
+      try {
+        const cached = await redisClient.get(cacheKey);
+        if (cached) {
+          return res.json({ success: true, data: JSON.parse(cached) });
+        }
+      } catch (err) {
+        console.error('[SummaryMetrics] Redis error:', err);
+      }
+    }
+
+    // 2. Query MongoDB, limiting matching events to the last 14 days for optimal performance
+    const fourteenDaysAgo = new Date();
+    fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14);
+
+    const userEventStates = await Event.aggregate([
+      {
+        $match: {
+          timestamp: { $gte: fourteenDaysAgo }
+        }
+      },
+      {
+        $group: {
+          _id: '$user',
+          eventTypes: { $addToSet: '$eventType' }
+        }
+      }
+    ]);
+
+    let failedPaymentsCount = 0;
+    let abandonedCheckoutsCount = 0;
+    let abandonedCartsCount = 0;
+
+    userEventStates.forEach(userState => {
+      const types = new Set(userState.eventTypes);
+      const userId = userState._id ? userState._id.toString().toLowerCase() : '';
+      
+      // Filter out admins/sales/guests
+      if (userId.includes('admin') || userId.includes('sales') || userId === 'guest' || userId === '') {
+        return;
+      }
+
+      if (types.has('payment_failed')) {
+        failedPaymentsCount++;
+      } else if (types.has('checkout_started') && !types.has('payment_success')) {
+        abandonedCheckoutsCount++;
+      } else if (types.has('add_to_cart') && !types.has('checkout_started')) {
+        abandonedCartsCount++;
+      }
+    });
+
+    const highPriorityCount = failedPaymentsCount + abandonedCheckoutsCount + abandonedCartsCount;
+
+    const resultData = {
+      highPriority: highPriorityCount,
+      failedPayments: failedPaymentsCount,
+      abandonedCarts: abandonedCartsCount,
+      abandonedCheckouts: abandonedCheckoutsCount
+    };
+
+    // 3. Save to Redis Cache (30 seconds expiry)
+    if (redisClient && redisClient.isOpen) {
+      try {
+        await redisClient.set(cacheKey, JSON.stringify(resultData), { EX: 30 });
+      } catch (err) {
+        console.error('[SummaryMetrics] Redis set error:', err);
+      }
+    }
+
+    res.json({
+      success: true,
+      data: resultData
+    });
+  } catch (error) {
+    next(error);
+  }
+};

@@ -24,4 +24,7 @@ router.get('/realtime', protect, authorizeRoles('admin'), eventController.getAct
 // Fetch conversion funnel analytics
 router.get('/funnel', protect, authorizeRoles('admin'), eventController.getFunnelData);
 
+// Fetch overall summary metrics (high priority, failed payments, abandoned carts)
+router.get('/summary-metrics', protect, authorizeRoles('admin'), eventController.getSummaryMetrics);
+
 module.exports = router;
