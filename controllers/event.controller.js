@@ -1,4 +1,6 @@
 const Event = require('../models/Event');
+const mongoose = require('mongoose');
+const User = require('../models/User');
 const { redisClient } = require('../config/redis');
 const { sendToAll } = require('../services/websocket.service');
 
@@ -33,6 +35,15 @@ exports.createEvent = async (req, res, next) => {
 
       // Notify Admins via WebSocket
       sendToAll({ type: 'PRESENCE_UPDATE', data: { user, ...presenceData } });
+    }
+
+    // Increment Redis daily events count
+    if (redisClient.isOpen) {
+      try {
+        const todayStr = new Date().toISOString().split('T')[0];
+        await redisClient.incr(`stats:events:count:daily:${todayStr}`);
+        await redisClient.expire(`stats:events:count:daily:${todayStr}`, 259200); // 3 days
+      } catch (_) {}
     }
 
     res.status(201).json({ success: true, data: event });
@@ -169,6 +180,15 @@ exports.ingestBatch = async (req, res, next) => {
       });
     }
 
+    // Increment Redis daily events count in batch
+    if (redisClient.isOpen && preparedEvents.length > 0) {
+      try {
+        const todayStr = new Date().toISOString().split('T')[0];
+        await redisClient.incrBy(`stats:events:count:daily:${todayStr}`, preparedEvents.length);
+        await redisClient.expire(`stats:events:count:daily:${todayStr}`, 259200); // 3 days
+      } catch (_) {}
+    }
+
     res.status(201).json({ success: true, count: events.length });
   } catch (error) {
     console.error('[Analytics] Critical Batch Ingestion Error:', error);
@@ -183,58 +203,92 @@ exports.ingestBatch = async (req, res, next) => {
 exports.getEvents = async (req, res, next) => {
   try {
     const limit = parseInt(req.query.limit) || 1000;
-    const { user } = req.query;
+    const { user, before } = req.query;
 
-    const pipeline = [];
+    const query = {};
     if (user) {
-      pipeline.push({
-        $match: {
-          $or: [
-            { user: user },
-            { user: user.toLowerCase() },
-            { "payload.dealerId": user },
-            { "payload.dealerEmail": user },
-            { "payload.dealerPhone": user },
-            { "payload.userId": user },
-            { "payload.userEmail": user }
-          ]
-        }
-      });
+      query.$or = [
+        { user: user },
+        { user: user.toLowerCase() },
+        { "payload.dealerId": user },
+        { "payload.dealerEmail": user },
+        { "payload.dealerPhone": user },
+        { "payload.userId": user },
+        { "payload.userEmail": user }
+      ];
     }
-    pipeline.push({ $sort: { timestamp: -1 } });
-    pipeline.push({ $limit: limit });
-    pipeline.push(
-      {
-        $lookup: {
-          from: 'users',
-          let: { eventUser: '$user' },
-          pipeline: [
-            {
-              $match: {
-                $expr: {
-                  $or: [
-                    { $eq: ['$email', '$$eventUser'] },
-                    { $eq: ['$phoneNumber', '$$eventUser'] },
-                    { $eq: [{ $toString: '$_id' }, '$$eventUser'] }
-                  ]
-                }
-              }
-            },
-            { $project: { firstName: 1, lastName: 1, phoneNumber: 1, shopName: 1 } }
-          ],
-          as: 'userDetails'
-        }
-      },
-      {
-        $addFields: {
-          userDetails: { $arrayElemAt: ['$userDetails', 0] }
-        }
+
+    if (before) {
+      query.timestamp = { $lt: new Date(before) };
+    }
+
+    // 1. Fetch raw events using indexing on timestamp
+    const rawEvents = await Event.find(query)
+      .sort({ timestamp: -1 })
+      .limit(limit)
+      .lean();
+
+    if (rawEvents.length === 0) {
+      return res.json({ success: true, data: [], nextCursor: null });
+    }
+
+    // 2. Collect unique users
+    const uniqueUsernames = [...new Set(rawEvents.map(e => e.user).filter(Boolean))];
+
+    // 3. Batch query users from the database using indexes
+    const userOrConditions = uniqueUsernames.map(u => {
+      const cond = [
+        { email: u },
+        { phoneNumber: u }
+      ];
+      if (mongoose.Types.ObjectId.isValid(u)) {
+        cond.push({ _id: new mongoose.Types.ObjectId(u) });
       }
-    );
+      return cond;
+    }).flat();
 
-    const events = await Event.aggregate(pipeline);
+    let usersList = [];
+    if (userOrConditions.length > 0) {
+      usersList = await User.find({ $or: userOrConditions })
+        .select('firstName lastName phoneNumber shopName role email')
+        .lean();
+    }
 
-    res.json({ success: true, data: events });
+    // Index them in map for fast lookup
+    const userMap = new Map();
+    usersList.forEach(u => {
+      if (u.email) userMap.set(u.email.toLowerCase(), u);
+      if (u.phoneNumber) userMap.set(u.phoneNumber, u);
+      if (u._id) userMap.set(u._id.toString(), u);
+    });
+
+    // 4. Merge user details in Node.js
+    const enrichedEvents = rawEvents.map(event => {
+      const uKey = event.user ? event.user.toString() : '';
+      const matchedUser = userMap.get(uKey) || userMap.get(uKey.toLowerCase());
+      return {
+        ...event,
+        userDetails: matchedUser ? {
+          firstName: matchedUser.firstName,
+          lastName: matchedUser.lastName,
+          phoneNumber: matchedUser.phoneNumber,
+          shopName: matchedUser.shopName,
+          role: matchedUser.role
+        } : null
+      };
+    });
+
+    let nextCursor = null;
+    if (enrichedEvents.length === limit && enrichedEvents.length > 0) {
+      const lastEvent = enrichedEvents[enrichedEvents.length - 1];
+      if (lastEvent.timestamp) {
+        nextCursor = lastEvent.timestamp instanceof Date 
+          ? lastEvent.timestamp.toISOString() 
+          : new Date(lastEvent.timestamp).toISOString();
+      }
+    }
+
+    res.json({ success: true, data: enrichedEvents, nextCursor });
   } catch (error) {
     next(error);
   }

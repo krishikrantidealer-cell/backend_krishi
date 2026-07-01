@@ -51,6 +51,9 @@ const eventSchema = new mongoose.Schema({
   timestamps: true
 });
 
+eventSchema.index({ user: 1, timestamp: -1 });
+eventSchema.index({ eventType: 1, timestamp: -1 });
+
 const Event = mongoose.model('Event', eventSchema);
 
 module.exports = Event;
