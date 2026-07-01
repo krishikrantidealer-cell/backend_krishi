@@ -211,9 +211,8 @@ exports.getEvents = async (req, res, next) => {
       try {
         const matchedUsers = await User.find({
           $or: [
-            { email: user },
-            { email: user.toLowerCase() },
-            { phoneNumber: user },
+            { email: new RegExp(user, 'i') },
+            { phoneNumber: new RegExp(user, 'i') },
             { firstName: new RegExp(user, 'i') },
             { lastName: new RegExp(user, 'i') },
             { shopName: new RegExp(user, 'i') }
