@@ -202,12 +202,15 @@ exports.ingestBatch = async (req, res, next) => {
  */
 exports.getEvents = async (req, res, next) => {
   try {
-    const limit = parseInt(req.query.limit) || 1000;
-    const { user, before } = req.query;
+    const limit = parseInt(req.query.limit) || 300;
+    const { user, before, filter } = req.query;
 
-    const query = {};
+    let query = {};
+    let resolvedIdentifiers = [];
+
+    // 1. Resolve Global User Search if provided
     if (user) {
-      let resolvedIdentifiers = [user, user.toLowerCase()];
+      resolvedIdentifiers = [user, user.toLowerCase()];
       try {
         const matchedUsers = await User.find({
           $or: [
@@ -227,7 +230,6 @@ exports.getEvents = async (req, res, next) => {
       } catch (_) {}
 
       resolvedIdentifiers = [...new Set(resolvedIdentifiers)];
-
       query.$or = [
         { user: { $in: resolvedIdentifiers } },
         ...resolvedIdentifiers.map(id => ({ "payload.dealerId": id })),
@@ -238,11 +240,61 @@ exports.getEvents = async (req, res, next) => {
       ];
     }
 
+    // 2. Handle Pagination
     if (before) {
       query.timestamp = { $lt: new Date(before) };
     }
 
-    // 1. Fetch raw events using indexing on timestamp
+    // 3. Handle Global Filters (Abandoned Cart, Failed Payment, etc.)
+    // If a filter is applied, we use an aggregation pipeline to find matching users first
+    if (filter && filter !== 'All') {
+      const fourteenDaysAgo = new Date();
+      fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14);
+
+      const aggregationMatch = { timestamp: { $gte: fourteenDaysAgo } };
+      if (query.$or) aggregationMatch.$or = query.$or;
+
+      const userEventStates = await Event.aggregate([
+        { $match: aggregationMatch },
+        {
+          $group: {
+            _id: '$user',
+            eventTypes: { $addToSet: '$eventType' }
+          }
+        }
+      ]);
+
+      const filteredUserIds = [];
+      userEventStates.forEach(userState => {
+        const types = new Set(userState.eventTypes);
+        let match = false;
+
+        if (filter === 'High Priority') {
+          match = types.has('payment_failed') ||
+                 (types.has('checkout_started') && !types.has('payment_success')) ||
+                 (types.has('add_to_cart') && !types.has('checkout_started'));
+        } else if (filter === 'Abandoned Carts') {
+          match = (types.has('checkout_started') && !types.has('payment_success')) ||
+                 (types.has('add_to_cart') && !types.has('checkout_started'));
+        } else if (filter === 'Failed Payments') {
+          match = types.has('payment_failed');
+        }
+
+        if (match && userState._id) {
+          filteredUserIds.push(userState._id);
+        }
+      });
+
+      // If no users match the filter, return early
+      if (filteredUserIds.length === 0) {
+        return res.json({ success: true, data: [], nextCursor: null });
+      }
+
+      // Restrict main query to these users
+      query.user = { $in: filteredUserIds };
+    }
+
+    // 4. Fetch raw events
     const rawEvents = await Event.find(query)
       .sort({ timestamp: -1 })
       .limit(limit)
@@ -252,29 +304,21 @@ exports.getEvents = async (req, res, next) => {
       return res.json({ success: true, data: [], nextCursor: null });
     }
 
-    // 2. Collect unique users
+    // 5. Enrich with User Details
     const uniqueUsernames = [...new Set(rawEvents.map(e => e.user).filter(Boolean))];
-
-    // 3. Batch query users from the database using indexes
     const userOrConditions = uniqueUsernames.map(u => {
-      const cond = [
-        { email: u },
-        { phoneNumber: u }
-      ];
-      if (mongoose.Types.ObjectId.isValid(u)) {
-        cond.push({ _id: new mongoose.Types.ObjectId(u) });
-      }
+      const cond = [{ email: u }, { phoneNumber: u }];
+      if (mongoose.Types.ObjectId.isValid(u)) cond.push({ _id: new mongoose.Types.ObjectId(u) });
       return cond;
     }).flat();
 
     let usersList = [];
     if (userOrConditions.length > 0) {
       usersList = await User.find({ $or: userOrConditions })
-        .select('firstName lastName phoneNumber shopName role email')
+        .select('firstName lastName phoneNumber shopName role email kycStatus')
         .lean();
     }
 
-    // Index them in map for fast lookup
     const userMap = new Map();
     usersList.forEach(u => {
       if (u.email) userMap.set(u.email.toLowerCase(), u);
@@ -282,7 +326,6 @@ exports.getEvents = async (req, res, next) => {
       if (u._id) userMap.set(u._id.toString(), u);
     });
 
-    // 4. Merge user details in Node.js
     const enrichedEvents = rawEvents.map(event => {
       const uKey = event.user ? event.user.toString() : '';
       const matchedUser = userMap.get(uKey) || userMap.get(uKey.toLowerCase());
@@ -293,7 +336,8 @@ exports.getEvents = async (req, res, next) => {
           lastName: matchedUser.lastName,
           phoneNumber: matchedUser.phoneNumber,
           shopName: matchedUser.shopName,
-          role: matchedUser.role
+          role: matchedUser.role,
+          kycStatus: matchedUser.kycStatus
         } : null
       };
     });
