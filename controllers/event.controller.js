@@ -270,14 +270,16 @@ exports.getEvents = async (req, res, next) => {
         let match = false;
 
         if (filter === 'High Priority') {
-          match = types.has('payment_failed') ||
-                 (types.has('checkout_started') && !types.has('payment_success')) ||
-                 (types.has('add_to_cart') && !types.has('checkout_started'));
+          const hasSuccess = types.has('payment_success');
+          match = (types.has('payment_failed') && !hasSuccess) ||
+                 (types.has('checkout_started') && !hasSuccess) ||
+                 (types.has('add_to_cart') && !types.has('checkout_started') && !hasSuccess);
         } else if (filter === 'Abandoned Carts') {
-          match = (types.has('checkout_started') && !types.has('payment_success')) ||
-                 (types.has('add_to_cart') && !types.has('checkout_started'));
+          const hasSuccess = types.has('payment_success');
+          match = (types.has('checkout_started') && !hasSuccess) ||
+                 (types.has('add_to_cart') && !types.has('checkout_started') && !hasSuccess);
         } else if (filter === 'Failed Payments') {
-          match = types.has('payment_failed');
+          match = types.has('payment_failed') && !types.has('payment_success');
         }
 
         if (match && userState._id) {
@@ -485,11 +487,14 @@ exports.getSummaryMetrics = async (req, res, next) => {
         return;
       }
 
-      if (types.has('payment_failed')) {
+      // Resolution Logic: If they eventually succeeded, they are no longer High Priority
+      const hasSuccess = types.has('payment_success');
+
+      if (types.has('payment_failed') && !hasSuccess) {
         failedPaymentsCount++;
-      } else if (types.has('checkout_started') && !types.has('payment_success')) {
+      } else if (types.has('checkout_started') && !hasSuccess) {
         abandonedCheckoutsCount++;
-      } else if (types.has('add_to_cart') && !types.has('checkout_started')) {
+      } else if (types.has('add_to_cart') && !types.has('checkout_started') && !hasSuccess) {
         abandonedCartsCount++;
       }
     });

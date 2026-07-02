@@ -54,6 +54,13 @@ exports.createOrder = async (req, res, next) => {
       "/dashboard"
     ).catch(err => console.error("Error sending order notification in background:", err));
 
+    try {
+      const { broadcastToRoles } = require('../services/websocket.service');
+      broadcastToRoles(['admin', 'sales'], { type: 'ORDERS_UPDATE' });
+    } catch (wsErr) {
+      console.error("[WS] Failed to broadcast ORDERS_UPDATE on order creation:", wsErr.message);
+    }
+
     res.status(201).json({
       success: true,
       message: 'Order placed successfully',
@@ -181,6 +188,13 @@ exports.cancelOrder = async (req, res, next) => {
       `/order_details/${order._id}`
     ).catch(err => console.error("Error sending cancellation notification:", err));
 
+    try {
+      const { broadcastToRoles } = require('../services/websocket.service');
+      broadcastToRoles(['admin', 'sales'], { type: 'ORDERS_UPDATE' });
+    } catch (wsErr) {
+      console.error("[WS] Failed to broadcast ORDERS_UPDATE on order cancellation:", wsErr.message);
+    }
+
     res.json({ success: true, message: "Order cancelled successfully", order });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -245,6 +259,13 @@ exports.adminUpdateOrderStatus = async (req, res, next) => {
       }
     }, req);
 
+    try {
+      const { broadcastToRoles } = require('../services/websocket.service');
+      broadcastToRoles(['admin', 'sales'], { type: 'ORDERS_UPDATE' });
+    } catch (wsErr) {
+      console.error("[WS] Failed to broadcast ORDERS_UPDATE on admin status update:", wsErr.message);
+    }
+
     res.json({ success: true, message: `Order status updated to ${status}`, order });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -298,6 +319,13 @@ exports.sheetsWebhook = async (req, res, next) => {
       `Your order ${order.orderId} status has been updated to ${status} via Google Sheets.`,
       `/order_details/${order._id}`
     ).catch(err => console.error("Error sending order status notification:", err));
+
+    try {
+      const { broadcastToRoles } = require('../services/websocket.service');
+      broadcastToRoles(['admin', 'sales'], { type: 'ORDERS_UPDATE' });
+    } catch (wsErr) {
+      console.error("[WS] Failed to broadcast ORDERS_UPDATE on sheets webhook:", wsErr.message);
+    }
 
     res.json({ success: true, message: `Order ${orderId} updated to ${status} from sheet`, orderStatus: status });
   } catch (error) {
@@ -356,6 +384,12 @@ exports.razorpayWebhook = async (req, res, next) => {
       if (session) {
         console.log(`[Razorpay Webhook] Recovering order from CheckoutSession: ${razorpayOrderId}`);
         await orderService.confirmOrder(session, { razorpayPaymentId });
+        try {
+          const { broadcastToRoles } = require('../services/websocket.service');
+          broadcastToRoles(['admin', 'sales'], { type: 'ORDERS_UPDATE' });
+        } catch (wsErr) {
+          console.error("[WS] Failed to broadcast ORDERS_UPDATE on razorpay webhook:", wsErr.message);
+        }
         return res.json({ success: true, message: 'Order recovered from session' });
       }
 
@@ -529,6 +563,13 @@ exports.adminCreateOrder = async (req, res, next) => {
       placedAt: new Date(),
       processingAt: new Date(),
     });
+
+    try {
+      const { broadcastToRoles } = require('../services/websocket.service');
+      broadcastToRoles(['admin', 'sales'], { type: 'ORDERS_UPDATE' });
+    } catch (wsErr) {
+      console.error("[WS] Failed to broadcast ORDERS_UPDATE on admin order creation:", wsErr.message);
+    }
 
     // Mark the sales coupon as used (non-blocking — don't fail the order if this errors)
     if (appliedSalesCoupon) {
