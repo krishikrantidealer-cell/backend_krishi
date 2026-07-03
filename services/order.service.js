@@ -350,7 +350,14 @@ class OrderService {
     console.log(`[OrderService] Final MongoDB Query:`, JSON.stringify(query));
 
     return await Order.find(query)
-      .populate('user', 'firstName lastName phoneNumber role kycStatus isKycComplete shopName')
+      .populate({
+        path: 'user',
+        select: 'firstName lastName phoneNumber role kycStatus isKycComplete shopName assignedAgent',
+        populate: {
+          path: 'assignedAgent',
+          select: 'firstName lastName phoneNumber'
+        }
+      })
       .populate('items.product')
       .sort({ createdAt: -1 });
   }
