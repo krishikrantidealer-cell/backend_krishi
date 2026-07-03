@@ -13,6 +13,7 @@ const HEADERS = [
   'Customer Name',
   'Phone',
   'Shop Name',
+  'Sales Agent',
   'Items Summary',
   'Quantity',
   'Price (₹)',
@@ -114,8 +115,8 @@ async function _ensureSheetAndValidation(sheets) {
             range: {
               sheetId: sheetId,
               startRowIndex: 1, // Skip header row
-              startColumnIndex: 15, // Column P
-              endColumnIndex: 16,
+              startColumnIndex: 16, // Column Q (was P, shifted by 'Sales Agent' column)
+              endColumnIndex: 17,
             },
             rule: {
               condition: {
@@ -150,7 +151,10 @@ async function _fetchUser(order) {
   const userId = order.user && order.user._id ? order.user._id : order.user;
   if (!userId) return null;
   try {
-    return await User.findById(userId).select('firstName lastName phoneNumber shopName').lean();
+    return await User.findById(userId)
+      .select('firstName lastName phoneNumber shopName assignedAgent')
+      .populate('assignedAgent', 'firstName lastName phoneNumber')
+      .lean();
   } catch {
     return null;
   }
@@ -200,6 +204,16 @@ function _buildRow(order, user) {
   const phone = user ? (user.phoneNumber || '') : '';
   const shopName = user ? (user.shopName || '') : '';
 
+  // Extract Sales Agent Name
+  let agentName = '-';
+  if (user && user.assignedAgent) {
+    const agent = user.assignedAgent;
+    if (typeof agent === 'object') {
+      agentName = `${agent.firstName || ''} ${agent.lastName || ''}`.trim();
+      if (!agentName) agentName = agent.phoneNumber || agent.email || 'Agent';
+    }
+  }
+
   // Items Summary — one product per line with pack size
   // Quantity     — matching quantities, one per line
   // Price        — matching unit prices, one per line
@@ -241,6 +255,7 @@ function _buildRow(order, user) {
     customerName,
     phone,
     shopName,
+    agentName,
     itemsSummary,
     quantitySummary,
     priceSummary,
@@ -378,7 +393,14 @@ exports.syncAllOrdersToSheet = async () => {
 
     console.log('[Sheets] Fetching all orders from database...');
     const orders = await Order.find({})
-      .populate('user', 'firstName lastName phoneNumber shopName')
+      .populate({
+        path: 'user',
+        select: 'firstName lastName phoneNumber shopName assignedAgent',
+        populate: {
+          path: 'assignedAgent',
+          select: 'firstName lastName phoneNumber'
+        }
+      })
       .sort({ placedAt: 1 })
       .exec();
 
