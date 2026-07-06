@@ -1,7 +1,10 @@
 const Order = require('../models/Order');
 const Cart = require('../models/Cart');
+const CheckoutSession = require('../models/CheckoutSession');
+const User = require('../models/User');
 const orderService = require('./order.service');
 const notificationService = require('./notification.service');
+const whatsappService = require('./whatsapp.service');
 
 /**
  * Background service to handle automated tasks without webhooks
@@ -50,7 +53,7 @@ exports.initCronJobs = () => {
           { lastReminderSentAt: { $exists: false } },
           { lastReminderSentAt: { $lt: twentyFourHoursAgo } }
         ]
-      });
+      }).populate('user');
 
       if (abandonedCarts.length === 0) {
         console.log('[Cron] No abandoned carts to notify.');
@@ -60,12 +63,19 @@ exports.initCronJobs = () => {
       console.log(`[Cron] Found ${abandonedCarts.length} abandoned carts. Sending reminders...`);
       for (let cart of abandonedCarts) {
         try {
+          if (!cart.user) continue;
+
+          // 1. Push Notification
           await notificationService.sendMarketingNotification(
-            cart.user,
+            cart.user._id,
             "You left something behind! 🛒",
             "Your items are waiting for you. Complete your checkout before stock runs out!",
             "/cart"
           );
+
+          // 2. WhatsApp Notification
+          await whatsappService.notifyAbandonedCart(cart.user);
+
           cart.lastReminderSentAt = new Date();
           await cart.save();
         } catch (err) {
@@ -78,11 +88,61 @@ exports.initCronJobs = () => {
     }
   };
 
+  // 3. Abandoned Checkout Checker (Every 30 mins)
+  const runAbandonedCheckoutCheck = async () => {
+    try {
+      console.log('[Cron] Checking for Abandoned Checkouts...');
+      // Looking for sessions started between 30 mins and 2 hours ago that didn't result in an order
+      const thirtyMinsAgo = new Date(Date.now() - 30 * 60 * 1000);
+      const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+
+      const abandonedSessions = await CheckoutSession.find({
+        status: 'Pending',
+        orderCreated: { $ne: true },
+        createdAt: { $lt: thirtyMinsAgo, $gt: twoHoursAgo },
+        lastReminderSentAt: { $exists: false }
+      }).populate('user');
+
+      if (abandonedSessions.length === 0) {
+        console.log('[Cron] No abandoned checkouts to notify.');
+        return;
+      }
+
+      console.log(`[Cron] Found ${abandonedSessions.length} abandoned checkouts. Sending reminders...`);
+      for (let session of abandonedSessions) {
+        try {
+          if (!session.user) continue;
+
+          // 1. Push Notification
+          await notificationService.sendMarketingNotification(
+            session.user._id,
+            "Checkout incomplete! ⚠️",
+            "We noticed you didn't finish your order. Would you like to complete it now?",
+            "/cart"
+          );
+
+          // 2. WhatsApp Notification
+          await whatsappService.notifyAbandonedCheckout(session.user, session);
+
+          session.lastReminderSentAt = new Date();
+          await session.save();
+        } catch (err) {
+          console.error(`[Cron] Failed to notify user for session ${session._id}:`, err.message);
+        }
+      }
+      console.log('[Cron] Abandoned Checkout reminders sent.');
+    } catch (error) {
+      console.error('[Cron] Error in Abandoned Checkout cron job:', error);
+    }
+  };
+
   // Execute immediately on startup
   runOrderSync();
   runAbandonedCartCheck();
+  runAbandonedCheckoutCheck();
 
   // Set intervals
   setInterval(runOrderSync, 20 * 60 * 1000);
   setInterval(runAbandonedCartCheck, 60 * 60 * 1000);
+  setInterval(runAbandonedCheckoutCheck, 30 * 60 * 1000);
 };

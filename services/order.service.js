@@ -51,7 +51,10 @@ class OrderService {
     sheetsService.appendOrder(order).catch(err => console.error('[Sheets] confirmOrder error:', err.message));
 
     User.findById(session.user).then(user => {
-        if (user) whatsappService.notifyNewOrder(order, user);
+      if (user) {
+        whatsappService.notifyNewOrder(order, user);
+        whatsappService.notifyOrderSuccessToUser(order, user);
+      }
     }).catch(() => {});
 
     return order;
@@ -200,9 +203,12 @@ class OrderService {
       console.error('[Sheets] Failed to append new order:', err.message)
     );
 
-    // 9. Send WhatsApp notification to admin (fire-and-forget)
+    // 9. Send WhatsApp notification to admin & user (fire-and-forget)
     whatsappService.notifyNewOrder(order, user).catch(err =>
-      console.error('[WhatsApp] Failed to send new order notification:', err.message)
+      console.error('[WhatsApp] Failed to send admin notification:', err.message)
+    );
+    whatsappService.notifyOrderSuccessToUser(order, user).catch(err =>
+      console.error('[WhatsApp] Failed to send user notification:', err.message)
     );
 
     return order;

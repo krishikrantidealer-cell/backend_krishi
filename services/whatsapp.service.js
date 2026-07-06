@@ -1,139 +1,158 @@
 const axios = require('axios');
 
 /**
- * WhatsApp Notification Service (Green-API)
- * ─────────────────────────────────────────
- * Free, zero-cost WhatsApp notifications sent to ONE admin number.
+ * WhatsApp Notification Service (Meta Official Business API)
+ * ──────────────────────────────────────────────────────────
+ * Enterprise-grade, reliable notifications via Meta Cloud API.
  *
- * Credentials stored in .env:
- *   WHATSAPP_ADMIN_PHONE=919XXXXXXXXX   (your number with country code, no +)
- *   GREEN_API_URL=https://XXXX.api.greenapi.com
- *   GREEN_API_INSTANCE_ID=XXXXXXXXXX
- *   GREEN_API_TOKEN=XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+ * REQUIRES:
+ * - Meta Business App verification.
+ * - Approved Message Templates in Meta WhatsApp Manager.
  */
 
 class WhatsAppService {
   /**
-   * Send a WhatsApp message to the admin number via Green-API.
-   * @param {string} message - Plain text message to send
+   * Send an official Template Message via Meta Graph API
+   * @param {string} phoneNumber - Recipient (with country code, e.g., 919876543210)
+   * @param {string} templateName - The name of the approved template in Meta Manager
+   * @param {string} languageCode - Default 'en_US'
+   * @param {Array} variables - Array of strings to fill {{1}}, {{2}}, etc.
    */
-  async sendToAdmin(message) {
-    const phone = process.env.WHATSAPP_ADMIN_PHONE;
-    const apiUrl = process.env.GREEN_API_URL;
-    const idInstance = process.env.GREEN_API_INSTANCE_ID;
-    const apiTokenInstance = process.env.GREEN_API_TOKEN;
+  async sendTemplateMessage(phoneNumber, templateName, languageCode = 'en_US', variables = []) {
+    const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
+    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
 
-    if (!phone || !apiUrl || !idInstance || !apiTokenInstance) {
-      console.warn('[WhatsApp] Green-API credentials or WHATSAPP_ADMIN_PHONE not fully configured — skipping.');
+    if (!accessToken || !phoneNumberId) {
+      console.warn('[WhatsApp Official] Missing Meta API credentials (TOKEN or PHONE_ID) — skipping.');
       return;
     }
 
     try {
-      const cleanPhone = phone.replace(/\D/g, '');
-      const chatId = `${cleanPhone}@c.us`;
-      const url = `${apiUrl}/waInstance${idInstance}/sendMessage/${apiTokenInstance}`;
+      const cleanPhone = phoneNumber.replace(/\D/g, '');
+      const url = `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`;
 
-      const response = await axios.post(url, {
-        chatId,
-        message
-      }, {
+      const payload = {
+        messaging_product: "whatsapp",
+        to: cleanPhone,
+        type: "template",
+        template: {
+          name: templateName,
+          language: { code: languageCode },
+          components: [
+            {
+              type: "body",
+              parameters: variables.map(v => ({ type: "text", text: String(v) }))
+            }
+          ]
+        }
+      };
+
+      const response = await axios.post(url, payload, {
         headers: {
+          'Authorization': `Bearer ${accessToken}`,
           'Content-Type': 'application/json'
         },
         timeout: 10000
       });
 
-      console.log(`[WhatsApp] ✅ Notification sent via Green-API. Status: ${response.status}`);
+      console.log(`[WhatsApp Official] ✅ Template "${templateName}" sent to ${cleanPhone}. ID: ${response.data.messages[0].id}`);
       return true;
     } catch (err) {
-      // Never throw — WhatsApp failure should NOT affect core order flow
-      console.error('[WhatsApp] ❌ Failed to send notification via Green-API:', err.response?.data || err.message);
+      console.error(`[WhatsApp Official] ❌ Failed to send template "${templateName}":`, err.response?.data || err.message);
       return false;
     }
   }
 
   /**
-   * Notify admin about a newly placed order.
-   * @param {object} order   - Mongoose Order document
-   * @param {object} user    - User document with name, phone, shopName
+   * Send a free-form text message (Only works if user messaged you in last 24h)
    */
-  async notifyNewOrder(order, user) {
-    const customerName = user
-      ? `${user.firstName || ''} ${user.lastName || ''}`.trim() || 'Unknown'
-      : 'Unknown';
-    const phone = user?.phoneNumber || 'N/A';
-    const shopName = user?.shopName || 'N/A';
+  async sendTextMessage(phoneNumber, message) {
+    const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
+    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
 
-    // Build items summary
-    const itemLines = (order.items || [])
-      .map(i => `  • ${i.title} x${i.quantity} — ₹${(i.price * i.quantity).toFixed(0)}`)
-      .join('\n');
+    if (!accessToken || !phoneNumberId) return;
 
-    const freeLines = (order.freeItems || [])
-      .map(f => `  • ${f.name} x${f.quantity || 1} (🎁 Free)`)
-      .join('\n');
+    try {
+      const cleanPhone = phoneNumber.replace(/\D/g, '');
+      const url = `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`;
 
-    const allItems = [itemLines, freeLines].filter(Boolean).join('\n');
+      const response = await axios.post(url, {
+        messaging_product: "whatsapp",
+        to: cleanPhone,
+        type: "text",
+        text: { body: message }
+      }, {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+      });
 
-    const paymentInfo = order.paymentMethod === 'Partial'
-      ? `Partial — Advance ₹${order.advanceAmount}, Remaining ₹${order.remainingAmount}`
-      : `${order.paymentMethod} (${order.paymentStatus})`;
+      return true;
+    } catch (err) {
+      console.error('[WhatsApp Official] Text message failed:', err.response?.data || err.message);
+      return false;
+    }
+  }
 
-    const addr = order.shippingAddress || {};
-    const address = [addr.villageArea, addr.cityTehsil, addr.state, addr.pincode]
-      .filter(Boolean).join(', ') || 'N/A';
+  // --- AUTOMATED WORKFLOWS ---
 
-    const couponLine = order.couponCode
-      ? `\n🏷️ Coupon: ${order.couponCode} (Saved ₹${order.discountAmount || 0})`
-      : '';
+  async notifyAbandonedCheckout(user, checkoutSession) {
+    if (!user || !user.phoneNumber) return;
+    const firstName = user.firstName || 'Customer';
+    // Template: abandoned_checkout_hindi (Vars: 1=Name, 2=Link)
+    return this.sendTemplateMessage(user.phoneNumber, 'abandoned_checkout_hindi', 'hi', [
+      firstName,
+      'https://krishikranti.com/cart'
+    ]);
+  }
 
-    const message =
-      `🛒 *NEW ORDER RECEIVED* 🛒\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━\n` +
-      `📦 Order ID: ${order.orderId}\n` +
-      `📅 Time: ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━\n` +
-      `👤 Customer: ${customerName}\n` +
-      `📱 Phone: ${phone}\n` +
-      `🏪 Shop: ${shopName}\n` +
-      `📍 Address: ${address}\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━\n` +
-      `🧾 Items:\n${allItems}${couponLine}\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━\n` +
-      `💰 Total: ₹${order.totalAmount}\n` +
-      `💳 Payment: ${paymentInfo}\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━`;
+  async notifyAbandonedCart(user) {
+    if (!user || !user.phoneNumber) return;
+    const firstName = user.firstName || 'Customer';
+    // Template: abandoned_cart_hindi (Vars: 1=Name, 2=Link)
+    return this.sendTemplateMessage(user.phoneNumber, 'abandoned_cart_hindi', 'hi', [
+      firstName,
+      'https://krishikranti.com/cart'
+    ]);
+  }
 
-    return this.sendToAdmin(message);
+  async notifyOrderSuccessToUser(order, user) {
+    if (!user || !user.phoneNumber) return;
+    const firstName = user.firstName || 'Customer';
+    // Template: order_confirmation_hindi (Vars: 1=Name, 2=OrderID, 3=Amount)
+    return this.sendTemplateMessage(user.phoneNumber, 'order_confirmation_hindi', 'hi', [
+      firstName,
+      order.orderId,
+      order.totalAmount
+    ]);
+  }
+
+  async notifyOrderStatusUpdate(order) {
+    // This requires a fetch to get user phone if not in order object
+    const User = require('../models/User');
+    const user = await User.findById(order.user);
+    if (!user || !user.phoneNumber) return;
+
+    // Template: order_status_update (Vars: 1=OrderID, 2=Status)
+    return this.sendTemplateMessage(user.phoneNumber, 'order_status_update', 'en_US', [
+      order.orderId,
+      order.orderStatus
+    ]);
   }
 
   /**
-   * Notify admin when an order status is updated.
-   * @param {object} order - Mongoose Order document
+   * Admin Notifications (Still uses template, or can use text if session is open)
    */
-  async notifyOrderStatusUpdate(order) {
-    const statusEmoji = {
-      'Processing':       '⚙️',
-      'Shipped':          '🚚',
-      'Out for Delivery': '🏍️',
-      'Delivered':        '✅',
-      'Cancelled':        '❌',
-      'RTO':              '🔄',
-    }[order.orderStatus] || '📦';
+  async notifyNewOrder(order, user) {
+    const adminPhone = process.env.WHATSAPP_ADMIN_PHONE;
+    if (!adminPhone) return;
 
-    const awbLine = order.awbNumber
-      ? `\n📬 AWB: ${order.awbNumber}${order.courierName ? ` (${order.courierName})` : ''}`
-      : '';
+    const customerName = user ? `${user.firstName || ''} ${user.lastName || ''}`.trim() : 'Unknown';
 
-    const message =
-      `${statusEmoji} *ORDER STATUS UPDATED*\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━\n` +
-      `📦 Order ID: ${order.orderId}\n` +
-      `🔄 New Status: *${order.orderStatus}*${awbLine}\n` +
-      `⏰ Updated: ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━`;
-
-    return this.sendToAdmin(message);
+    // Admin templates usually don't need much personalization or can use a generic alert
+    return this.sendTemplateMessage(adminPhone, 'admin_new_order_alert', 'en_US', [
+      order.orderId,
+      customerName,
+      order.totalAmount
+    ]);
   }
 }
 
