@@ -1,6 +1,7 @@
 const Collection = require('../models/Collection');
 const Product = require('../models/Product');
 const { uploadToGCS } = require('../utils/gcs');
+const auditService = require('../services/audit.service');
 
 // Get all active collections
 exports.getCollections = async (req, res, next) => {
@@ -90,6 +91,16 @@ exports.createCollection = async (req, res, next) => {
       priority: priority !== undefined ? Number(priority) : 0
     });
 
+    // Audit Log: Collection Created
+    auditService.logAction({
+      adminId: req.user._id,
+      adminEmail: req.user.email,
+      action: 'COLLECTION_CREATED',
+      targetId: collection._id,
+      targetModel: 'Collection',
+      changes: { after: collection }
+    }, req);
+
     res.status(201).json({
       success: true,
       message: 'Collection created successfully',
@@ -110,6 +121,7 @@ exports.updateCollection = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Collection not found' });
     }
 
+    const oldCollection = JSON.parse(JSON.stringify(collection));
     const oldName = collection.name;
     const updateData = {};
 
@@ -129,6 +141,19 @@ exports.updateCollection = async (req, res, next) => {
       { $set: updateData },
       { new: true, runValidators: true }
     );
+
+    // Audit Log: Collection Updated
+    auditService.logAction({
+      adminId: req.user._id,
+      adminEmail: req.user.email,
+      action: 'COLLECTION_UPDATED',
+      targetId: req.params.id,
+      targetModel: 'Collection',
+      changes: {
+        before: oldCollection,
+        after: updatedCollection
+      }
+    }, req);
 
     // If name is updated, update matching products as well
     if (name !== undefined && oldName !== name) {
@@ -156,6 +181,16 @@ exports.deleteCollection = async (req, res, next) => {
     if (!collection) {
       return res.status(404).json({ success: false, message: 'Collection not found' });
     }
+
+    // Audit Log: Collection Deleted
+    auditService.logAction({
+      adminId: req.user._id,
+      adminEmail: req.user.email,
+      action: 'COLLECTION_DELETED',
+      targetId: req.params.id,
+      targetModel: 'Collection',
+      changes: { before: collection }
+    }, req);
 
     // Pull the collection name from all products' assignedCollections
     await Product.updateMany(

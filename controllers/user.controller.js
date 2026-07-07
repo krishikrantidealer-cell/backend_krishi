@@ -1,7 +1,7 @@
 const userService = require('../services/user.service');
 const { processAndUploadKycDocument } = require('../utils/gcs');
 const Notification = require('../models/Notification');
-const { CRC32C_EXCEPTION_MESSAGES } = require('@google-cloud/storage');
+const auditService = require('../services/audit.service');
 
 exports.getProfile = async (req, res, next) => {
   try {
@@ -219,6 +219,16 @@ exports.adminUpdateKycStatus = async (req, res, next) => {
 
     const user = await userService.updateKycStatus(userId, status, reason);
 
+    // Audit critical sales/admin action
+    auditService.logAction({
+      adminId: req.user._id,
+      adminEmail: req.user.email,
+      action: `KYC_${status.toUpperCase()}`,
+      targetId: userId,
+      targetModel: 'User',
+      changes: { after: { kycStatus: status, reason } }
+    }, req);
+
     try {
       const { broadcastToRoles, sendToUser } = require('../services/websocket.service');
       broadcastToRoles(['admin', 'sales'], { type: 'LEADS_UPDATE' });
@@ -243,6 +253,16 @@ exports.adminAssignAgent = async (req, res, next) => {
     const { userId } = req.params;
 
     const user = await userService.assignAgent(userId, agentId);
+
+    // Audit critical sales/admin action
+    auditService.logAction({
+      adminId: req.user._id,
+      adminEmail: req.user.email,
+      action: 'AGENT_ASSIGNED',
+      targetId: userId,
+      targetModel: 'User',
+      changes: { after: { assignedAgent: agentId } }
+    }, req);
 
     try {
       const { broadcastToRoles, sendToUser } = require('../services/websocket.service');
@@ -285,6 +305,17 @@ exports.adminAssignAgent = async (req, res, next) => {
 exports.adminCreateSalesAgent = async (req, res, next) => {
   try {
     const user = await userService.createSalesAgent(req.body);
+
+    // Audit Log: Sales Agent Created
+    auditService.logAction({
+      adminId: req.user._id,
+      adminEmail: req.user.email,
+      action: 'SALES_AGENT_CREATED',
+      targetId: user._id,
+      targetModel: 'User',
+      changes: { after: { email: user.email, role: user.role } }
+    }, req);
+
     res.status(201).json({
       success: true,
       message: 'Sales agent created successfully',
@@ -305,7 +336,22 @@ exports.adminCreateSalesAgent = async (req, res, next) => {
 exports.adminUpdateSalesAgent = async (req, res, next) => {
   try {
     const { agentId } = req.params;
+    const oldAgent = await userService.getProfile(agentId);
     const user = await userService.updateSalesAgent(agentId, req.body);
+
+    // Audit Log: Sales Agent Updated
+    auditService.logAction({
+      adminId: req.user._id,
+      adminEmail: req.user.email,
+      action: 'SALES_AGENT_UPDATED',
+      targetId: agentId,
+      targetModel: 'User',
+      changes: {
+        before: { email: oldAgent.email, role: oldAgent.role },
+        after: { email: user.email, role: user.role }
+      }
+    }, req);
+
     res.json({
       success: true,
       message: 'Sales agent updated successfully',
@@ -326,7 +372,20 @@ exports.adminUpdateSalesAgent = async (req, res, next) => {
 exports.adminDeleteSalesAgent = async (req, res, next) => {
   try {
     const { agentId } = req.params;
+    const targetAgent = await userService.getProfile(agentId);
+
     await userService.deleteSalesAgent(agentId);
+
+    // Audit Log: Sales Agent Deleted
+    auditService.logAction({
+      adminId: req.user._id,
+      adminEmail: req.user.email,
+      action: 'SALES_AGENT_DELETED',
+      targetId: agentId,
+      targetModel: 'User',
+      changes: { before: { email: targetAgent.email, role: targetAgent.role } }
+    }, req);
+
     res.json({
       success: true,
       message: 'Sales agent deleted successfully'
@@ -405,6 +464,16 @@ exports.adminUpdateUser = async (req, res, next) => {
 
     const user = await userService.updateProfile(userId, updateData);
 
+    // Audit critical sales/admin action
+    auditService.logAction({
+      adminId: req.user._id,
+      adminEmail: req.user.email,
+      action: 'USER_PROFILE_UPDATED',
+      targetId: userId,
+      targetModel: 'User',
+      changes: { after: req.body }
+    }, req);
+
     try {
       const { broadcastToRoles } = require('../services/websocket.service');
       broadcastToRoles(['admin', 'sales'], { type: 'LEADS_UPDATE' });
@@ -426,10 +495,10 @@ exports.adminUpdateUser = async (req, res, next) => {
 exports.adminDeleteUser = async (req, res, next) => {
   try {
     const { userId } = req.params;
+    const targetUser = await userService.getProfile(userId);
 
     // Authorization check for sales agents
     if (req.user.role === 'sales') {
-      const targetUser = await userService.getProfile(userId);
       if (!targetUser.assignedAgent || targetUser.assignedAgent.toString() !== req.user._id.toString()) {
         return res.status(403).json({
           success: false,
@@ -439,6 +508,20 @@ exports.adminDeleteUser = async (req, res, next) => {
     }
 
     await userService.deleteUser(userId);
+
+    // Audit Log: Lead/Dealer Deleted
+    auditService.logAction({
+      adminId: req.user._id,
+      adminEmail: req.user.email,
+      action: 'USER_DELETED',
+      targetId: userId,
+      targetModel: 'User',
+      changes: { before: {
+        name: `${targetUser.firstName || ''} ${targetUser.lastName || ''}`.trim(),
+        phone: targetUser.phoneNumber,
+        kycStatus: targetUser.kycStatus
+      } }
+    }, req);
 
     try {
       const { broadcastToRoles } = require('../services/websocket.service');
@@ -467,6 +550,16 @@ exports.adminToggleBlockUser = async (req, res, next) => {
     await user.save();
 
     const isBlockedNow = user.isBlocked;
+
+    // Audit Log: User Blocked/Unblocked
+    auditService.logAction({
+      adminId: req.user._id,
+      adminEmail: req.user.email,
+      action: isBlockedNow ? 'USER_BLOCKED' : 'USER_UNBLOCKED',
+      targetId: userId,
+      targetModel: 'User',
+      changes: { after: { isBlocked: isBlockedNow } }
+    }, req);
 
     try {
       const { sendToUser, broadcastToRoles } = require('../services/websocket.service');

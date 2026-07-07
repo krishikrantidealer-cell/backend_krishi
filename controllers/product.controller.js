@@ -527,6 +527,16 @@ exports.createCategory = async (req, res, next) => {
       cataloguePdf
     });
 
+    // Audit Log: Category Created
+    auditService.logAction({
+      adminId: req.user._id,
+      adminEmail: req.user.email,
+      action: 'CATEGORY_CREATED',
+      targetId: category._id,
+      targetModel: 'Category',
+      changes: { after: category }
+    }, req);
+
     try {
       await cacheService.del('categories:hierarchy');
     } catch (_) {}
@@ -572,7 +582,31 @@ exports.createSubCategory = async (req, res, next) => {
     }
 
     category.subCategories.push({ name: name.trim(), bannerImage });
+    const oldCategory = JSON.parse(JSON.stringify(category));
     await category.save();
+
+    // Audit Log: Category Updated
+    auditService.logAction({
+      adminId: req.user._id,
+      adminEmail: req.user.email,
+      action: 'CATEGORY_UPDATED',
+      targetId: id,
+      targetModel: 'Category',
+      changes: {
+        before: oldCategory,
+        after: category
+      }
+    }, req);
+
+    // Audit Log: Subcategory Created
+    auditService.logAction({
+      adminId: req.user._id,
+      adminEmail: req.user.email,
+      action: 'SUBCATEGORY_CREATED',
+      targetId: id,
+      targetModel: 'Category',
+      changes: { after: { subCategory: name.trim() } }
+    }, req);
 
     try {
       await cacheService.del('categories:hierarchy');
@@ -801,7 +835,21 @@ exports.updateCategory = async (req, res, next) => {
       category.cataloguePdf = req.body.cataloguePdf;
     }
 
+    const oldCategory = JSON.parse(JSON.stringify(category));
     await category.save();
+
+    // Audit Log: Category Updated
+    auditService.logAction({
+      adminId: req.user._id,
+      adminEmail: req.user.email,
+      action: 'CATEGORY_UPDATED',
+      targetId: id,
+      targetModel: 'Category',
+      changes: {
+        before: oldCategory,
+        after: category
+      }
+    }, req);
 
     try {
       await cacheService.del('categories:hierarchy');
@@ -827,7 +875,18 @@ exports.deleteCategory = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Category not found' });
     }
 
+    const oldCategory = JSON.parse(JSON.stringify(category));
     await Category.findByIdAndDelete(id);
+
+    // Audit Log: Category Deleted
+    auditService.logAction({
+      adminId: req.user._id,
+      adminEmail: req.user.email,
+      action: 'CATEGORY_DELETED',
+      targetId: id,
+      targetModel: 'Category',
+      changes: { before: oldCategory }
+    }, req);
 
     // Unset categoryId/subCategoryId and pull categoryId from categoryIds array for matching products
     const Product = require('../models/Product');
@@ -890,7 +949,21 @@ exports.updateSubCategory = async (req, res, next) => {
       category.subCategories[subIndex].bannerImage = undefined;
     }
 
+    const oldCategory = JSON.parse(JSON.stringify(category));
     await category.save();
+
+    // Audit Log: Category Updated
+    auditService.logAction({
+      adminId: req.user._id,
+      adminEmail: req.user.email,
+      action: 'CATEGORY_UPDATED',
+      targetId: id,
+      targetModel: 'Category',
+      changes: {
+        before: oldCategory,
+        after: category
+      }
+    }, req);
 
     try {
       await cacheService.del('categories:hierarchy');
@@ -922,7 +995,21 @@ exports.deleteSubCategory = async (req, res, next) => {
     }
 
     category.subCategories.splice(subIndex, 1);
+    const oldCategory = JSON.parse(JSON.stringify(category));
     await category.save();
+
+    // Audit Log: Category Updated
+    auditService.logAction({
+      adminId: req.user._id,
+      adminEmail: req.user.email,
+      action: 'CATEGORY_UPDATED',
+      targetId: id,
+      targetModel: 'Category',
+      changes: {
+        before: oldCategory,
+        after: category
+      }
+    }, req);
 
     // Unset subCategoryId and pull subCategoryId from subCategoryIds array for matching products
     const Product = require('../models/Product');

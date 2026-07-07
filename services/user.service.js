@@ -133,7 +133,7 @@ class UserService {
           gstNumber,
           licenceImage,
           shopImage,
-          kycStatus: 'pending',
+          kycStatus: 'processing',
           isKycComplete: false
         }
       },

@@ -136,13 +136,62 @@ exports.initCronJobs = () => {
     }
   };
 
+  // 4. KYC Urgency Checker (Every 30 mins)
+  const runKycUrgencyCheck = async () => {
+    try {
+      console.log('[Cron] Checking for KYC Urgency...');
+      const thirtyMinsAgo = new Date(Date.now() - 30 * 60 * 1000);
+      const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+      // Find users who logged in with a phone number, have pending KYC status,
+      // registered at least 30 minutes ago, and either have never been reminded
+      // or were reminded more than 24 hours ago.
+      const usersToRemind = await User.find({
+        phoneNumber: { $exists: true, $ne: null, $ne: "" },
+        kycStatus: 'pending',
+        createdAt: { $lt: thirtyMinsAgo },
+        $or: [
+          { lastKycReminderSentAt: { $exists: false } },
+          { lastKycReminderSentAt: { $lt: oneDayAgo } }
+        ]
+      });
+
+      if (usersToRemind.length === 0) {
+        console.log('[Cron] No users to notify for KYC Urgency.');
+        return;
+      }
+
+      console.log(`[Cron] Found ${usersToRemind.length} users for KYC Urgency reminder. Sending...`);
+      for (let user of usersToRemind) {
+        try {
+          await notificationService.sendUtilityNotification(
+            user._id,
+            "⏳ अभी तक KYC पूरा नहीं किया?",
+            "बस Shop Photo और License Upload करें और Wholesale Rates का फायदा उठाएँ।",
+            "/profile"
+          );
+
+          user.lastKycReminderSentAt = new Date();
+          await user.save();
+        } catch (err) {
+          console.error(`[Cron] Failed to send KYC reminder to user ${user._id}:`, err.message);
+        }
+      }
+      console.log('[Cron] KYC Urgency reminders sent.');
+    } catch (error) {
+      console.error('[Cron] Error in KYC Urgency cron job:', error);
+    }
+  };
+
   // Execute immediately on startup
   runOrderSync();
   runAbandonedCartCheck();
   runAbandonedCheckoutCheck();
+  runKycUrgencyCheck();
 
   // Set intervals
   setInterval(runOrderSync, 20 * 60 * 1000);
   setInterval(runAbandonedCartCheck, 60 * 60 * 1000);
   setInterval(runAbandonedCheckoutCheck, 30 * 60 * 1000);
+  setInterval(runKycUrgencyCheck, 30 * 60 * 1000);
 };

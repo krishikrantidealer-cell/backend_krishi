@@ -1,4 +1,5 @@
 const SalesAgentCoupon = require('../models/SalesAgentCoupon');
+const auditService = require('../services/audit.service');
 
 exports.createSalesCoupon = async (req, res, next) => {
   try {
@@ -26,6 +27,16 @@ exports.createSalesCoupon = async (req, res, next) => {
       isActive: true,
       isUsed: false
     });
+
+    // Audit Log: Sales Coupon Created
+    auditService.logAction({
+      adminId: req.user._id,
+      adminEmail: req.user.email,
+      action: 'SALES_COUPON_CREATED',
+      targetId: coupon._id,
+      targetModel: 'SalesAgentCoupon',
+      changes: { after: coupon }
+    }, req);
 
     res.status(201).json({ success: true, message: 'Sales coupon created', coupon });
   } catch (error) {
@@ -88,7 +99,18 @@ exports.deleteSalesCoupon = async (req, res, next) => {
       return res.status(403).json({ success: false, message: 'Not authorized' });
     }
 
+    const oldCoupon = JSON.parse(JSON.stringify(coupon));
     await SalesAgentCoupon.findByIdAndDelete(req.params.id);
+
+    // Audit Log: Sales Coupon Deleted
+    auditService.logAction({
+      adminId: req.user._id,
+      adminEmail: req.user.email,
+      action: 'SALES_COUPON_DELETED',
+      targetId: req.params.id,
+      targetModel: 'SalesAgentCoupon',
+      changes: { before: oldCoupon }
+    }, req);
     res.json({ success: true, message: 'Coupon deleted' });
   } catch (error) {
     next(error);

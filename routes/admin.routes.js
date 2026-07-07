@@ -10,4 +10,7 @@ router.use(authorizeRoles('admin'));
 // Dashboard Analytics
 router.get('/dashboard', adminController.getDashboardAnalytics);
 
+// Audit Logs
+router.get('/audit-logs', adminController.getAuditLogs);
+
 module.exports = router;

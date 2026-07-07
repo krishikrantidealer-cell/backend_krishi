@@ -78,7 +78,7 @@ const userSchema = new mongoose.Schema({
   // KYC Fields
   userType: {
     type: String,
-    enum: ['Retailer and Distributor'],
+    enum: ['retailer', 'distributor', 'wholesaler'],
   },
   shopName: {
     type: String,
@@ -98,12 +98,15 @@ const userSchema = new mongoose.Schema({
   },
   kycStatus: {
     type: String,
-    enum: ['pending', 'submitted', 'verified', 'rejected'],
+    enum: ['pending', 'submitted', 'processing', 'verified', 'rejected'],
     default: 'pending'
   },
   isKycComplete: {
     type: Boolean,
     default: false
+  },
+  lastKycReminderSentAt: {
+    type: Date
   },
   assignedAgent: {
     type: mongoose.Schema.Types.ObjectId,

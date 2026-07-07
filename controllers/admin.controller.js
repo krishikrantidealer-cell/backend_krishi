@@ -3,7 +3,62 @@ const Order = require('../models/Order');
 const Product = require('../models/Product');
 const CheckoutSession = require('../models/CheckoutSession');
 const Event = require('../models/Event');
+const AuditLog = require('../models/AuditLog');
 const { redisClient } = require('../config/redis');
+
+exports.getAuditLogs = async (req, res, next) => {
+  try {
+    const { adminEmail, limit = 50, before, role } = req.query;
+    const query = {};
+
+    if (adminEmail) {
+      query.adminEmail = adminEmail;
+    }
+
+    // Role filtering at DB level for "Sales" vs "Admin" tabs
+    if (role) {
+      // Find all users with this role first
+      const User = require('../models/User');
+      const usersWithRole = await User.find({ role: role.toLowerCase() }).select('_id');
+      const userIds = usersWithRole.map(u => u._id);
+      query.adminId = { $in: userIds };
+    }
+
+    if (before) {
+      query.timestamp = { $lt: new Date(before) };
+    }
+
+    const logs = await AuditLog.find(query)
+      .populate('adminId', 'role email')
+      .sort({ timestamp: -1 })
+      .limit(parseInt(limit));
+
+    const totalCount = await AuditLog.countDocuments(query);
+
+    // Flatten role into the log object for easier frontend consumption
+    const flattenedLogs = logs.map(log => {
+      const logObj = log.toObject();
+      // Ensure we safely extract the role from the populated adminId object
+      if (log.adminId && typeof log.adminId === 'object') {
+        logObj.adminRole = log.adminId.role;
+      } else {
+        logObj.adminRole = null;
+      }
+      return logObj;
+    });
+
+    const nextCursor = logs.length === parseInt(limit) ? logs[logs.length - 1].timestamp : null;
+
+    res.json({
+      success: true,
+      data: flattenedLogs,
+      totalCount,
+      nextCursor
+    });
+  } catch (error) {
+    next(error);
+  }
+};
 
 exports.getDashboardAnalytics = async (req, res, next) => {
   try {
@@ -33,7 +88,7 @@ exports.getDashboardAnalytics = async (req, res, next) => {
     // 1. User/Dealer counts
     const totalUsers = await User.countDocuments({ role: 'user' });
     const verifiedUsers = await User.countDocuments({ role: 'user', kycStatus: 'verified' });
-    const pendingKyc = await User.countDocuments({ role: 'user', kycStatus: { $in: ['pending', 'submitted'] }, isProfileComplete: true });
+    const pendingKyc = await User.countDocuments({ role: 'user', kycStatus: { $in: ['processing', 'submitted'] }, isProfileComplete: true });
 
     // New Leads Correction:
     // If Total: show users who are not verified yet (prospects)

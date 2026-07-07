@@ -594,6 +594,16 @@ exports.adminCreateOrder = async (req, res, next) => {
       `/order_details/${order._id}`
     ).catch(err => console.error('Admin create order notification error:', err));
 
+    // Audit Log: Order Created by Admin/Sales
+    auditService.logAction({
+      adminId: req.user._id,
+      adminEmail: req.user.email,
+      action: 'ADMIN_ORDER_CREATED',
+      targetId: order._id,
+      targetModel: 'Order',
+      changes: { after: order }
+    }, req);
+
     res.status(201).json({ success: true, message: 'Order created successfully', order });
   } catch (error) {
     console.error('adminCreateOrder error:', error);

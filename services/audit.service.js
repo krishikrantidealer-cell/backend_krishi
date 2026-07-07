@@ -29,6 +29,24 @@ class AuditService {
         userAgent: req ? req.headers['user-agent'] : null,
         timestamp: new Date()
       });
+
+      // Gold Standard: Real-time broadcast to Admins
+      try {
+        const { broadcastToRoles } = require('./websocket.service');
+        const populatedLog = await log.populate('adminId', 'role email');
+        const logObj = populatedLog.toObject();
+        if (populatedLog.adminId) {
+          logObj.adminRole = populatedLog.adminId.role;
+        }
+
+        broadcastToRoles(['admin'], {
+          type: 'AUDIT_LOG_CREATED',
+          data: logObj
+        });
+      } catch (wsError) {
+        console.error('[AuditService] WS Broadcast failed:', wsError.message);
+      }
+
       return log;
     } catch (error) {
       console.error('[AuditService] Failed to record audit log:', error);
