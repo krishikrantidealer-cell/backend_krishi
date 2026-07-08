@@ -65,8 +65,12 @@ router.post(
     { name: 'shopImage', maxCount: 1 }
   ]),
   [
-    body('userType').isIn(['retailer', 'distributor', 'wholesaler']).withMessage('Invalid user type'),
-    body('shopName').trim().notEmpty().withMessage('Shop name is required'),
+    body('userType').isIn(['retailer', 'distributor', 'wholesaler', 'farmer']).withMessage('Invalid user type'),
+    body('shopName')
+      .if((value, { req }) => req.body.userType !== 'farmer')
+      .trim()
+      .notEmpty()
+      .withMessage('Shop name is required'),
     body('gstNumber').optional({ checkFalsy: true }).trim()
   ],
   validate,

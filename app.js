@@ -22,56 +22,12 @@ const zlib = require('zlib');
 // Trust proxy for correct IP detection behind Render/Load Balancers
 app.set('trust proxy', 1);
 
-app.use((req, res, next) => {
-  const acceptEncoding = req.headers['accept-encoding'] || '';
-  if (!acceptEncoding.includes('gzip')) {
-    return next();
-  }
-
-  const chunks = [];
-  const originalWrite = res.write;
-  const originalEnd = res.end;
-
-  res.write = function (chunk, ...args) {
-    if (chunk) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    return true;
-  };
-
-  res.end = function (chunk, encoding, ...args) {
-    if (chunk) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    if (chunks.length === 0) {
-      res.write = originalWrite;
-      res.end = originalEnd;
-      return originalEnd.call(this, chunk, encoding, ...args);
-    }
-    const body = Buffer.concat(chunks);
-    if (body.length < 1024) {
-      res.write = originalWrite;
-      res.end = originalEnd;
-      return originalEnd.call(this, body, encoding, ...args);
-    }
-    zlib.gzip(body, (err, compressed) => {
-      if (err) {
-        res.write = originalWrite;
-        res.end = originalEnd;
-        return originalEnd.call(this, body, encoding, ...args);
-      }
-      res.setHeader('Content-Encoding', 'gzip');
-      res.setHeader('Content-Length', compressed.length);
-      res.write = originalWrite;
-      res.end = originalEnd;
-      originalEnd.call(this, compressed, ...args);
-    });
-  };
-
-  next();
-});
-
 app.use(helmet());
 app.use(cors({
   origin: '*', // Configure this for your Flutter app domain/IP in production
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With'],
+  credentials: true
 }));
 
 app.use(express.json());
@@ -118,9 +74,27 @@ app.get('/', (req, res) => {
 });
 
 app.use((err, req, res, next) => {
+  // Handle Multer errors (file too large, etc.) as 400 Bad Request
+  if (err.name === 'MulterError') {
+    return res.status(400).json({
+      success: false,
+      message: `File upload error: ${err.message}`,
+      code: err.code
+    });
+  }
+
+  // Handle specific validation errors or user errors
   const statusCode = res.statusCode === 200 ? 500 : res.statusCode;
+
+  // Log critical errors in development
+  if (process.env.NODE_ENV !== 'production' || statusCode === 500) {
+    console.error(`[Error] ${req.method} ${req.url}:`, err.message);
+    if (err.stack) console.error(err.stack);
+  }
+
   res.status(statusCode).json({
-    message: err.message,
+    success: false,
+    message: err.message || 'Internal Server Error',
     stack: process.env.NODE_ENV === 'production' ? null : err.stack,
   });
 });

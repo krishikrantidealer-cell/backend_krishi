@@ -317,7 +317,7 @@ exports.getEvents = async (req, res, next) => {
     let usersList = [];
     if (userOrConditions.length > 0) {
       usersList = await User.find({ $or: userOrConditions })
-        .select('firstName lastName phoneNumber shopName role email kycStatus')
+        .select('firstName lastName phoneNumber shopName role email kycStatus userType')
         .lean();
     }
 
@@ -339,7 +339,8 @@ exports.getEvents = async (req, res, next) => {
           phoneNumber: matchedUser.phoneNumber,
           shopName: matchedUser.shopName,
           role: matchedUser.role,
-          kycStatus: matchedUser.kycStatus
+          kycStatus: matchedUser.kycStatus,
+          userType: matchedUser.userType
         } : null
       };
     });

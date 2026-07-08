@@ -340,6 +340,16 @@ class OrderService {
     if (filters.status) query.orderStatus = filters.status;
     if (filters.paymentStatus) query.paymentStatus = filters.paymentStatus;
 
+    if (filters.startDate || filters.endDate) {
+      query.placedAt = {};
+      if (filters.startDate) query.placedAt.$gte = new Date(filters.startDate);
+      if (filters.endDate) {
+        const end = new Date(filters.endDate);
+        end.setHours(23, 59, 59, 999);
+        query.placedAt.$lte = end;
+      }
+    }
+
     const targetUser = filters.userId || filters.user;
 
     if (targetUser) {
@@ -349,7 +359,9 @@ class OrderService {
       } else {
         query.user = targetUser;
       }
-    } else if (filters.users && filters.users.length > 0) {
+    } else if (filters.users) {
+      // If users array is provided (even if empty), we MUST filter by it.
+      // An empty array means the sales agent has no assigned users, so they should see no orders.
       query.user = { $in: filters.users };
     }
     

@@ -45,6 +45,12 @@ class NotificationService {
         return;
       }
 
+      // Check if Firebase is properly initialized
+      if (!admin.apps.length) {
+        console.warn("Firebase Admin not initialized. Skipping push notification.");
+        return;
+      }
+
       const message = {
         token: user.fcmToken,
         notification: {
@@ -68,6 +74,11 @@ class NotificationService {
     try {
       const user = await User.findById(userId);
       if (!user || !user.fcmToken) return;
+
+      if (!admin.apps.length) {
+        console.warn("Firebase Admin not initialized. Skipping marketing notification.");
+        return;
+      }
 
       const message = {
         token: user.fcmToken,

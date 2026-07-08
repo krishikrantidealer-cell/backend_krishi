@@ -21,9 +21,9 @@ const fileFilter = (req, file, cb) => {
 
 const upload = multer({
   storage: storage,
-  fileFilter: fileFilter,
+  // Accept all files here and validate in the controller to prevent connection resets
   limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB for original high-res photos
+    fileSize: 15 * 1024 * 1024, // Increased to 15MB
   },
 });
 

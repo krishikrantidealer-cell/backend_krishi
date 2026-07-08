@@ -207,7 +207,9 @@ exports.getAllOrders = async (req, res, next) => {
     const filters = {
       status: req.query.status,
       paymentStatus: req.query.paymentStatus,
-      userId: req.query.userId || req.query.user || req.query.id
+      userId: req.query.userId || req.query.user || req.query.id,
+      startDate: req.query.startDate,
+      endDate: req.query.endDate
     };
 
     console.log(`[AdminOrder] Fetching orders. Query:`, JSON.stringify(req.query), `Filters:`, JSON.stringify(filters));

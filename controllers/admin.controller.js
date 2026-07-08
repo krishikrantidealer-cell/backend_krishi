@@ -62,40 +62,50 @@ exports.getAuditLogs = async (req, res, next) => {
 
 exports.getDashboardAnalytics = async (req, res, next) => {
   try {
-    const { period = 'Today' } = req.query;
+    const { period = 'Today', startDate: customStart, endDate: customEnd } = req.query;
 
     // Calculate date range based on period
     const now = new Date();
     let startDate = new Date();
+    let endDate = new Date(now);
     let isTotal = false;
 
-    if (period === 'Today') {
+    if (customStart && customEnd) {
+      startDate = new Date(customStart);
+      endDate = new Date(customEnd);
+      // Ensure endDate covers the full day
+      endDate.setHours(23, 59, 59, 999);
+    } else if (period === 'Today') {
       startDate.setHours(0, 0, 0, 0);
     } else if (period === '1 Week') {
       startDate.setDate(now.getDate() - 7);
+      startDate.setHours(0, 0, 0, 0);
     } else if (period === 'Last 1 Month' || period === 'This Month') {
       startDate.setMonth(now.getMonth() - 1);
+      startDate.setHours(0, 0, 0, 0);
     } else if (period === 'Last 3 Months') {
       startDate.setMonth(now.getMonth() - 3);
+      startDate.setHours(0, 0, 0, 0);
     } else if (period === 'Total' || period === 'All Time') {
       isTotal = true;
     } else {
       startDate.setHours(0, 0, 0, 0); // Default Today
     }
 
-    const dateQuery = isTotal ? {} : { createdAt: { $gte: startDate } };
+    const dateQuery = isTotal ? {} : { placedAt: { $gte: startDate, $lte: endDate } };
 
     // 1. User/Dealer counts
     const totalUsers = await User.countDocuments({ role: 'user' });
     const verifiedUsers = await User.countDocuments({ role: 'user', kycStatus: 'verified' });
     const pendingKyc = await User.countDocuments({ role: 'user', kycStatus: { $in: ['processing', 'submitted'] }, isProfileComplete: true });
 
-    // New Leads Correction:
-    // If Total: show users who are not verified yet (prospects)
-    // If Period: show users created in that period
-    const leadQuery = isTotal
-      ? { role: 'user', kycStatus: { $ne: 'verified' } }
-      : { role: 'user', ...dateQuery };
+    // New Leads Correction: Consistent filtering across all periods
+    // We count users with role 'user' who are not verified yet (prospects)
+    const leadQuery = {
+      role: 'user',
+      kycStatus: { $ne: 'verified' },
+      ...dateQuery
+    };
     const newLeads = await User.countDocuments(leadQuery);
 
     // 2. Order metrics

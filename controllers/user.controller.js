@@ -44,82 +44,87 @@ exports.completeProfile = async (req, res, next) => {
 exports.submitKyc = async (req, res, next) => {
   try {
     const kycData = req.body;
+    const userId = req.user._id;
 
-    // Verify user can upload KYC (i.e. not verified or currently under review)
-    const existingUser = await userService.getProfile(req.user._id);
-    const hasSubmitted = existingUser.licenceImage && existingUser.licenceImage.trim() !== '';
-    if (existingUser.isKycComplete || (hasSubmitted && existingUser.kycStatus !== 'rejected')) {
-      return res.status(403).json({
-        success: false,
-        message: 'Documents under review'
-      });
-    }
-
-    // Handle Optional/Fallback GCS Uploads
-    let licenceImageUrl = existingUser.licenceImage;
-    let shopImageUrl = existingUser.shopImage;
-
+    // 1. Validate Files Presence and Types
     const licenceFile = req.files && req.files['licenceImage'] ? req.files['licenceImage'][0] : null;
     const shopFile = req.files && req.files['shopImage'] ? req.files['shopImage'][0] : null;
 
-    if (!licenceFile && (!licenceImageUrl || licenceImageUrl.trim() === '')) {
-      return res.status(400).json({
+    const allowedMimeTypes = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
+
+    if (licenceFile && !allowedMimeTypes.includes(licenceFile.mimetype)) {
+      return res.status(400).json({ success: false, message: 'Invalid file type for license.' });
+    }
+    if (shopFile && !allowedMimeTypes.includes(shopFile.mimetype)) {
+      return res.status(400).json({ success: false, message: 'Invalid file type for shop image.' });
+    }
+
+    // 2. Verify User Status
+    const existingUser = await userService.getProfile(userId);
+    const hasExistingLicence = existingUser.licenceImage && String(existingUser.licenceImage).trim() !== '' && String(existingUser.licenceImage) !== 'null';
+
+    if (existingUser.isKycComplete || (hasExistingLicence && existingUser.kycStatus !== 'rejected' && !licenceFile && !shopFile)) {
+      return res.status(403).json({
         success: false,
-        message: 'Licence image is required'
+        message: 'KYC documents are already under review.'
       });
     }
 
-    if (!shopFile && (!shopImageUrl || shopImageUrl.trim() === '')) {
-      return res.status(400).json({
-        success: false,
-        message: 'Shop image is required'
-      });
+    const userType = kycData.userType || existingUser.userType;
+    let licenceImageUrl = existingUser.licenceImage;
+    let shopImageUrl = existingUser.shopImage;
+
+    if (!licenceFile && !hasExistingLicence) {
+      return res.status(400).json({ success: false, message: 'Licence image is required' });
+    }
+    if (userType !== 'farmer' && !shopFile && !(existingUser.shopImage && String(existingUser.shopImage).trim() !== '' && String(existingUser.shopImage) !== 'null')) {
+      return res.status(400).json({ success: false, message: 'Shop image is required' });
     }
 
-    const uploadPromises = [];
-
+    // 3. Sequential Upload to GCS to avoid OOM on Cloud Run
     if (licenceFile) {
-      uploadPromises.push(
-        processAndUploadKycDocument(
-          licenceFile.buffer,
-          licenceFile.originalname,
-          req.user._id
-        ).then(url => { licenceImageUrl = url; })
-      );
+      try {
+        licenceImageUrl = await processAndUploadKycDocument(licenceFile.buffer, licenceFile.originalname, userId);
+      } catch (err) {
+        console.error('[KYC] Licence upload failed:', err.message);
+        return res.status(500).json({ success: false, message: 'Failed to upload Licence to cloud storage.' });
+      }
     }
 
     if (shopFile) {
-      uploadPromises.push(
-        processAndUploadKycDocument(
-          shopFile.buffer,
-          shopFile.originalname,
-          req.user._id
-        ).then(url => { shopImageUrl = url; })
-      );
+      try {
+        shopImageUrl = await processAndUploadKycDocument(shopFile.buffer, shopFile.originalname, userId);
+      } catch (err) {
+        console.error('[KYC] Shop upload failed:', err.message);
+        return res.status(500).json({ success: false, message: 'Failed to upload Shop image to cloud storage.' });
+      }
     }
 
-    await Promise.all(uploadPromises);
-
-    // Add the GCS URLs to kycData before calling service
+    // 4. Update User Record
     kycData.licenceImage = licenceImageUrl;
     kycData.shopImage = shopImageUrl;
 
-    const user = await userService.submitKyc(req.user._id, kycData);
+    const user = await userService.submitKyc(userId, kycData);
 
+    // 5. Success Broadcast
     try {
       const { broadcastToRoles } = require('../services/websocket.service');
       broadcastToRoles(['admin', 'sales'], { type: 'LEADS_UPDATE' });
-    } catch (wsErr) {
-      console.error('[WS] Failed to broadcast KYC submission:', wsErr.message);
-    }
+    } catch (wsErr) {}
 
-    res.json({
+    return res.status(200).json({
       success: true,
       message: 'KYC submitted successfully',
-      user
+      user: {
+        id: user._id,
+        kycStatus: user.kycStatus
+      }
     });
   } catch (error) {
-    next(error);
+    console.error('[KYC Critical Error]:', error);
+    if (!res.headersSent) {
+      return res.status(500).json({ success: false, message: 'An unexpected error occurred during KYC submission.' });
+    }
   }
 };
 
@@ -220,14 +225,19 @@ exports.adminUpdateKycStatus = async (req, res, next) => {
     const user = await userService.updateKycStatus(userId, status, reason);
 
     // Audit critical sales/admin action
-    auditService.logAction({
-      adminId: req.user._id,
-      adminEmail: req.user.email,
-      action: `KYC_${status.toUpperCase()}`,
-      targetId: userId,
-      targetModel: 'User',
-      changes: { after: { kycStatus: status, reason } }
-    }, req);
+    // Wrapped in its own try/catch to ensure audit logging never breaks the main flow
+    try {
+      auditService.logAction({
+        adminId: req.user._id,
+        adminEmail: req.user.email,
+        action: `KYC_${status.toUpperCase()}`,
+        targetId: user._id, // Use the ID from the fetched user object for reliability
+        targetModel: 'User',
+        changes: { after: { kycStatus: status, reason } }
+      }, req);
+    } catch (auditErr) {
+      console.error('[Audit] Failed to log KYC status update:', auditErr.message);
+    }
 
     try {
       const { broadcastToRoles, sendToUser } = require('../services/websocket.service');
@@ -434,7 +444,8 @@ exports.adminSubmitKyc = async (req, res, next) => {
     kycData.licenceImage = licenceImageUrl;
     kycData.shopImage = shopImageUrl;
 
-    const user = await userService.submitKyc(userId, kycData);
+    const keepVerified = existingUser.kycStatus === 'verified';
+    const user = await userService.submitKyc(userId, kycData, keepVerified);
 
     try {
       const { broadcastToRoles } = require('../services/websocket.service');

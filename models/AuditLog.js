@@ -8,8 +8,7 @@ const auditLogSchema = new mongoose.Schema({
     index: true
   },
   adminEmail: {
-    type: String,
-    required: true
+    type: String
   },
   action: {
     type: String,

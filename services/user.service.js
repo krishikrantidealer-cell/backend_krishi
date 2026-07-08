@@ -109,18 +109,22 @@ class UserService {
 
     return user;
   }
-  async submitKyc(userId, kycData) {
+  async submitKyc(userId, kycData, keepVerified = false) {
     const { userType, shopName, gstNumber, licenceImage, shopImage } = kycData;
 
-    if (!userType || !shopName) {
-      throw new Error('User type and shop name are required');
+    if (!userType) {
+      throw new Error('User type is required');
+    }
+
+    if (userType !== 'farmer' && !shopName) {
+      throw new Error('Shop name is required');
     }
 
     if (!licenceImage || typeof licenceImage !== 'string' || licenceImage.trim() === '') {
       throw new Error('Licence image is required');
     }
 
-    if (!shopImage || typeof shopImage !== 'string' || shopImage.trim() === '') {
+    if (userType !== 'farmer' && (!shopImage || typeof shopImage !== 'string' || shopImage.trim() === '')) {
       throw new Error('Shop image is required');
     }
 
@@ -133,8 +137,8 @@ class UserService {
           gstNumber,
           licenceImage,
           shopImage,
-          kycStatus: 'processing',
-          isKycComplete: false
+          kycStatus: keepVerified ? 'verified' : 'processing',
+          isKycComplete: keepVerified ? true : false
         }
       },
       { new: true, runValidators: true }
@@ -205,36 +209,48 @@ class UserService {
   }
 
   async updateKycStatus(userId, status, reason = '') {
-    const user = await User.findById(userId);
+    const mongoose = require('mongoose');
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      throw new Error('Invalid User ID');
+    }
+
+    const updateData = {
+      kycStatus: status,
+      isKycComplete: status === 'verified',
+      isVerified: status === 'verified',
+      status: status === 'verified' ? 'verified' : (status === 'rejected' ? 'rejected' : status)
+    };
+
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { $set: updateData },
+      { new: true, runValidators: false } // Bypasses strict full-document validation for speed and robustness
+    );
+
     if (!user) throw new Error('User not found');
 
-    user.kycStatus = status;
-    if (status === 'verified') {
-      user.isKycComplete = true;
-    } else if (status === 'rejected') {
-      user.isKycComplete = false;
+    // Trigger Notification safely (Non-blocking background task)
+    try {
+      let title = "KYC Update 📄";
+      let body = "";
+
+      if (status === 'verified') {
+        body = "Congratulations! Your KYC has been verified. You can now place orders.";
+      } else if (status === 'rejected') {
+        body = `KYC Rejected. ${reason || "Please check your documents and re-upload."}`;
+      } else {
+        body = `Your KYC status has been updated to: ${status}`;
+      }
+
+      notificationService.sendUtilityNotification(
+        userId,
+        title,
+        body,
+        '/profile'
+      ).catch(err => console.error("[Notification] Service error:", err.message));
+    } catch (notifyErr) {
+      console.error("[Notification] Setup error:", notifyErr.message);
     }
-
-    await user.save();
-
-    // Trigger Notification
-    let title = "KYC Update 📄";
-    let body = "";
-
-    if (status === 'verified') {
-      body = "Congratulations! Your KYC has been verified. You can now place orders.";
-    } else if (status === 'rejected') {
-      body = `KYC Rejected. ${reason || "Please check your documents and re-upload."}`;
-    } else {
-      body = `Your KYC status has been updated to: ${status}`;
-    }
-
-    notificationService.sendUtilityNotification(
-      userId,
-      title,
-      body,
-      '/profile'
-    ).catch(err => console.error("Error sending KYC notification:", err));
 
     return user;
   }

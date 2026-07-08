@@ -3,6 +3,9 @@ const path = require('path');
 const sharp = require('sharp');
 const dotenv = require('dotenv');
 
+// Disable sharp cache to prevent memory leaks and OOM in memory-constrained environments like Cloud Run
+sharp.cache(false);
+
 dotenv.config({ path: path.join(__dirname, '../.env') });
 
 let storage;
@@ -114,20 +117,59 @@ const processAndUploadProductImage = async (fileBuffer, originalName, productId)
 };
 
 /**
- * Processes and uploads a KYC document (licence/identity) as WebP
+ * Processes and uploads a KYC document (licence/identity).
+ * Handles images with Sharp (conversion to WebP) and uploads other documents (PDF, etc.) as-is.
  */
 const processAndUploadKycDocument = async (fileBuffer, originalName, userId) => {
-  const timestamp = Date.now();
-  const folder = `kyc/${userId}`;
-  const extension = path.extname(originalName);
-  const baseName = path.basename(originalName, extension);
-  
-  const processedBuffer = await sharp(fileBuffer)
-    .webp({ quality: 85 })
-    .toBuffer();
+  try {
+    const timestamp = Date.now();
+    const folder = `kyc/${userId}`;
+    const extension = path.extname(originalName).toLowerCase();
+    const baseName = path.basename(originalName, extension).replace(/[^a-z0-9]/gi, '_').toLowerCase();
 
-  const destination = `${folder}/${baseName}_${timestamp}.webp`;
-  return uploadToGCS(processedBuffer, destination, 'image/webp');
+    // List of image extensions that Sharp can process
+    const imageExtensions = ['.jpg', '.jpeg', '.png', '.webp', '.avif', '.tiff'];
+
+    if (imageExtensions.includes(extension)) {
+      try {
+        const processedBuffer = await sharp(fileBuffer)
+          .webp({ quality: 85 })
+          .toBuffer();
+
+        const destination = `${folder}/${baseName}_${timestamp}.webp`;
+        return uploadToGCS(processedBuffer, destination, 'image/webp');
+      } catch (sharpError) {
+        console.error(`[Sharp] Failed to process image ${originalName}:`, sharpError.message);
+        // Fallback: upload original file if Sharp fails
+        const destination = `${folder}/${baseName}_${timestamp}${extension}`;
+        return uploadToGCS(fileBuffer, destination, getMimeTypeFromExt(extension));
+      }
+    } else {
+      // For PDF, Word, or other non-image documents, upload as-is
+      const destination = `${folder}/${baseName}_${timestamp}${extension}`;
+      return uploadToGCS(fileBuffer, destination, getMimeTypeFromExt(extension));
+    }
+  } catch (err) {
+    console.error(`[GCS] Error in processAndUploadKycDocument for ${originalName}:`, err.message);
+    throw err;
+  }
+};
+
+/**
+ * Helper to determine MIME type from extension since mime-types package might not be available
+ */
+const getMimeTypeFromExt = (ext) => {
+  const map = {
+    '.pdf': 'application/pdf',
+    '.doc': 'application/msword',
+    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.png': 'image/png',
+    '.webp': 'image/webp',
+    '.txt': 'text/plain'
+  };
+  return map[ext] || 'application/octet-stream';
 };
 
 /**
