@@ -5,6 +5,8 @@ const User = require('../models/User');
 const orderService = require('./order.service');
 const notificationService = require('./notification.service');
 const whatsappService = require('./whatsapp.service');
+const pushNotificationSegmentService = require('./pushNotificationSegment.service');
+const whatsappAutomationService = require('./whatsappAutomation.service');
 
 /**
  * Background service to handle automated tasks without webhooks
@@ -183,15 +185,75 @@ exports.initCronJobs = () => {
     }
   };
 
+  // 5. Scheduled Segment Notifications (Every 30 mins)
+  const runScheduledSegmentNotifications = async () => {
+    try {
+      // Get current time in IST
+      const now = new Date();
+      const istTime = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+      const hours = istTime.getHours();
+      const minutes = istTime.getMinutes();
+
+      console.log(`[Cron] Checking Scheduled Notifications (IST Time: ${hours}:${minutes})`);
+
+      // 9:00 AM - KYC reminders
+      if (hours === 9 && minutes < 30) {
+        await pushNotificationSegmentService.trigger9AMJobs();
+      }
+
+      // 11:30 AM - First order reminders
+      if (hours === 11 && minutes >= 30 && minutes < 60) {
+        await pushNotificationSegmentService.trigger1130AMJobs();
+      }
+
+      // 2:00 PM - Cart & checkout recovery
+      if (hours === 14 && minutes < 30) {
+        await pushNotificationSegmentService.trigger2PMJobs();
+      }
+
+      // 5:30 PM - New arrivals & offers
+      if (hours === 17 && minutes >= 30 && minutes < 60) {
+        await pushNotificationSegmentService.trigger530PMJobs();
+      }
+
+      // 8:00 PM - Urgency notifications
+      if (hours === 20 && minutes < 30) {
+        await pushNotificationSegmentService.trigger8PMJobs();
+      }
+
+    } catch (error) {
+      console.error('[Cron] Error in Scheduled Segment Notifications cron job:', error);
+    }
+  };
+
+  // 6. WhatsApp Automation Task (Every hour)
+  const runWhatsAppAutomation = async () => {
+    try {
+      console.log('[Cron] Running WhatsApp Automation...');
+      await whatsappAutomationService.sendWelcomeMessage();
+      await whatsappAutomationService.sendKycReminders();
+      await whatsappAutomationService.sendCartReminders();
+      await whatsappAutomationService.sendCheckoutReminders();
+      await whatsappAutomationService.sendWinBackMessages();
+      console.log('[Cron] WhatsApp Automation completed.');
+    } catch (error) {
+      console.error('[Cron] Error in WhatsApp Automation cron job:', error);
+    }
+  };
+
   // Execute immediately on startup
   runOrderSync();
   runAbandonedCartCheck();
   runAbandonedCheckoutCheck();
   runKycUrgencyCheck();
+  runScheduledSegmentNotifications();
+  runWhatsAppAutomation();
 
   // Set intervals
   setInterval(runOrderSync, 20 * 60 * 1000);
   setInterval(runAbandonedCartCheck, 60 * 60 * 1000);
   setInterval(runAbandonedCheckoutCheck, 30 * 60 * 1000);
   setInterval(runKycUrgencyCheck, 30 * 60 * 1000);
+  setInterval(runScheduledSegmentNotifications, 30 * 60 * 1000);
+  setInterval(runWhatsAppAutomation, 60 * 60 * 1000);
 };

@@ -97,19 +97,25 @@ class WhatsAppService {
   async notifyAbandonedCheckout(user, checkoutSession) {
     if (!user || !user.phoneNumber) return;
     const firstName = user.firstName || 'Customer';
-    // Template: abandoned_checkout_hindi (Vars: 1=Name, 2=Link)
+    const fullName = `${firstName}${user.lastName ? ' ' + user.lastName : ''}`;
+
+    // Template: abandoned_checkout_hindi
+    // Variables: {{1}} = Customer Name, {{2}} = Checkout Link
     return this.sendTemplateMessage(user.phoneNumber, 'abandoned_checkout_hindi', 'hi', [
-      firstName,
-      'https://krishikranti.com/cart'
+      fullName,
+      'https://krishikranti.com/cart' // Link to the cart/checkout
     ]);
   }
 
   async notifyAbandonedCart(user) {
     if (!user || !user.phoneNumber) return;
     const firstName = user.firstName || 'Customer';
-    // Template: abandoned_cart_hindi (Vars: 1=Name, 2=Link)
+    const fullName = `${firstName}${user.lastName ? ' ' + user.lastName : ''}`;
+
+    // Template: abandoned_cart_hindi
+    // Variables: {{1}} = Customer Name, {{2}} = Cart Link
     return this.sendTemplateMessage(user.phoneNumber, 'abandoned_cart_hindi', 'hi', [
-      firstName,
+      fullName,
       'https://krishikranti.com/cart'
     ]);
   }
@@ -153,6 +159,40 @@ class WhatsAppService {
       customerName,
       order.totalAmount
     ]);
+  }
+
+  // --- KYC WORKFLOWS ---
+
+  async notifyKycSubmissionToAdmin(user) {
+    const adminPhone = process.env.WHATSAPP_ADMIN_PHONE;
+    if (!adminPhone) return;
+
+    const customerName = (user.firstName || user.lastName)
+      ? `${user.firstName || ''} ${user.lastName || ''}`.trim()
+      : user.shopName || user.phoneNumber;
+
+    // Template: admin_new_kyc_alert (Vars: 1=CustomerName, 2=ShopName)
+    return this.sendTemplateMessage(adminPhone, 'admin_new_kyc_alert', 'en_US', [
+      customerName,
+      user.shopName || 'N/A'
+    ]);
+  }
+
+  async notifyKycStatusUpdate(user, status, reason = '') {
+    if (!user || !user.phoneNumber) return;
+
+    const firstName = user.firstName || 'Customer';
+
+    if (status === 'verified') {
+      // Template: kyc_verified_hindi (Vars: 1=Name)
+      return this.sendTemplateMessage(user.phoneNumber, 'kyc_verified_hindi', 'hi', [firstName]);
+    } else if (status === 'rejected') {
+      // Template: kyc_rejected_hindi (Vars: 1=Name, 2=Reason)
+      return this.sendTemplateMessage(user.phoneNumber, 'kyc_rejected_hindi', 'hi', [
+        firstName,
+        reason || 'Documents were not clear.'
+      ]);
+    }
   }
 }
 

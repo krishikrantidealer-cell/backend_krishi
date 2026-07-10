@@ -78,7 +78,7 @@ const userSchema = new mongoose.Schema({
   // KYC Fields
   userType: {
     type: String,
-    enum: ['retailer', 'distributor', 'wholesaler', 'farmer'],
+    enum: ['retailer', 'distributor', 'wholesaler'],
   },
   shopName: {
     type: String,
@@ -107,6 +107,21 @@ const userSchema = new mongoose.Schema({
   },
   lastKycReminderSentAt: {
     type: Date
+  },
+  lastMarketingNotificationSentAt: {
+    type: Date,
+    index: true
+  },
+  lastWhatsappSentAt: {
+    type: Date,
+    index: true
+  },
+  whatsappSequence: {
+    type: Number,
+    default: 0
+  },
+  lastWhatsappType: {
+    type: String
   },
   assignedAgent: {
     type: mongoose.Schema.Types.ObjectId,

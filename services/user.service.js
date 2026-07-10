@@ -116,7 +116,7 @@ class UserService {
       throw new Error('User type is required');
     }
 
-    if (userType !== 'farmer' && !shopName) {
+    if (!shopName) {
       throw new Error('Shop name is required');
     }
 
@@ -124,7 +124,7 @@ class UserService {
       throw new Error('Licence image is required');
     }
 
-    if (userType !== 'farmer' && (!shopImage || typeof shopImage !== 'string' || shopImage.trim() === '')) {
+    if (!shopImage || typeof shopImage !== 'string' || shopImage.trim() === '') {
       throw new Error('Shop image is required');
     }
 

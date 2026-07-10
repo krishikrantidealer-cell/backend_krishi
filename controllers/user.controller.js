@@ -77,7 +77,7 @@ exports.submitKyc = async (req, res, next) => {
     if (!licenceFile && !hasExistingLicence) {
       return res.status(400).json({ success: false, message: 'Licence image is required' });
     }
-    if (userType !== 'farmer' && !shopFile && !(existingUser.shopImage && String(existingUser.shopImage).trim() !== '' && String(existingUser.shopImage) !== 'null')) {
+    if (!shopFile && !(existingUser.shopImage && String(existingUser.shopImage).trim() !== '' && String(existingUser.shopImage) !== 'null')) {
       return res.status(400).json({ success: false, message: 'Shop image is required' });
     }
 
@@ -110,6 +110,10 @@ exports.submitKyc = async (req, res, next) => {
     try {
       const { broadcastToRoles } = require('../services/websocket.service');
       broadcastToRoles(['admin', 'sales'], { type: 'LEADS_UPDATE' });
+
+      // Notify Admin via WhatsApp
+      const whatsappService = require('../services/whatsapp.service');
+      whatsappService.notifyKycSubmissionToAdmin(user);
     } catch (wsErr) {}
 
     return res.status(200).json({
@@ -223,6 +227,27 @@ exports.adminUpdateKycStatus = async (req, res, next) => {
     }
 
     const user = await userService.updateKycStatus(userId, status, reason);
+
+    // Notify User via WhatsApp & Push
+    try {
+      const whatsappAutomationService = require('../services/whatsappAutomation.service');
+      const notificationService = require('../services/notification.service');
+
+      if (status === 'verified') {
+        await whatsappAutomationService.notifyKycApproved(user);
+        await notificationService.sendUtilityNotification(
+          userId,
+          'KYC Approved! 🎉',
+          'Your account is now verified. You can now see wholesale rates and place orders.',
+          '/profile'
+        );
+      } else {
+        const whatsappService = require('../services/whatsapp.service');
+        await whatsappService.notifyKycStatusUpdate(user, status, reason);
+      }
+    } catch (waErr) {
+      console.error('[Notification] Failed to notify user of KYC update:', waErr.message);
+    }
 
     // Audit critical sales/admin action
     // Wrapped in its own try/catch to ensure audit logging never breaks the main flow

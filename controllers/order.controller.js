@@ -46,7 +46,14 @@ exports.createOrder = async (req, res, next) => {
       }
     );
 
-    // Trigger Utility Notification Automatically (Non-blocking background task)
+    // Trigger Notifications Automatically (Non-blocking background task)
+    const whatsappAutomationService = require('../services/whatsappAutomation.service');
+    const User = require('../models/User');
+
+    User.findById(req.user._id).then(user => {
+      if (user) whatsappAutomationService.notifyOrderConfirmation(user, order).catch(err => console.error("WA Confirm Err:", err));
+    });
+
     notificationService.sendUtilityNotification(
       req.user._id,
       "Order Confirmed! 🎉",
@@ -148,7 +155,16 @@ exports.delhiveryWebhook = async (req, res, next) => {
 
     await order.save();
 
-    // Optional: Trigger background notification for milestone changes
+    // Trigger WhatsApp & Push notifications for milestone changes
+    const whatsappAutomationService = require('../services/whatsappAutomation.service');
+    const User = require('../models/User');
+
+    User.findById(order.user).then(user => {
+      if (!user) return;
+      if (order.orderStatus === 'Shipped') whatsappAutomationService.notifyOrderShipped(user, order).catch(() => {});
+      else if (order.orderStatus === 'Delivered') whatsappAutomationService.notifyOrderDelivered(user, order).catch(() => {});
+    });
+
     notificationService.sendUtilityNotification(
       order.user,
       `Order Update: ${order.orderStatus} 📦`,
@@ -247,6 +263,16 @@ exports.adminUpdateOrderStatus = async (req, res, next) => {
 
     const oldOrder = await Order.findById(id).lean();
     const order = await orderService.updateOrderStatus(id, status, awbNumber, courierName, trackingUrl);
+
+    // Trigger WhatsApp & Push
+    const whatsappAutomationService = require('../services/whatsappAutomation.service');
+    const User = require('../models/User');
+
+    User.findById(order.user).then(user => {
+      if (!user) return;
+      if (status === 'Shipped') whatsappAutomationService.notifyOrderShipped(user, order).catch(() => {});
+      else if (status === 'Delivered') whatsappAutomationService.notifyOrderDelivered(user, order).catch(() => {});
+    });
 
     // Audit Log: Order Status Updated
     auditService.logAction({
@@ -588,7 +614,13 @@ exports.adminCreateOrder = async (req, res, next) => {
       console.error('[Sheets] Failed to append new admin-created order:', err.message)
     );
 
-    // Non-blocking notification to dealer
+    // Non-blocking notification to dealer (WhatsApp & Push)
+    const whatsappAutomationService = require('../services/whatsappAutomation.service');
+    const User = require('../models/User');
+    User.findById(userId).then(user => {
+      if (user) whatsappAutomationService.notifyOrderConfirmation(user, order).catch(err => console.error("WA Admin Order Err:", err));
+    });
+
     notificationService.sendUtilityNotification(
       userId,
       'Order Placed by Sales Agent 🎉',
