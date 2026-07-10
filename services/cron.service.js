@@ -8,6 +8,15 @@ const whatsappService = require('./whatsapp.service');
 const pushNotificationSegmentService = require('./pushNotificationSegment.service');
 const whatsappAutomationService = require('./whatsappAutomation.service');
 
+// Persistent track of daily runs to prevent misses due to server reboots or interval drift
+const lastRunDates = {
+  job9AM: null,
+  job1130AM: null,
+  job2PM: null,
+  job530PM: null,
+  job8PM: null
+};
+
 /**
  * Background service to handle automated tasks without webhooks
  */
@@ -188,36 +197,59 @@ exports.initCronJobs = () => {
   // 5. Scheduled Segment Notifications (Every 30 mins)
   const runScheduledSegmentNotifications = async () => {
     try {
-      // Get current time in IST
-      const now = new Date();
-      const istTime = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-      const hours = istTime.getHours();
-      const minutes = istTime.getMinutes();
+      // Get current time in IST safely using Intl.DateTimeFormat (robust across all Node versions & OS locales)
+      const formatter = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'Asia/Kolkata',
+        hour: 'numeric',
+        minute: 'numeric',
+        hour12: false
+      });
+      const parts = formatter.formatToParts(new Date());
+      const hours = parseInt(parts.find(p => p.type === 'hour').value, 10);
+      const minutes = parseInt(parts.find(p => p.type === 'minute').value, 10);
 
-      console.log(`[Cron] Checking Scheduled Notifications (IST Time: ${hours}:${minutes})`);
+      // We'll track the date string in IST
+      const datePart = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'Asia/Kolkata',
+        year: 'numeric',
+        month: 'numeric',
+        day: 'numeric'
+      }).format(new Date());
 
-      // 9:00 AM - KYC reminders
-      if (hours === 9 && minutes < 30) {
+      console.log(`[Cron] Checking Scheduled Notifications (IST Time: ${hours}:${minutes}, Date: ${datePart})`);
+
+      // 9:00 AM - KYC reminders (Runs once a day, anytime at or after 9:00 AM)
+      if (hours >= 9 && lastRunDates.job9AM !== datePart) {
+        console.log(`[Cron] Triggering 9:00 AM KYC Reminder Job for date ${datePart}`);
+        lastRunDates.job9AM = datePart;
         await pushNotificationSegmentService.trigger9AMJobs();
       }
 
-      // 11:30 AM - First order reminders
-      if (hours === 11 && minutes >= 30 && minutes < 60) {
+      // 11:30 AM - First order reminders (Runs once a day, anytime at or after 11:30 AM)
+      if ((hours > 11 || (hours === 11 && minutes >= 30)) && lastRunDates.job1130AM !== datePart) {
+        console.log(`[Cron] Triggering 11:30 AM First Order Job for date ${datePart}`);
+        lastRunDates.job1130AM = datePart;
         await pushNotificationSegmentService.trigger1130AMJobs();
       }
 
-      // 2:00 PM - Cart & checkout recovery
-      if (hours === 14 && minutes < 30) {
+      // 2:00 PM - Cart & checkout recovery (Runs once a day, anytime at or after 2:00 PM)
+      if (hours >= 14 && lastRunDates.job2PM !== datePart) {
+        console.log(`[Cron] Triggering 2:00 PM Cart & Checkout Recovery Job for date ${datePart}`);
+        lastRunDates.job2PM = datePart;
         await pushNotificationSegmentService.trigger2PMJobs();
       }
 
-      // 5:30 PM - New arrivals & offers
-      if (hours === 17 && minutes >= 30 && minutes < 60) {
+      // 5:30 PM - New arrivals & offers (Runs once a day, anytime at or after 5:30 PM)
+      if ((hours > 17 || (hours === 17 && minutes >= 30)) && lastRunDates.job530PM !== datePart) {
+        console.log(`[Cron] Triggering 5:30 PM New Arrivals Job for date ${datePart}`);
+        lastRunDates.job530PM = datePart;
         await pushNotificationSegmentService.trigger530PMJobs();
       }
 
-      // 8:00 PM - Urgency notifications
-      if (hours === 20 && minutes < 30) {
+      // 8:00 PM - Urgency notifications (Runs once a day, anytime at or after 8:00 PM)
+      if (hours >= 20 && lastRunDates.job8PM !== datePart) {
+        console.log(`[Cron] Triggering 8:00 PM Urgency Job for date ${datePart}`);
+        lastRunDates.job8PM = datePart;
         await pushNotificationSegmentService.trigger8PMJobs();
       }
 

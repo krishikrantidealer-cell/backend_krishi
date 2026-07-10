@@ -78,7 +78,7 @@ const userSchema = new mongoose.Schema({
   // KYC Fields
   userType: {
     type: String,
-    enum: ['retailer', 'distributor', 'wholesaler'],
+    enum: ['retailer'],
   },
   shopName: {
     type: String,

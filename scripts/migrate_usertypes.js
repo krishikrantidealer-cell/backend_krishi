@@ -16,36 +16,24 @@ async function main() {
 
   const User = require('../models/User');
 
-  // 1. Update "Retailer and Distributor" to "retailer"
+  // 1. Migrate legacy userTypes ('distributor', 'wholesaler', 'Retailer and Distributor') to 'retailer'
   const res1 = await User.updateMany(
-    { userType: 'Retailer and Distributor' },
+    { userType: { $in: ['Retailer and Distributor', 'distributor', 'wholesaler', 'Distributor', 'Wholesaler'] } },
     { $set: { userType: 'retailer' } }
   );
-  console.log(`Updated ${res1.modifiedCount} users from "Retailer and Distributor" to "retailer".`);
+  console.log(`Updated ${res1.modifiedCount} legacy user types to "retailer".`);
 
-  // 2. Normalize case for standard types
+  // 2. Normalize case for standard types (retailer)
   const resRetailer = await User.updateMany(
     { userType: { $regex: /^retailer$/i, $ne: 'retailer' } },
     { $set: { userType: 'retailer' } }
   );
   console.log(`Normalized case for ${resRetailer.modifiedCount} "retailer" users.`);
 
-  const resDistributor = await User.updateMany(
-    { userType: { $regex: /^distributor$/i, $ne: 'distributor' } },
-    { $set: { userType: 'distributor' } }
-  );
-  console.log(`Normalized case for ${resDistributor.modifiedCount} "distributor" users.`);
-
-  const resWholesaler = await User.updateMany(
-    { userType: { $regex: /^wholesaler$/i, $ne: 'wholesaler' } },
-    { $set: { userType: 'wholesaler' } }
-  );
-  console.log(`Normalized case for ${resWholesaler.modifiedCount} "wholesaler" users.`);
-
   // 3. For any other invalid/empty userType, check if we want to fallback or leave
   const invalidUsers = await User.find({
     role: 'user',
-    userType: { $nin: ['retailer', 'distributor', 'wholesaler'] }
+    userType: { $ne: 'retailer' }
   });
 
   if (invalidUsers.length > 0) {
@@ -53,13 +41,13 @@ async function main() {
     const resFallback = await User.updateMany(
       {
         role: 'user',
-        userType: { $nin: ['retailer', 'distributor', 'wholesaler'] }
+        userType: { $ne: 'retailer' }
       },
       { $set: { userType: 'retailer' } }
     );
     console.log(`Updated ${resFallback.modifiedCount} users to "retailer" fallback.`);
   } else {
-    console.log('All users now have valid userTypes: retailer, distributor, or wholesaler.');
+    console.log('All users now have valid userType: retailer.');
   }
 
   process.exit(0);

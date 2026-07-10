@@ -65,7 +65,7 @@ router.post(
     { name: 'shopImage', maxCount: 1 }
   ]),
   [
-    body('userType').isIn(['retailer', 'distributor', 'wholesaler']).withMessage('Invalid user type'),
+    body('userType').isIn(['retailer']).withMessage('Invalid user type'),
     body('shopName')
       .trim()
       .notEmpty()
