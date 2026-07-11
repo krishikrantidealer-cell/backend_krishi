@@ -12,8 +12,8 @@ exports.createEvent = async (req, res, next) => {
     const { user, eventType, device, details, payload, timestamp, role } = req.body;
 
     const event = await Event.create({
-      user,
-      eventType,
+      user: user || 'anonymous',
+      eventType: eventType || 'unknown',
       device,
       details,
       payload,
@@ -118,11 +118,11 @@ exports.ingestBatch = async (req, res, next) => {
 
     // Map to model with deduplication support
     const preparedEvents = events.map(e => ({
-      user: e.user,
+      user: e.user || 'anonymous',
       eventId: e.eventId,
       sessionId: e.sessionId,
       schemaVersion: e.schemaVersion || '1.0.0',
-      eventType: e.event || e.eventType,
+      eventType: e.event || e.eventType || 'unknown',
       device: e.device || e.platform,
       details: e.details || '',
       payload: e.properties || e.payload || {},
@@ -161,12 +161,12 @@ exports.ingestBatch = async (req, res, next) => {
 
       const presenceData = {
         lastSeen: new Date().toISOString(),
-        currentScreen: lastEvent.properties?.screen || lastEvent.payload?.screen || 'Active',
-        action: lastEvent.event || lastEvent.eventType,
-        device: lastEvent.device || lastEvent.platform || 'Unknown',
-        sessionId: lastEvent.sessionId || 'unknown',
-        userName,
-        userPhone
+        currentScreen: String(lastEvent.properties?.screen || lastEvent.payload?.screen || 'Active'),
+        action: String(lastEvent.event || lastEvent.eventType || 'unknown'),
+        device: String(lastEvent.device || lastEvent.platform || 'Unknown'),
+        sessionId: String(lastEvent.sessionId || 'unknown'),
+        userName: String(userName || 'Unknown'),
+        userPhone: String(userPhone || 'N/A')
       };
 
       await redisClient.hSet(presenceKey, presenceData);

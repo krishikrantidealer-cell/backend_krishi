@@ -37,6 +37,19 @@ const protect = async (req, res, next) => {
 
     req.user = user;
     req.deviceId = decoded.deviceId;
+
+    // Restrict the guest user (9999999999) to read-only requests, except for logout
+    const isWriteRequest = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method);
+    if (isWriteRequest && user.phoneNumber === '9999999999') {
+      const isLogout = req.path && req.path.includes('logout');
+      if (!isLogout) {
+        return res.status(403).json({
+          success: false,
+          message: 'Guest account is restricted to read-only access. Please log in with your own phone number.'
+        });
+      }
+    }
+
     next();
   } catch (error) {
     res.status(401).json({ message: 'Not authorized' });

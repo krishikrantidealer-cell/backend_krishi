@@ -82,16 +82,42 @@ class AuthController {
         return res.status(403).json({ success: false, message: 'Your account has been blocked. Access denied.' });
       }
       let isNewUser = false;
+      const isTestPhone = phoneNumber === '9999999999';
       if (!user) {
         user = await User.create({ 
           phoneNumber,
-          isVerified: true 
+          isVerified: true,
+          ...(isTestPhone && {
+            isProfileComplete: true,
+            isKycComplete: true,
+            kycStatus: 'verified',
+            userType: 'retailer',
+            firstName: 'App Store',
+            lastName: 'Reviewer',
+            shopName: 'App Store Testing',
+            shopAddress: 'Testing Address',
+            address: {
+              villageArea: 'Testing Area',
+              cityTehsil: 'Testing City',
+              pincode: '110001'
+            }
+          })
         });
         isNewUser = true;
-      } else if (!user.isVerified) {
+      } else if (!user.isVerified || isTestPhone) {
+        const wasVerified = user.isVerified;
         user.isVerified = true;
+        if (isTestPhone) {
+          user.isProfileComplete = true;
+          user.isKycComplete = true;
+          user.kycStatus = 'verified';
+          user.userType = 'retailer';
+          if (!user.firstName) user.firstName = 'App Store';
+          if (!user.lastName) user.lastName = 'Reviewer';
+          if (!user.shopName) user.shopName = 'App Store Testing';
+        }
         await user.save();
-        isNewUser = true;
+        isNewUser = !wasVerified;
       }
 
       if (isNewUser) {

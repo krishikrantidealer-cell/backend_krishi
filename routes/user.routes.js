@@ -8,6 +8,7 @@ const upload = require('../middlewares/upload.middleware');
 
 const router = express.Router();
 
+
 // All user routes are protected
 router.use(protect);
 
@@ -19,6 +20,7 @@ router.get('/notifications', userController.getMyNotifications);
 router.put('/notifications/read', userController.markNotificationsAsRead);
 
 router.get('/profile', userController.getProfile);
+router.delete('/me', userController.deleteSelfAccount);
 
 // Edit Profile API
 router.patch(

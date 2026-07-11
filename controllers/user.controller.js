@@ -677,3 +677,36 @@ exports.markNotificationsAsRead = async (req, res, next) => {
     next(error);
   }
 };
+
+exports.deleteSelfAccount = async (req, res, next) => {
+  try {
+    const userId = req.user._id;
+    await userService.deleteUser(userId);
+
+    // Audit Log: Account Self-Deleted
+    auditService.logAction({
+      adminId: userId,
+      adminEmail: req.user.email || 'self-delete',
+      action: 'ACCOUNT_SELF_DELETED',
+      targetId: userId,
+      targetModel: 'User',
+      changes: { before: { name: `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim(), phone: req.user.phoneNumber } }
+    }, req);
+
+    try {
+      const { sendToAll } = require('../services/websocket.service');
+      sendToAll({ type: 'LEADS_UPDATE' });
+    } catch (wsErr) {
+      console.error('[WS] Failed to broadcast user self-deletion:', wsErr.message);
+    }
+
+    res.json({
+      success: true,
+      message: 'Account deleted successfully'
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+

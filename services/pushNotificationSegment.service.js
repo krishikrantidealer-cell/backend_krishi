@@ -233,13 +233,28 @@ class PushNotificationSegmentService {
     // Randomly pick Seasonal or Trust to keep it fresh
     const type = Math.random() > 0.5 ? 'SEASONAL' : 'TRUST';
     const template = this.getNotificationForSegment(type);
-    const users = await User.find({ fcmToken: { $exists: true }, lastMarketingNotificationSentAt: { $lt: new Date(Date.now() - 24*60*60*1000) } }).limit(200);
+    const users = await User.find({
+      fcmToken: { $exists: true, $ne: null, $ne: '' },
+      $or: [
+        { lastMarketingNotificationSentAt: { $exists: false } },
+        { lastMarketingNotificationSentAt: { $lt: new Date(Date.now() - 24 * 60 * 60 * 1000) } }
+      ]
+    }).limit(200);
+    console.log(`[SegmentService] 5:30 PM standard marketing (${type}) matched ${users.length} users with tokens.`);
     for(const u of users) { await notificationService.sendMarketingNotification(u._id, template.title, template.body, '/'); u.lastMarketingNotificationSentAt = new Date(); await u.save(); }
   }
   async trigger8PMJobs() {
     await this.sendToSegment('G'); await this.sendToSegment('J');
     const template = this.getNotificationForSegment('URGENCY');
-    const users = await User.find({ status: 'prospect', fcmToken: { $exists: true }, lastMarketingNotificationSentAt: { $lt: new Date(Date.now() - 24*60*60*1000) } }).limit(200);
+    const users = await User.find({
+      status: 'prospect',
+      fcmToken: { $exists: true, $ne: null, $ne: '' },
+      $or: [
+        { lastMarketingNotificationSentAt: { $exists: false } },
+        { lastMarketingNotificationSentAt: { $lt: new Date(Date.now() - 24 * 60 * 60 * 1000) } }
+      ]
+    }).limit(200);
+    console.log(`[SegmentService] 8:00 PM standard urgency marketing matched ${users.length} users with tokens.`);
     for(const u of users) { await notificationService.sendMarketingNotification(u._id, template.title, template.body, '/'); u.lastMarketingNotificationSentAt = new Date(); await u.save(); }
   }
 }
