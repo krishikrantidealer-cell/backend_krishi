@@ -41,7 +41,7 @@ class UserService {
     const baseQuery = User.find(query)
       .populate('assignedAgent', 'firstName lastName phoneNumber email')
       .select('-password')
-      .sort({ createdAt: -1 });
+      .sort(filters.trash === 'true' || filters.trash === true ? { deletedAt: -1 } : { createdAt: -1 });
 
     if (limit > 0) {
       baseQuery.skip(skip).limit(limit);

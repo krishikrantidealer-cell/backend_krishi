@@ -8,7 +8,7 @@ const { redisClient } = require('../config/redis');
 
 exports.getAuditLogs = async (req, res, next) => {
   try {
-    const { adminEmail, limit = 50, before, role } = req.query;
+    const { adminEmail, limit = 50, before, role, search, action, targetModel, startDate, endDate } = req.query;
     const query = {};
 
     if (adminEmail) {
@@ -26,6 +26,52 @@ exports.getAuditLogs = async (req, res, next) => {
 
     if (before) {
       query.timestamp = { $lt: new Date(before) };
+    }
+
+    if (startDate || endDate) {
+      query.timestamp = query.timestamp || {};
+      if (startDate) {
+        query.timestamp.$gte = new Date(startDate);
+      }
+      if (endDate) {
+        query.timestamp.$lte = new Date(endDate);
+      }
+    }
+
+    if (action && action !== 'All') {
+      const act = action.toLowerCase();
+      if (act === 'create') {
+        query.action = { $regex: /create|add/i };
+      } else if (act === 'update') {
+        query.action = { $regex: /update|edit/i };
+      } else if (act === 'delete') {
+        query.action = { $regex: /delete|remove/i };
+      } else if (act === 'security') {
+        query.action = { $regex: /login|security|auth/i };
+      }
+    }
+
+    if (targetModel && targetModel !== 'All') {
+      const mod = targetModel.toLowerCase();
+      if (mod === 'kyc') {
+        query.targetModel = 'User';
+        query.action = { $regex: /kyc/i };
+      } else if (mod === 'user') {
+        query.targetModel = 'User';
+      } else if (mod === 'order') {
+        query.targetModel = 'Order';
+      } else if (mod === 'product') {
+        query.targetModel = 'Product';
+      }
+    }
+
+    if (search) {
+      const searchRegex = new RegExp(search, 'i');
+      query.$or = [
+        { adminEmail: searchRegex },
+        { action: searchRegex },
+        { targetModel: searchRegex }
+      ];
     }
 
     const logs = await AuditLog.find(query)
