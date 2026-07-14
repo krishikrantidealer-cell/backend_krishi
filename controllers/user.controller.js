@@ -205,13 +205,17 @@ exports.getAllUsers = async (req, res, next) => {
   try {
     const filters = {
       role: req.query.role,
-      kycStatus: req.query.kycStatus
+      kycStatus: req.query.kycStatus,
+      trash: req.query.trash,
+      search: req.query.search,
+      page: req.query.page,
+      limit: req.query.limit
     };
     if (req.user.role === 'sales') {
       filters.assignedAgent = req.user._id;
     }
-    const users = await userService.getAllUsers(filters);
-    res.json({ success: true, users });
+    const { users, totalCount, hasMore } = await userService.getAllUsers(filters);
+    res.json({ success: true, users, totalCount, hasMore });
   } catch (error) {
     next(error);
   }
@@ -570,6 +574,117 @@ exports.adminDeleteUser = async (req, res, next) => {
     res.json({
       success: true,
       message: 'User deleted successfully'
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.adminRestoreUser = async (req, res, next) => {
+  try {
+    const { userId } = req.params;
+    const User = require('../models/User');
+    const targetUser = await User.findById(userId);
+    if (!targetUser) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Authorization check for sales agents
+    if (req.user.role === 'sales') {
+      if (!targetUser.assignedAgent || targetUser.assignedAgent.toString() !== req.user._id.toString()) {
+        return res.status(403).json({
+          success: false,
+          message: 'Not authorized to restore this user. Only assigned agents or admins can restore.'
+        });
+      }
+    }
+
+    const restoredUser = await userService.restoreUser(userId);
+
+    // Audit Log: Lead/Dealer Restored
+    auditService.logAction({
+      adminId: req.user._id,
+      adminEmail: req.user.email,
+      action: 'USER_RESTORED',
+      targetId: userId,
+      targetModel: 'User',
+      changes: { after: {
+        name: `${restoredUser.firstName || ''} ${restoredUser.lastName || ''}`.trim(),
+        phone: restoredUser.phoneNumber,
+        kycStatus: restoredUser.kycStatus
+      } }
+    }, req);
+
+    try {
+      const { broadcastToRoles } = require('../services/websocket.service');
+      broadcastToRoles(['admin', 'sales'], { type: 'LEADS_UPDATE' });
+      broadcastToRoles(['admin', 'sales'], { type: 'DEALERS_UPDATE' });
+    } catch (wsErr) {
+      console.error('[WS] Failed to broadcast user restoration:', wsErr.message);
+    }
+
+    res.json({
+      success: true,
+      message: 'User restored successfully',
+      user: restoredUser
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.adminPermanentlyDeleteUser = async (req, res, next) => {
+  try {
+    const { userId } = req.params;
+    const User = require('../models/User');
+    const targetUser = await User.findById(userId);
+    if (!targetUser) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Authorization check for sales agents
+    if (req.user.role === 'sales') {
+      if (!targetUser.assignedAgent || targetUser.assignedAgent.toString() !== req.user._id.toString()) {
+        return res.status(403).json({
+          success: false,
+          message: 'Not authorized to delete this user. Only assigned agents or admins can delete.'
+        });
+      }
+    }
+
+    await userService.permanentlyDeleteUser(userId);
+
+    // Audit Log: Lead/Dealer Permanently Deleted
+    auditService.logAction({
+      adminId: req.user._id,
+      adminEmail: req.user.email,
+      action: 'USER_PERMANENTLY_DELETED',
+      targetId: userId,
+      targetModel: 'User',
+      changes: { before: {
+        name: `${targetUser.firstName || ''} ${targetUser.lastName || ''}`.trim(),
+        phone: targetUser.phoneNumber,
+        kycStatus: targetUser.kycStatus
+      } }
+    }, req);
+
+    try {
+      const { broadcastToRoles } = require('../services/websocket.service');
+      broadcastToRoles(['admin', 'sales'], { type: 'LEADS_UPDATE' });
+      broadcastToRoles(['admin', 'sales'], { type: 'DEALERS_UPDATE' });
+    } catch (wsErr) {
+      console.error('[WS] Failed to broadcast user permanent deletion:', wsErr.message);
+    }
+
+    res.json({
+      success: true,
+      message: 'User permanently deleted'
     });
   } catch (error) {
     next(error);

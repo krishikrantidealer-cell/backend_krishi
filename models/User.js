@@ -168,7 +168,15 @@ const userSchema = new mongoose.Schema({
     adminId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     adminName: { type: String },
     createdAt: { type: Date, default: Date.now }
-  }]
+  }],
+  isDeleted: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
+  deletedAt: {
+    type: Date
+  }
 }, {
   timestamps: true
 });

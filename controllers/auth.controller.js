@@ -8,7 +8,7 @@ class AuthController {
     try {
       const { email, password, deviceId } = req.body;
 
-      const user = await User.findOne({ email });
+      const user = await User.findOne({ email, isDeleted: { $ne: true } });
       if (!user) {
         return res.status(401).json({ success: false, message: 'Invalid credentials' });
       }
@@ -77,7 +77,7 @@ class AuthController {
       
       await authService.verifyOTP(phoneNumber, otp);
 
-      let user = await User.findOne({ phoneNumber });
+      let user = await User.findOne({ phoneNumber, isDeleted: { $ne: true } });
       if (user && user.isBlocked) {
         return res.status(403).json({ success: false, message: 'Your account has been blocked. Access denied.' });
       }

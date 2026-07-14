@@ -123,6 +123,12 @@ router.put('/:userId', authorizeRoles('admin', 'sales'), userController.adminUpd
 // Delete User (Admin and Sales)
 router.delete('/:userId', authorizeRoles('admin', 'sales'), userController.adminDeleteUser);
 
+// Restore User (Admin and Sales)
+router.put('/:userId/restore', authorizeRoles('admin', 'sales'), userController.adminRestoreUser);
+
+// Permanently Delete User (Admin and Sales)
+router.delete('/:userId/permanent', authorizeRoles('admin', 'sales'), userController.adminPermanentlyDeleteUser);
+
 // Assign Sales Agent (Admin only)
 router.put('/:userId/assign-agent', authorizeRoles('admin'), userController.adminAssignAgent);
 

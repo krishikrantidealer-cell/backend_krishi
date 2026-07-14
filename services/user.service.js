@@ -5,19 +5,57 @@ class UserService {
   async getAllUsers(filters = {}) {
     // Optionally filter by role, kycStatus, etc.
     const query = {};
+    if (filters.trash === 'true' || filters.trash === true) {
+      query.isDeleted = true;
+    } else {
+      query.isDeleted = { $ne: true };
+    }
     if (filters.role) query.role = filters.role;
-    if (filters.kycStatus) query.kycStatus = filters.kycStatus;
-    if (filters.assignedAgent) query.assignedAgent = filters.assignedAgent;
     
-    return await User.find(query)
+    if (filters.kycStatus) {
+      if (filters.kycStatus === 'not_verified') {
+        query.kycStatus = { $ne: 'verified' };
+      } else {
+        query.kycStatus = filters.kycStatus;
+      }
+    }
+    if (filters.assignedAgent) query.assignedAgent = filters.assignedAgent;
+
+    // Support database keyword search
+    if (filters.search) {
+      const searchRegex = new RegExp(filters.search, 'i');
+      query.$or = [
+        { firstName: searchRegex },
+        { lastName: searchRegex },
+        { email: searchRegex },
+        { phoneNumber: searchRegex }
+      ];
+    }
+    
+    const page = parseInt(filters.page) || 1;
+    const limit = parseInt(filters.limit) || 0; // 0 means no limit
+    const skip = (page - 1) * limit;
+
+    const totalCount = await User.countDocuments(query);
+
+    const baseQuery = User.find(query)
       .populate('assignedAgent', 'firstName lastName phoneNumber email')
       .select('-password')
       .sort({ createdAt: -1 });
+
+    if (limit > 0) {
+      baseQuery.skip(skip).limit(limit);
+    }
+
+    const users = await baseQuery;
+    const hasMore = limit > 0 ? (skip + users.length < totalCount) : false;
+
+    return { users, totalCount, hasMore };
   }
 
   async getProfile(userId) {
     const user = await User.findById(userId);
-    if (!user) {
+    if (!user || user.isDeleted) {
       throw new Error('User not found');
     }
     return user;
@@ -361,6 +399,67 @@ class UserService {
 
     // We only allow deleting users with role 'user' through this method
     // Sales agents have their own delete method
+    if (user.role !== 'user') throw new Error('Cannot delete this type of user here');
+    if (user.isDeleted) throw new Error('User is already deleted');
+
+    // Soft delete: suffix phoneNumber and email with _deleted_<timestamp>
+    const suffix = `_deleted_${Date.now()}`;
+    if (user.phoneNumber) {
+      user.phoneNumber = user.phoneNumber + suffix;
+    }
+    if (user.email) {
+      user.email = user.email + suffix;
+    }
+
+    user.isDeleted = true;
+    user.deletedAt = new Date();
+    await user.save();
+    return true;
+  }
+
+  async restoreUser(userId) {
+    const user = await User.findById(userId);
+    if (!user) throw new Error('User not found');
+    if (!user.isDeleted) throw new Error('User is not deleted');
+
+    // Strip suffix: _deleted_<timestamp>
+    let restoredPhone = user.phoneNumber;
+    let restoredEmail = user.email;
+
+    const deleteRegex = /_deleted_\d+$/;
+    if (restoredPhone && deleteRegex.test(restoredPhone)) {
+      restoredPhone = restoredPhone.replace(deleteRegex, '');
+    }
+    if (restoredEmail && deleteRegex.test(restoredEmail)) {
+      restoredEmail = restoredEmail.replace(deleteRegex, '');
+    }
+
+    // Check unique constraints
+    if (restoredPhone) {
+      const existingPhone = await User.findOne({ phoneNumber: restoredPhone, isDeleted: { $ne: true } });
+      if (existingPhone) {
+        throw new Error('Cannot restore: Phone number is already in use by an active user');
+      }
+    }
+    if (restoredEmail) {
+      const existingEmail = await User.findOne({ email: restoredEmail, isDeleted: { $ne: true } });
+      if (existingEmail) {
+        throw new Error('Cannot restore: Email is already in use by an active user');
+      }
+    }
+
+    user.phoneNumber = restoredPhone;
+    user.email = restoredEmail;
+    user.isDeleted = false;
+    user.deletedAt = undefined;
+    await user.save();
+    return user;
+  }
+
+  async permanentlyDeleteUser(userId) {
+    const user = await User.findById(userId);
+    if (!user) throw new Error('User not found');
+
     if (user.role !== 'user') throw new Error('Cannot delete this type of user here');
 
     // Clean up related data
