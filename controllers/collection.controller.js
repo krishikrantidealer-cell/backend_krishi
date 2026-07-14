@@ -46,13 +46,35 @@ exports.getCollectionsWithProducts = async (req, res, next) => {
       .lean();
 
     const result = await Promise.all(collections.map(async (col) => {
-      const products = await Product.find({
+      let products = await Product.find({
         assignedCollections: col.name,
         availabilityStatus: { $ne: 'Out of Stock' }
       })
-        .select('title brandName technicalName thumbnail variants minPrice maxPrice availabilityStatus averageRating')
-        .limit(limit)
+        .select('title brandName technicalName thumbnail variants minPrice maxPrice availabilityStatus averageRating order customOrders')
         .lean();
+
+      products.sort((a, b) => {
+        const safeName = col.name.replace(/\./g, '_dot_');
+        const orderA = (a.customOrders && a.customOrders[safeName] !== undefined)
+            ? a.customOrders[safeName]
+            : 1000000;
+        const orderB = (b.customOrders && b.customOrders[safeName] !== undefined)
+            ? b.customOrders[safeName]
+            : 1000000;
+
+        if (orderA !== orderB) {
+          return orderA - orderB;
+        }
+        // Fallback to global order
+        const gOrderA = a.order ?? 0;
+        const gOrderB = b.order ?? 0;
+        if (gOrderA !== gOrderB) {
+          return gOrderA - gOrderB;
+        }
+        return a._id.toString().localeCompare(b._id.toString());
+      });
+
+      products = products.slice(0, limit);
 
       return {
         ...col,

@@ -91,10 +91,14 @@ exports.getProducts = async (req, res, next) => {
       filters.maxPrice = { $lte: Number(maxPrice) };
     }
 
+    const rawContextId = subCategoryId || categoryId || collection;
+    const contextId = rawContextId ? rawContextId.toString().replace(/\./g, '_dot_') : undefined;
+
     const result = await productService.getProducts(filters, {
       cursor,
       limit: Number(limit) || 20,
-      search
+      search,
+      contextId
     });
 
     res.json({
@@ -233,13 +237,49 @@ exports.getHomeDiscovery = async (req, res, next) => {
       const subNames = (col.subCollections || []).map(s => s.name);
       const allNames = [col.name, ...subNames];
 
-      const products = await Product.find({ 
+      let products = await Product.find({ 
         assignedCollections: { $in: allNames },
         availabilityStatus: { $ne: 'Out of Stock' } 
       })
-      .select('title brandName technicalName thumbnail variants minPrice maxPrice availabilityStatus averageRating')
-      .limit(10)
+      .select('title brandName technicalName thumbnail variants minPrice maxPrice availabilityStatus averageRating order customOrders')
       .lean();
+
+      // Sort products based on their customOrders for this collection or subcollections
+      products.sort((a, b) => {
+        let orderA = 1000000;
+        let orderB = 1000000;
+
+        for (const name of allNames) {
+          if (a.assignedCollections && a.assignedCollections.includes(name)) {
+            const safeName = name.replace(/\./g, '_dot_');
+            const val = (a.customOrders && a.customOrders[safeName] !== undefined)
+              ? a.customOrders[safeName]
+              : 1000000;
+            if (val < orderA) orderA = val;
+          }
+          if (b.assignedCollections && b.assignedCollections.includes(name)) {
+            const safeName = name.replace(/\./g, '_dot_');
+            const val = (b.customOrders && b.customOrders[safeName] !== undefined)
+              ? b.customOrders[safeName]
+              : 1000000;
+            if (val < orderB) orderB = val;
+          }
+        }
+
+        if (orderA !== orderB) {
+          return orderA - orderB;
+        }
+        // Fallback to global order
+        const gOrderA = a.order ?? 0;
+        const gOrderB = b.order ?? 0;
+        if (gOrderA !== gOrderB) {
+          return gOrderA - gOrderB;
+        }
+        return a._id.toString().localeCompare(b._id.toString());
+      });
+
+      // Slice to first 10
+      products = products.slice(0, 10);
 
       // Find matching custom collection banner to set as the shopbycrop/collection bannerImage
       let bannerImage = col.bannerImage;
@@ -306,6 +346,14 @@ exports.createProduct = async (req, res, next) => {
     
     if (typeof productData.data === 'string') {
       productData = JSON.parse(productData.data);
+    }
+
+    if (productData.customOrders && typeof productData.customOrders === 'object') {
+      const sanitized = {};
+      for (const [k, v] of Object.entries(productData.customOrders)) {
+        sanitized[k.replace(/\./g, '_dot_')] = v;
+      }
+      productData.customOrders = sanitized;
     }
 
     // Generate product ID first to create folder structure in GCS
@@ -381,6 +429,14 @@ exports.updateProduct = async (req, res, next) => {
     
     if (typeof updateData.data === 'string') {
       updateData = JSON.parse(updateData.data);
+    }
+
+    if (updateData.customOrders && typeof updateData.customOrders === 'object') {
+      const sanitized = {};
+      for (const [k, v] of Object.entries(updateData.customOrders)) {
+        sanitized[k.replace(/\./g, '_dot_')] = v;
+      }
+      updateData.customOrders = sanitized;
     }
 
     const productId = req.params.id;

@@ -109,6 +109,33 @@ const productSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  order: {
+    type: Number,
+    default: 0,
+    index: true
+  },
+  customOrders: {
+    type: Map,
+    of: Number,
+    default: {},
+    set: function(val) {
+      if (val instanceof Map) {
+        const sanitized = new Map();
+        for (let [k, v] of val.entries()) {
+          sanitized.set(k.replace(/\./g, '_dot_'), v);
+        }
+        return sanitized;
+      }
+      if (val && typeof val === 'object') {
+        const sanitized = {};
+        for (let k of Object.keys(val)) {
+          sanitized[k.replace(/\./g, '_dot_')] = val[k];
+        }
+        return sanitized;
+      }
+      return val;
+    }
+  },
   description: {
     type: String,
     trim: true

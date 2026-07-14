@@ -32,11 +32,12 @@ class ProductService {
     const {
       cursor,
       limit = 20,
-      search
+      search,
+      contextId
     } = options;
 
     // Create a unique cache key based on filters and options
-    const cacheKey = `products:${JSON.stringify(filters)}:${cursor}:${limit}:${search}`;
+    const cacheKey = `products:${JSON.stringify(filters)}:${cursor}:${limit}:${search}:${contextId || ''}`;
 
     // 1. Try to get from cache (skip for search queries — regex results shouldn't be cached)
     if (!search) {
@@ -73,12 +74,123 @@ class ProductService {
       query.$and = [...(query.$and || []), ...tokenConditions];
     }
 
-    // Sort by title alphabetically for search results; by _id for regular listing
-    const sortOrder = search ? { title: 1 } : { _id: 1 };
+    if (contextId) {
+      const mongoose = require('mongoose');
+
+      // Recursively cast 24-character hex strings to Mongoose ObjectIds
+      // because MongoDB aggregation does not automatically perform schema casting.
+      const castToObjectId = (val) => {
+        if (typeof val === 'string' && /^[0-9a-fA-F]{24}$/.test(val)) {
+          try {
+            return new mongoose.Types.ObjectId(val);
+          } catch (_) {
+            return val;
+          }
+        }
+        return val;
+      };
+
+      const traverseAndCast = (obj) => {
+        if (!obj || typeof obj !== 'object') return;
+        for (const key of Object.keys(obj)) {
+          const val = obj[key];
+          if (typeof val === 'string') {
+            obj[key] = castToObjectId(val);
+          } else if (Array.isArray(val)) {
+            obj[key] = val.map(castToObjectId);
+            val.forEach(traverseAndCast);
+          } else if (typeof val === 'object') {
+            traverseAndCast(val);
+          }
+        }
+      };
+
+      traverseAndCast(query);
+
+      if (query._id && typeof query._id.$gt === 'string') {
+        try {
+          query._id.$gt = new mongoose.Types.ObjectId(query._id.$gt);
+        } catch (_) {}
+      }
+
+      const pipeline = [
+        { $match: query },
+        {
+          $addFields: {
+            matchedOrder: {
+              $ifNull: [
+                { $getField: { field: contextId, input: "$customOrders" } },
+                1000000
+              ]
+            }
+          }
+        },
+        {
+          $sort: { matchedOrder: 1, order: 1, _id: 1 }
+        },
+        {
+          $limit: limit
+        },
+        {
+          $project: {
+            title: 1,
+            brandName: 1,
+            technicalName: 1,
+            vendor: 1,
+            thumbnail: 1,
+            variants: 1,
+            images: 1,
+            availabilityStatus: 1,
+            averageRating: 1,
+            numReviews: 1,
+            minPrice: 1,
+            maxPrice: 1,
+            categoryId: 1,
+            subCategoryId: 1,
+            categoryIds: 1,
+            subCategoryIds: 1,
+            assignedCollections: 1,
+            tags: 1,
+            description: 1,
+            isFeatured: 1,
+            specifications: 1,
+            mediumImages: 1,
+            originalImages: 1,
+            order: 1,
+            customOrders: 1
+          }
+        }
+      ];
+
+      const products = await Product.aggregate(pipeline);
+
+      // Populate references since aggregation returns raw documents
+      await Product.populate(products, [
+        { path: 'categoryId' },
+        { path: 'categoryIds' }
+      ]);
+
+      const nextCursor = products.length > 0 ? products[products.length - 1]._id : null;
+
+      const result = {
+        products,
+        nextCursor,
+        limit
+      };
+
+      if (!search) {
+        await cacheService.set(cacheKey, result, 300);
+      }
+
+      return result;
+    }
+
+    // Sort by title alphabetically for search results; by order then _id for regular listing
+    const sortOrder = search ? { title: 1 } : { order: 1, _id: 1 };
 
     // 2. Fallback to MongoDB
     const products = await Product.find(query)
-      .select('title brandName technicalName vendor thumbnail variants images availabilityStatus averageRating numReviews minPrice maxPrice categoryId subCategoryId categoryIds subCategoryIds assignedCollections tags description isFeatured specifications mediumImages originalImages')
+      .select('title brandName technicalName vendor thumbnail variants images availabilityStatus averageRating numReviews minPrice maxPrice categoryId subCategoryId categoryIds subCategoryIds assignedCollections tags description isFeatured specifications mediumImages originalImages order customOrders')
       .populate('categoryId')
       .populate('categoryIds')
       .sort(sortOrder)

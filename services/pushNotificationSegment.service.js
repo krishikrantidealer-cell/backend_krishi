@@ -90,6 +90,14 @@ class PushNotificationSegmentService {
     return templates[dayOfYear % templates.length];
   }
 
+  // Helper to process arrays in parallel chunks of 100 to prevent server lag or socket exhaustion
+  async processInBatches(items, batchSize, iteratorFn) {
+    for (let i = 0; i < items.length; i += batchSize) {
+      const chunk = items.slice(i, i + batchSize);
+      await Promise.all(chunk.map(item => iteratorFn(item).catch(err => console.error('[Batch Error]:', err.message))));
+    }
+  }
+
   async sendToSegment(segment) {
     console.log(`[SegmentService] Processing Segment ${segment}...`);
     const template = this.getNotificationForSegment(segment);
@@ -204,25 +212,21 @@ class PushNotificationSegmentService {
     }
 
     console.log(`[SegmentService] Sending to ${users.length} users in Segment ${segment}`);
-    for (const user of users) {
-      try {
-        const isUtility = ['A', 'B', 'C'].includes(segment);
-        const route = segment === 'E' ? '/cart' : (isUtility ? '/profile' : '/');
+    await this.processInBatches(users, 100, async (user) => {
+      const isUtility = ['A', 'B', 'C'].includes(segment);
+      const route = segment === 'E' ? '/cart' : (isUtility ? '/profile' : '/');
 
-        if (isUtility) {
-          await notificationService.sendUtilityNotification(user._id, template.title, template.body, route);
-          user.lastKycReminderSentAt = now;
-        } else {
-          await notificationService.sendMarketingNotification(user._id, template.title, template.body, route);
-          user.lastMarketingNotificationSentAt = now;
-        }
-
-        if (segment === 'E') await Cart.updateOne({ user: user._id }, { lastReminderSentAt: now });
-        await user.save();
-      } catch (e) {
-        console.error(`Error sending to user ${user._id}:`, e.message);
+      if (isUtility) {
+        await notificationService.sendUtilityNotification(user._id, template.title, template.body, route);
+        user.lastKycReminderSentAt = now;
+      } else {
+        await notificationService.sendMarketingNotification(user._id, template.title, template.body, route);
+        user.lastMarketingNotificationSentAt = now;
       }
-    }
+
+      if (segment === 'E') await Cart.updateOne({ user: user._id }, { lastReminderSentAt: now });
+      await user.save();
+    });
   }
 
   async trigger9AMJobs() { await this.sendToSegment('A'); await this.sendToSegment('B'); await this.sendToSegment('C'); }
@@ -239,9 +243,13 @@ class PushNotificationSegmentService {
         { lastMarketingNotificationSentAt: { $exists: false } },
         { lastMarketingNotificationSentAt: { $lt: new Date(Date.now() - 24 * 60 * 60 * 1000) } }
       ]
-    }).limit(200);
+    });
     console.log(`[SegmentService] 5:30 PM standard marketing (${type}) matched ${users.length} users with tokens.`);
-    for(const u of users) { await notificationService.sendMarketingNotification(u._id, template.title, template.body, '/'); u.lastMarketingNotificationSentAt = new Date(); await u.save(); }
+    await this.processInBatches(users, 100, async (u) => {
+      await notificationService.sendMarketingNotification(u._id, template.title, template.body, '/');
+      u.lastMarketingNotificationSentAt = new Date();
+      await u.save();
+    });
   }
   async trigger8PMJobs() {
     await this.sendToSegment('G'); await this.sendToSegment('J');
@@ -253,9 +261,13 @@ class PushNotificationSegmentService {
         { lastMarketingNotificationSentAt: { $exists: false } },
         { lastMarketingNotificationSentAt: { $lt: new Date(Date.now() - 24 * 60 * 60 * 1000) } }
       ]
-    }).limit(200);
+    });
     console.log(`[SegmentService] 8:00 PM standard urgency marketing matched ${users.length} users with tokens.`);
-    for(const u of users) { await notificationService.sendMarketingNotification(u._id, template.title, template.body, '/'); u.lastMarketingNotificationSentAt = new Date(); await u.save(); }
+    await this.processInBatches(users, 100, async (u) => {
+      await notificationService.sendMarketingNotification(u._id, template.title, template.body, '/');
+      u.lastMarketingNotificationSentAt = new Date();
+      await u.save();
+    });
   }
 }
 

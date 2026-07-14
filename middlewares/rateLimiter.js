@@ -37,7 +37,7 @@ const apiLimiter = rateLimit({
     // 2. Fallback to IP address if unauthenticated
     return req.ip;
   },
-  validate: { keyGenerator: false },
+  validate: false,
   standardHeaders: true,
   legacyHeaders: false,
   passOnStoreError: true,
