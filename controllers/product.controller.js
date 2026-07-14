@@ -91,7 +91,7 @@ exports.getProducts = async (req, res, next) => {
       filters.maxPrice = { $lte: Number(maxPrice) };
     }
 
-    const rawContextId = subCategoryId || categoryId || collection;
+    const rawContextId = subCategoryId || categoryId || collection || (isFeatured === 'true' ? 'featured' : undefined);
     const contextId = rawContextId ? rawContextId.toString().replace(/\./g, '_dot_') : undefined;
 
     const result = await productService.getProducts(filters, {
