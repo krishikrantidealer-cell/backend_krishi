@@ -155,6 +155,10 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  monthlyTarget: {
+    type: Number,
+    default: 500000
+  },
   status: {
     type: String,
     default: 'prospect'

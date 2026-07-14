@@ -120,7 +120,7 @@ exports.submitKyc = async (req, res, next) => {
       success: true,
       message: 'KYC submitted successfully',
       user: {
-        id: user._id,
+        _id: user._id,
         kycStatus: user.kycStatus
       }
     });
@@ -359,11 +359,12 @@ exports.adminCreateSalesAgent = async (req, res, next) => {
       success: true,
       message: 'Sales agent created successfully',
       user: {
-        id: user._id,
+        _id: user._id,
         firstName: user.firstName,
         lastName: user.lastName,
         email: user.email,
         phoneNumber: user.phoneNumber,
+        monthlyTarget: user.monthlyTarget,
         role: user.role
       }
     });
@@ -395,11 +396,12 @@ exports.adminUpdateSalesAgent = async (req, res, next) => {
       success: true,
       message: 'Sales agent updated successfully',
       user: {
-        id: user._id,
+        _id: user._id,
         firstName: user.firstName,
         lastName: user.lastName,
         email: user.email,
         phoneNumber: user.phoneNumber,
+        monthlyTarget: user.monthlyTarget,
         role: user.role
       }
     });
@@ -769,7 +771,7 @@ exports.adminToggleBlockUser = async (req, res, next) => {
       success: true,
       message: `User is now ${isBlockedNow ? 'blocked' : 'unblocked'}.`,
       user: {
-        id: user._id,
+        _id: user._id,
         firstName: user.firstName,
         lastName: user.lastName,
         isBlocked: user.isBlocked,

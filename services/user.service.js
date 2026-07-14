@@ -76,7 +76,8 @@ class UserService {
       'status',
       'notes',
       'leadStatus',
-      'leadNotes'
+      'leadNotes',
+      'monthlyTarget'
     ];
     const filteredUpdates = {};
 
@@ -318,7 +319,7 @@ class UserService {
   }
 
   async createSalesAgent(agentData) {
-    const { firstName, lastName, email, phoneNumber, password } = agentData;
+    const { firstName, lastName, email, phoneNumber, password, monthlyTarget } = agentData;
 
     if (!firstName || !lastName || !email || !phoneNumber || !password) {
       throw new Error('All fields (first name, last name, email, phone number, password) are required');
@@ -340,6 +341,7 @@ class UserService {
       email,
       phoneNumber,
       password: hashedPassword,
+      monthlyTarget: monthlyTarget || 500000,
       role: 'sales',
       isVerified: true,
       isProfileComplete: true
@@ -349,7 +351,7 @@ class UserService {
   }
 
   async updateSalesAgent(agentId, updateData) {
-    const { firstName, lastName, email, phoneNumber, password } = updateData;
+    const { firstName, lastName, email, phoneNumber, password, monthlyTarget } = updateData;
 
     const user = await User.findById(agentId);
     if (!user) throw new Error('Sales agent not found');
@@ -371,6 +373,7 @@ class UserService {
 
     if (firstName) user.firstName = firstName;
     if (lastName) user.lastName = lastName;
+    if (monthlyTarget !== undefined) user.monthlyTarget = monthlyTarget;
 
     if (password && password.trim() !== '') {
       const { hashData } = require('../utils/hash');
