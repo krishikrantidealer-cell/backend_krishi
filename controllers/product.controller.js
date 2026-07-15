@@ -252,17 +252,19 @@ exports.getHomeDiscovery = async (req, res, next) => {
         for (const name of allNames) {
           if (a.assignedCollections && a.assignedCollections.includes(name)) {
             const safeName = name.replace(/\./g, '_dot_');
-            const val = (a.customOrders && a.customOrders[safeName] !== undefined)
+            const rawVal = (a.customOrders && a.customOrders[safeName] !== undefined)
               ? a.customOrders[safeName]
               : 1000000;
-            if (val < orderA) orderA = val;
+            const val = Number(rawVal);
+            if (!isNaN(val) && val < orderA) orderA = val;
           }
           if (b.assignedCollections && b.assignedCollections.includes(name)) {
             const safeName = name.replace(/\./g, '_dot_');
-            const val = (b.customOrders && b.customOrders[safeName] !== undefined)
+            const rawVal = (b.customOrders && b.customOrders[safeName] !== undefined)
               ? b.customOrders[safeName]
               : 1000000;
-            if (val < orderB) orderB = val;
+            const val = Number(rawVal);
+            if (!isNaN(val) && val < orderB) orderB = val;
           }
         }
 
@@ -351,7 +353,8 @@ exports.createProduct = async (req, res, next) => {
     if (productData.customOrders && typeof productData.customOrders === 'object') {
       const sanitized = {};
       for (const [k, v] of Object.entries(productData.customOrders)) {
-        sanitized[k.replace(/\./g, '_dot_')] = v;
+        const numVal = Number(v);
+        sanitized[k.replace(/\./g, '_dot_')] = isNaN(numVal) ? v : numVal;
       }
       productData.customOrders = sanitized;
     }
@@ -434,7 +437,8 @@ exports.updateProduct = async (req, res, next) => {
     if (updateData.customOrders && typeof updateData.customOrders === 'object') {
       const sanitized = {};
       for (const [k, v] of Object.entries(updateData.customOrders)) {
-        sanitized[k.replace(/\./g, '_dot_')] = v;
+        const numVal = Number(v);
+        sanitized[k.replace(/\./g, '_dot_')] = isNaN(numVal) ? v : numVal;
       }
       updateData.customOrders = sanitized;
     }
@@ -1085,6 +1089,41 @@ exports.deleteSubCategory = async (req, res, next) => {
       success: true,
       message: 'Subcategory deleted successfully',
       category
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Bulk Reorder Products in a Context (Admin)
+exports.reorderProducts = async (req, res, next) => {
+  try {
+    const { contextId, productIds } = req.body;
+    if (!contextId || !Array.isArray(productIds)) {
+      return res.status(400).json({ success: false, message: 'Invalid payload' });
+    }
+
+    const safeKey = contextId.replace(/\./g, '_dot_');
+    const Product = require('../models/Product');
+    
+    const bulkOps = productIds.map((id, index) => ({
+      updateOne: {
+        filter: { _id: id },
+        update: { $set: { [`customOrders.${safeKey}`]: index } }
+      }
+    }));
+
+    if (bulkOps.length > 0) {
+      await Product.bulkWrite(bulkOps);
+    }
+
+    // Invalidate product listing cache
+    const cacheService = require('../utils/cache');
+    await cacheService.delByPattern('products:*');
+
+    res.json({
+      success: true,
+      message: `Successfully reordered ${productIds.length} products for context "${contextId}"`
     });
   } catch (error) {
     next(error);

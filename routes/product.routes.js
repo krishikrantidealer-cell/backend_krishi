@@ -51,6 +51,9 @@ router.get('/', productController.getProducts);
 // Create a new product (with multiple variants)
 router.post('/', protect, authorizeRoles('admin'), upload.array('images', 10), productController.createProduct);
 
+// Bulk reorder products inside a category or collection
+router.post('/reorder', protect, authorizeRoles('admin'), productController.reorderProducts);
+
 // Update a product
 router.put('/:id', protect, authorizeRoles('admin'), upload.array('images', 10), productController.updateProduct);
 

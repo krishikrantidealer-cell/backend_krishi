@@ -1,7 +1,7 @@
 const express = require('express');
 const { body } = require('express-validator');
 const userController = require('../controllers/user.controller');
-const { protect } = require('../middlewares/auth.middleware');
+const { protect, authorizeRoles } = require('../middlewares/auth.middleware');
 const validate = require('../middlewares/validate');
 
 const upload = require('../middlewares/upload.middleware');
@@ -18,6 +18,9 @@ router.post('/fcm-token', userController.updateFcmToken);
 // Fetch persistent notification history
 router.get('/notifications', userController.getMyNotifications);
 router.put('/notifications/read', userController.markNotificationsAsRead);
+// Admin: Send a notification to a specific user (used for admin notes)
+router.post('/notifications/send', authorizeRoles('admin', 'sales'), userController.createNotification);
+
 
 router.get('/profile', userController.getProfile);
 router.delete('/me', userController.deleteSelfAccount);
@@ -98,7 +101,6 @@ router.delete('/addresses/:addressId', userController.deleteShippingAddress);
 router.patch('/addresses/:addressId/default', userController.setDefaultAddress);
 
 // --- ADMIN ROUTES ---
-const { authorizeRoles } = require('../middlewares/auth.middleware');
 
 // Get all users (Admin and Sales)
 router.get('/', authorizeRoles('admin', 'sales'), userController.getAllUsers);

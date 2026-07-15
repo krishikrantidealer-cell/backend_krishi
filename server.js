@@ -14,7 +14,14 @@ const startServer = async () => {
       const migrateCoupons = require('./utils/couponMigration');
       await migrateCoupons();
     } catch (migErr) {
-      console.error('Migration failed:', migErr.message);
+      console.error('Migration failed (Coupons):', migErr.message);
+    }
+
+    try {
+      const migrateCustomOrders = require('./utils/customOrdersMigration');
+      await migrateCustomOrders();
+    } catch (migErr) {
+      console.error('Migration failed (customOrders):', migErr.message);
     }
 
     try {

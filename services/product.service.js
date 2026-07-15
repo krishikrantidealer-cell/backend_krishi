@@ -17,7 +17,10 @@ class ProductService {
       thumbnail: productData.thumbnail || (productData.images && productData.images.length > 0 ? productData.images[0] : null)
     });
 
-    // Description and specifications are now embedded in the Product model via productData
+    // Resolve custom order collisions (auto-shifting)
+    if (product.customOrders) {
+      await this.resolveOrderCollisions(product._id, product.customOrders);
+    }
 
     // Invalidate product listing cache
     await cacheService.delByPattern('products:*');
@@ -310,10 +313,66 @@ class ProductService {
     Object.assign(product, updateData);
     await product.save();
 
+    // Resolve custom order collisions (auto-shifting)
+    if (updateData.customOrders) {
+      await this.resolveOrderCollisions(product._id, updateData.customOrders);
+    }
+
     // Invalidate product listing cache
     await cacheService.delByPattern('products:*');
 
     return product;
+  }
+
+  /**
+   * Automatically resolve custom order collisions in context by shifting conflicting ranks
+   */
+  async resolveOrderCollisions(productId, customOrders) {
+    if (!customOrders || typeof customOrders !== 'object') return;
+
+    for (const [contextId, newOrder] of Object.entries(customOrders)) {
+      if (newOrder === undefined || newOrder === null || isNaN(Number(newOrder))) continue;
+
+      const targetOrder = Number(newOrder);
+      const safeKey = contextId.replace(/\./g, '_dot_');
+
+      // Find all OTHER products that have this same contextId in their customOrders
+      const conflictingProducts = await Product.find({
+        _id: { $ne: productId },
+        [`customOrders.${safeKey}`]: { $exists: true, $ne: null }
+      });
+
+      // Sort conflicting products by their current rank in this context
+      conflictingProducts.sort((a, b) => {
+        const valAVal = a.customOrders.get ? a.customOrders.get(safeKey) : a.customOrders[safeKey];
+        const valBVal = b.customOrders.get ? b.customOrders.get(safeKey) : b.customOrders[safeKey];
+        return Number(valAVal) - Number(valBVal);
+      });
+
+      // Shift them: if we find any product with rank >= targetOrder, we increment it.
+      let currentShiftValue = targetOrder;
+      const bulkOps = [];
+
+      for (const p of conflictingProducts) {
+        const pOrderVal = p.customOrders.get ? p.customOrders.get(safeKey) : p.customOrders[safeKey];
+        const pOrder = Number(pOrderVal);
+
+        if (pOrder >= currentShiftValue) {
+          bulkOps.push({
+            updateOne: {
+              filter: { _id: p._id },
+              update: { $set: { [`customOrders.${safeKey}`]: pOrder + 1 } }
+            }
+          });
+          currentShiftValue = pOrder + 1;
+        }
+      }
+
+      if (bulkOps.length > 0) {
+        await Product.bulkWrite(bulkOps);
+        console.log(`[OrderCollision] Resolved collisions for context "${contextId}" at rank ${targetOrder}. Shifted ${bulkOps.length} products.`);
+      }
+    }
   }
 
   /**

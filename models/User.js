@@ -168,10 +168,13 @@ const userSchema = new mongoose.Schema({
     default: ''
   },
   notesHistory: [{
+    title: { type: String },
     note: { type: String, required: true },
     adminId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     adminName: { type: String },
-    createdAt: { type: Date, default: Date.now }
+    createdAt: { type: Date, default: Date.now },
+    author: { type: String },
+    timestamp: { type: String }
   }],
   isDeleted: {
     type: Boolean,

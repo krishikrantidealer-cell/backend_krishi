@@ -566,11 +566,12 @@ exports.adminDeleteUser = async (req, res, next) => {
     }, req);
 
     try {
-      const { broadcastToRoles } = require('../services/websocket.service');
+      const { sendToUser, broadcastToRoles } = require('../services/websocket.service');
+      sendToUser(userId, { type: 'FORCE_LOGOUT' });
       broadcastToRoles(['admin', 'sales'], { type: 'LEADS_UPDATE' });
       broadcastToRoles(['admin', 'sales'], { type: 'DEALERS_UPDATE' });
     } catch (wsErr) {
-      console.error('[WS] Failed to broadcast user deletion:', wsErr.message);
+      console.error('[WS] Failed to broadcast user deletion / force logout:', wsErr.message);
     }
 
     res.json({
@@ -677,11 +678,12 @@ exports.adminPermanentlyDeleteUser = async (req, res, next) => {
     }, req);
 
     try {
-      const { broadcastToRoles } = require('../services/websocket.service');
+      const { sendToUser, broadcastToRoles } = require('../services/websocket.service');
+      sendToUser(userId, { type: 'FORCE_LOGOUT' });
       broadcastToRoles(['admin', 'sales'], { type: 'LEADS_UPDATE' });
       broadcastToRoles(['admin', 'sales'], { type: 'DEALERS_UPDATE' });
     } catch (wsErr) {
-      console.error('[WS] Failed to broadcast user permanent deletion:', wsErr.message);
+      console.error('[WS] Failed to broadcast user permanent deletion / force logout:', wsErr.message);
     }
 
     res.json({
@@ -820,6 +822,48 @@ exports.deleteSelfAccount = async (req, res, next) => {
     res.json({
       success: true,
       message: 'Account deleted successfully'
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ─── Admin: Create Notification for a specific user ───────────────────────────
+// POST /api/users/notifications/send
+// Body: { recipient, title, body, type }
+exports.createNotification = async (req, res, next) => {
+  try {
+    const { recipient, title, body, message, type } = req.body;
+
+    if (!recipient || !title) {
+      res.status(400);
+      throw new Error('recipient and title are required');
+    }
+
+    const notifBody = body || message || '';
+
+    // Persist to database so the agent sees it in the notification bell
+    const notification = await Notification.create({
+      user: recipient,
+      title,
+      body: notifBody,
+      category: 'utility',
+    });
+
+    // Push real-time WebSocket event so the agent's topbar refreshes immediately
+    try {
+      const { sendToUser } = require('../services/websocket.service');
+      sendToUser(recipient.toString(), { type: 'NOTIFICATION_RECEIVED' });
+    } catch (wsErr) {
+      console.error('[WS] Failed to push NOTIFICATION_RECEIVED to user:', wsErr.message);
+    }
+
+    console.log(`[Notification] Created for user ${recipient} — type: ${type || 'admin_note'} | title: "${title}"`);
+
+    res.status(201).json({
+      success: true,
+      message: 'Notification sent successfully',
+      notification,
     });
   } catch (error) {
     next(error);

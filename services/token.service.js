@@ -70,11 +70,11 @@ class TokenService {
 
     const { userId, deviceId } = decoded;
 
-    // Verify user still exists in database
-    const userExists = await User.exists({ _id: userId });
-    if (!userExists) {
+    // Verify user still exists in database and is active
+    const user = await User.findById(userId);
+    if (!user || user.isDeleted || user.isBlocked) {
       await this.deleteSession(userId, deviceId);
-      throw new Error('User not found');
+      throw new Error('User not found, deleted or blocked');
     }
 
     const redisKey = `session:${userId}:${deviceId}`;

@@ -55,12 +55,15 @@ exports.getCollectionsWithProducts = async (req, res, next) => {
 
       products.sort((a, b) => {
         const safeName = col.name.replace(/\./g, '_dot_');
-        const orderA = (a.customOrders && a.customOrders[safeName] !== undefined)
+        const rawA = (a.customOrders && a.customOrders[safeName] !== undefined)
             ? a.customOrders[safeName]
             : 1000000;
-        const orderB = (b.customOrders && b.customOrders[safeName] !== undefined)
+        const rawB = (b.customOrders && b.customOrders[safeName] !== undefined)
             ? b.customOrders[safeName]
             : 1000000;
+
+        const orderA = Number(rawA);
+        const orderB = Number(rawB);
 
         if (orderA !== orderB) {
           return orderA - orderB;

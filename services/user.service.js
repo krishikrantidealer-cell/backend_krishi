@@ -77,7 +77,8 @@ class UserService {
       'notes',
       'leadStatus',
       'leadNotes',
-      'monthlyTarget'
+      'monthlyTarget',
+      'notesHistory'
     ];
     const filteredUpdates = {};
 
@@ -393,6 +394,15 @@ class UserService {
     await User.updateMany({ assignedAgent: agentId }, { $set: { assignedAgent: null } });
 
     await User.findByIdAndDelete(agentId);
+
+    // Invalidate sessions
+    try {
+      const tokenService = require('./token.service');
+      await tokenService.deleteAllSessions(agentId);
+    } catch (sessionErr) {
+      console.error('[Session Invalidation Error] Failed to delete sales agent sessions:', sessionErr.message);
+    }
+
     return true;
   }
 
@@ -417,6 +427,15 @@ class UserService {
     user.isDeleted = true;
     user.deletedAt = new Date();
     await user.save();
+
+    // Invalidate sessions
+    try {
+      const tokenService = require('./token.service');
+      await tokenService.deleteAllSessions(userId);
+    } catch (sessionErr) {
+      console.error('[Session Invalidation Error] Failed to delete user sessions:', sessionErr.message);
+    }
+
     return true;
   }
 
@@ -477,6 +496,15 @@ class UserService {
     ]);
 
     await User.findByIdAndDelete(userId);
+
+    // Invalidate sessions
+    try {
+      const tokenService = require('./token.service');
+      await tokenService.deleteAllSessions(userId);
+    } catch (sessionErr) {
+      console.error('[Session Invalidation Error] Failed to delete user sessions:', sessionErr.message);
+    }
+
     return true;
   }
 }
