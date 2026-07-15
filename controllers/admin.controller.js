@@ -85,21 +85,51 @@ exports.getAuditLogs = async (req, res, next) => {
     const sortDir = sortOrder === 'asc' ? 1 : -1;
 
     const logs = await AuditLog.find(query)
-      .populate('adminId', 'role email')
+      .populate('adminId', 'role email firstName lastName')
       .sort({ timestamp: sortDir })
       .limit(parseInt(limit));
 
     const totalCount = await AuditLog.countDocuments(query);
 
-    // Flatten role into the log object for easier frontend consumption
+    // Collect all assignedAgent IDs from changes to resolve in bulk
+    const agentIdSet = new Set();
+    for (const log of logs) {
+      const assignedAgent = log.changes?.after?.assignedAgent;
+      if (assignedAgent) agentIdSet.add(assignedAgent.toString());
+    }
+
+    // Bulk resolve agent IDs → name map
+    let agentNameMap = {};
+    if (agentIdSet.size > 0) {
+      const mongoose = require('mongoose');
+      const agentIds = [...agentIdSet].filter(id => mongoose.Types.ObjectId.isValid(id));
+      const agents = await User.find({ _id: { $in: agentIds } }).select('_id firstName lastName email');
+      for (const agent of agents) {
+        const name = `${agent.firstName || ''} ${agent.lastName || ''}`.trim();
+        agentNameMap[agent._id.toString()] = name || agent.email || 'Unknown Agent';
+      }
+    }
+
+    // Flatten log object for frontend consumption
     const flattenedLogs = logs.map(log => {
       const logObj = log.toObject();
-      // Ensure we safely extract the role from the populated adminId object
+
+      // Populate admin role + full name
       if (log.adminId && typeof log.adminId === 'object') {
         logObj.adminRole = log.adminId.role;
+        const adminName = `${log.adminId.firstName || ''} ${log.adminId.lastName || ''}`.trim();
+        logObj.adminName = adminName || log.adminId.email || log.adminEmail || 'Unknown';
       } else {
         logObj.adminRole = null;
+        logObj.adminName = logObj.adminEmail || 'System';
       }
+
+      // Resolve assignedAgent ID to name in changes
+      if (logObj.changes?.after?.assignedAgent) {
+        const agentId = logObj.changes.after.assignedAgent.toString();
+        logObj.changes.after.assignedAgentName = agentNameMap[agentId] || 'Unknown Agent';
+      }
+
       return logObj;
     });
 
