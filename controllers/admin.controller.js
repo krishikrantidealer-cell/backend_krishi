@@ -8,7 +8,7 @@ const { redisClient } = require('../config/redis');
 
 exports.getAuditLogs = async (req, res, next) => {
   try {
-    const { adminEmail, limit = 50, before, role, search, action, targetModel, startDate, endDate } = req.query;
+    const { adminEmail, limit = 50, before, role, search, action, targetModel, startDate, endDate, targetId, sortOrder } = req.query;
     const query = {};
 
     if (adminEmail) {
@@ -74,9 +74,19 @@ exports.getAuditLogs = async (req, res, next) => {
       ];
     }
 
+    // Filter by specific target user (for trash user activity timeline)
+    if (targetId) {
+      const mongoose = require('mongoose');
+      query.targetId = mongoose.Types.ObjectId.isValid(targetId)
+        ? new mongoose.Types.ObjectId(targetId)
+        : targetId;
+    }
+
+    const sortDir = sortOrder === 'asc' ? 1 : -1;
+
     const logs = await AuditLog.find(query)
       .populate('adminId', 'role email')
-      .sort({ timestamp: -1 })
+      .sort({ timestamp: sortDir })
       .limit(parseInt(limit));
 
     const totalCount = await AuditLog.countDocuments(query);

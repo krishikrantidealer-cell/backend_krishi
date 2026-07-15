@@ -78,6 +78,59 @@ class AuthController {
       await authService.verifyOTP(phoneNumber, otp);
 
       let user = await User.findOne({ phoneNumber, isDeleted: { $ne: true } });
+
+      if (!user) {
+        // Look for soft-deleted user in trash with matching phone prefix
+        const deleteRegex = /_deleted_\d+$/;
+        const phoneEscaped = phoneNumber.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+        const deletedUser = await User.findOne({
+          isDeleted: true,
+          phoneNumber: { $regex: `^${phoneEscaped}_deleted_\\d+$` }
+        });
+
+        if (deletedUser) {
+          // Restore the user document
+          const restoredPhone = deletedUser.phoneNumber.replace(deleteRegex, '');
+          const restoredEmail = deletedUser.email ? deletedUser.email.replace(deleteRegex, '') : undefined;
+
+          deletedUser.phoneNumber = restoredPhone;
+          if (deletedUser.email) {
+            deletedUser.email = restoredEmail;
+          }
+          deletedUser.isDeleted = false;
+          deletedUser.deletedAt = undefined;
+
+          await deletedUser.save();
+          user = deletedUser;
+
+          // Audit Log: User Auto-Restored upon login
+          try {
+            const auditService = require('../services/audit.service');
+            auditService.logAction({
+              adminId: null, // SYSTEM ACTION
+              adminEmail: 'SYSTEM_AUTO_RESTORE',
+              action: 'USER_RESTORED',
+              targetId: user._id,
+              targetModel: 'User',
+              details: `Auto-restored user account from trash upon login attempt: ${user.firstName || ''} ${user.lastName || ''}`.trim(),
+              changes: { after: { isDeleted: false, phoneNumber: restoredPhone } }
+            }, req);
+          } catch (auditErr) {
+            console.error('Failed to write audit log for auto-restored user:', auditErr.message);
+          }
+
+          // Real-time broadcasts to admin panel
+          try {
+            const { broadcastToRoles } = require('../services/websocket.service');
+            broadcastToRoles(['admin', 'sales'], { type: 'LEADS_UPDATE' });
+            broadcastToRoles(['admin', 'sales'], { type: 'DEALERS_UPDATE' });
+            broadcastToRoles(['admin', 'sales'], { type: 'TRASH_UPDATE' });
+          } catch (wsErr) {
+            console.error('[WS] Failed to broadcast user auto-restore:', wsErr.message);
+          }
+        }
+      }
+
       if (user && user.isBlocked) {
         return res.status(403).json({ success: false, message: 'Your account has been blocked. Access denied.' });
       }
