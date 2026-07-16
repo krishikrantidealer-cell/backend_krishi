@@ -78,7 +78,9 @@ class UserService {
       'leadStatus',
       'leadNotes',
       'monthlyTarget',
-      'notesHistory'
+      'notesHistory',
+      'noteType',
+      'notePriority'
     ];
     const filteredUpdates = {};
 
@@ -103,7 +105,10 @@ class UserService {
     if (filteredUpdates.notes && filteredUpdates.notes !== user.notes) {
       const historyItem = {
         note: filteredUpdates.notes,
-        createdAt: new Date()
+        createdAt: new Date(),
+        type: updateData.noteType || 'general',
+        priority: updateData.notePriority || 'medium',
+        status: user.status || ''
       };
       if (updateData.adminId) historyItem.adminId = updateData.adminId;
       if (updateData.adminName) historyItem.adminName = updateData.adminName;

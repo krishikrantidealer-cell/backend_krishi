@@ -174,7 +174,18 @@ const userSchema = new mongoose.Schema({
     adminName: { type: String },
     createdAt: { type: Date, default: Date.now },
     author: { type: String },
-    timestamp: { type: String }
+    timestamp: { type: String },
+    type: {
+      type: String,
+      enum: ['general', 'call', 'meeting', 'followup', 'quote', 'issue'],
+      default: 'general'
+    },
+    priority: {
+      type: String,
+      enum: ['low', 'medium', 'high'],
+      default: 'medium'
+    },
+    status: { type: String }
   }],
   isDeleted: {
     type: Boolean,
