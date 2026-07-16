@@ -33,10 +33,15 @@ class AuditService {
       // Gold Standard: Real-time broadcast to Admins
       try {
         const { broadcastToRoles } = require('./websocket.service');
-        const populatedLog = await log.populate('adminId', 'role email');
+        const populatedLog = await log.populate('adminId', 'role email firstName lastName');
         const logObj = populatedLog.toObject();
         if (populatedLog.adminId) {
           logObj.adminRole = populatedLog.adminId.role;
+          const adminName = `${populatedLog.adminId.firstName || ''} ${populatedLog.adminId.lastName || ''}`.trim();
+          logObj.adminName = adminName || populatedLog.adminId.email || populatedLog.adminEmail || 'Unknown';
+        } else {
+          logObj.adminRole = null;
+          logObj.adminName = logObj.adminEmail || 'System';
         }
 
         if (logObj.targetModel === 'User' && logObj.targetId) {
