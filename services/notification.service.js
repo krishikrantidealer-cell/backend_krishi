@@ -38,6 +38,14 @@ class NotificationService {
       });
       console.log(`Notification logged to database with ID: ${dbNotification._id}`);
 
+      // Real-time WebSocket sync
+      try {
+        const { sendToUser } = require('./websocket.service');
+        sendToUser(userId.toString(), { type: 'NOTIFICATION_RECEIVED' });
+      } catch (wsErr) {
+        console.error('[WS] Failed to send NOTIFICATION_RECEIVED:', wsErr.message);
+      }
+
       // 2. Send Push Notification via Firebase
       const user = await User.findById(userId);
       if (!user || !user.fcmToken) {
@@ -81,6 +89,14 @@ class NotificationService {
         actionRoute: actionRoute || '/cart'
       });
       console.log(`Marketing Notification logged to database with ID: ${dbNotification._id}`);
+
+      // Real-time WebSocket sync
+      try {
+        const { sendToUser } = require('./websocket.service');
+        sendToUser(userId.toString(), { type: 'NOTIFICATION_RECEIVED' });
+      } catch (wsErr) {
+        console.error('[WS] Failed to send NOTIFICATION_RECEIVED for marketing:', wsErr.message);
+      }
 
       // 2. Send Push Notification via Firebase
       const user = await User.findById(userId);
