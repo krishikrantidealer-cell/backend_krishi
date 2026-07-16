@@ -39,6 +39,20 @@ class AuditService {
           logObj.adminRole = populatedLog.adminId.role;
         }
 
+        if (logObj.targetModel === 'User' && logObj.targetId) {
+          const User = require('../models/User');
+          const targetUser = await User.findById(logObj.targetId).select('firstName lastName email phoneNumber shopName');
+          if (targetUser) {
+            if (!logObj.changes) logObj.changes = {};
+            if (!logObj.changes.after) logObj.changes.after = {};
+            logObj.changes.after.firstName = targetUser.firstName;
+            logObj.changes.after.lastName = targetUser.lastName;
+            logObj.changes.after.email = targetUser.email;
+            logObj.changes.after.phoneNumber = targetUser.phoneNumber;
+            logObj.changes.after.shopName = targetUser.shopName;
+          }
+        }
+
         broadcastToRoles(['admin'], {
           type: 'AUDIT_LOG_CREATED',
           data: logObj

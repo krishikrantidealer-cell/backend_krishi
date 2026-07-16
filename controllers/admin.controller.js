@@ -112,6 +112,31 @@ exports.getAuditLogs = async (req, res, next) => {
       }
     }
 
+    // Collect all targetId where targetModel === 'User' to populate target user details
+    const targetUserIdSet = new Set();
+    for (const log of logs) {
+      if (log.targetModel === 'User' && log.targetId) {
+        targetUserIdSet.add(log.targetId.toString());
+      }
+    }
+
+    // Bulk resolve targetUser IDs → user info map
+    let targetUserMap = {};
+    if (targetUserIdSet.size > 0) {
+      const mongoose = require('mongoose');
+      const targetUserIds = [...targetUserIdSet].filter(id => mongoose.Types.ObjectId.isValid(id));
+      const users = await User.find({ _id: { $in: targetUserIds } }).select('_id firstName lastName email phoneNumber shopName');
+      for (const u of users) {
+        targetUserMap[u._id.toString()] = {
+          firstName: u.firstName,
+          lastName: u.lastName,
+          email: u.email,
+          phoneNumber: u.phoneNumber,
+          shopName: u.shopName
+        };
+      }
+    }
+
     // Flatten log object for frontend consumption
     const flattenedLogs = logs.map(log => {
       const logObj = log.toObject();
@@ -134,6 +159,20 @@ exports.getAuditLogs = async (req, res, next) => {
       if (logObj.changes?.before?.assignedAgent) {
         const agentId = logObj.changes.before.assignedAgent.toString();
         logObj.changes.before.assignedAgentName = agentNameMap[agentId] || 'Unknown Agent';
+      }
+
+      // Inject target user info into changes to resolve user identification issues on frontend
+      if (logObj.targetModel === 'User' && logObj.targetId) {
+        const targetUser = targetUserMap[logObj.targetId.toString()];
+        if (targetUser) {
+          if (!logObj.changes) logObj.changes = {};
+          if (!logObj.changes.after) logObj.changes.after = {};
+          if (logObj.changes.after.firstName === undefined) logObj.changes.after.firstName = targetUser.firstName;
+          if (logObj.changes.after.lastName === undefined) logObj.changes.after.lastName = targetUser.lastName;
+          if (logObj.changes.after.email === undefined) logObj.changes.after.email = targetUser.email;
+          if (logObj.changes.after.phoneNumber === undefined) logObj.changes.after.phoneNumber = targetUser.phoneNumber;
+          if (logObj.changes.after.shopName === undefined) logObj.changes.after.shopName = targetUser.shopName;
+        }
       }
 
       return logObj;
