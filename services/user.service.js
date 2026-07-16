@@ -53,9 +53,9 @@ class UserService {
     return { users, totalCount, hasMore };
   }
 
-  async getProfile(userId) {
+  async getProfile(userId, includeDeleted = false) {
     const user = await User.findById(userId);
-    if (!user || user.isDeleted) {
+    if (!user || (user.isDeleted && !includeDeleted)) {
       throw new Error('User not found');
     }
     return user;

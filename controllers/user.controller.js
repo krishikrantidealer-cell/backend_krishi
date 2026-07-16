@@ -236,6 +236,19 @@ exports.getAllUsers = async (req, res, next) => {
   }
 };
 
+exports.getUserById = async (req, res, next) => {
+  try {
+    // Admins and sales can see profiles even if marked as deleted (e.g. from trash)
+    const user = await userService.getProfile(req.params.userId, true);
+    res.json({
+      success: true,
+      user
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 exports.adminUpdateKycStatus = async (req, res, next) => {
   try {
     const { status, reason } = req.body;

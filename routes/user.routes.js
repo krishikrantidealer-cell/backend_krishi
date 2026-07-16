@@ -107,6 +107,9 @@ router.patch('/addresses/:addressId/default', userController.setDefaultAddress);
 // Get all users (Admin and Sales)
 router.get('/', authorizeRoles('admin', 'sales'), userController.getAllUsers);
 
+// Get specific user (Admin and Sales)
+router.get('/:userId', authorizeRoles('admin', 'sales'), userController.getUserById);
+
 // Update KYC Status (Approve/Reject) (Admin and Sales)
 router.put('/:userId/kyc', authorizeRoles('admin', 'sales'), userController.adminUpdateKycStatus);
 
