@@ -94,8 +94,10 @@ exports.getAuditLogs = async (req, res, next) => {
     // Collect all assignedAgent IDs from changes to resolve in bulk
     const agentIdSet = new Set();
     for (const log of logs) {
-      const assignedAgent = log.changes?.after?.assignedAgent;
-      if (assignedAgent) agentIdSet.add(assignedAgent.toString());
+      const assignedAgentAfter = log.changes?.after?.assignedAgent;
+      if (assignedAgentAfter) agentIdSet.add(assignedAgentAfter.toString());
+      const assignedAgentBefore = log.changes?.before?.assignedAgent;
+      if (assignedAgentBefore) agentIdSet.add(assignedAgentBefore.toString());
     }
 
     // Bulk resolve agent IDs → name map
@@ -128,6 +130,10 @@ exports.getAuditLogs = async (req, res, next) => {
       if (logObj.changes?.after?.assignedAgent) {
         const agentId = logObj.changes.after.assignedAgent.toString();
         logObj.changes.after.assignedAgentName = agentNameMap[agentId] || 'Unknown Agent';
+      }
+      if (logObj.changes?.before?.assignedAgent) {
+        const agentId = logObj.changes.before.assignedAgent.toString();
+        logObj.changes.before.assignedAgentName = agentNameMap[agentId] || 'Unknown Agent';
       }
 
       return logObj;

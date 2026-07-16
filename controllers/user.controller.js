@@ -230,6 +230,14 @@ exports.adminUpdateKycStatus = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Invalid status. Must be verified or rejected' });
     }
 
+    // Get old user state for audit logging
+    let oldUser = null;
+    try {
+      oldUser = await userService.getProfile(userId);
+    } catch (e) {
+      console.error('[Audit] Failed to fetch old user profile for KYC diff:', e.message);
+    }
+
     const user = await userService.updateKycStatus(userId, status, reason);
 
     // Notify User via WhatsApp & Push
@@ -262,7 +270,10 @@ exports.adminUpdateKycStatus = async (req, res, next) => {
         action: `KYC_${status.toUpperCase()}`,
         targetId: user._id, // Use the ID from the fetched user object for reliability
         targetModel: 'User',
-        changes: { after: { kycStatus: status, reason } }
+        changes: {
+          before: { kycStatus: oldUser ? oldUser.kycStatus : null, reason: oldUser ? (oldUser.kycReason || oldUser.reason || '') : '' },
+          after: { kycStatus: status, reason }
+        }
       }, req);
     } catch (auditErr) {
       console.error('[Audit] Failed to log KYC status update:', auditErr.message);
@@ -291,6 +302,14 @@ exports.adminAssignAgent = async (req, res, next) => {
     const { agentId } = req.body;
     const { userId } = req.params;
 
+    // Get old user state for audit logging
+    let oldUser = null;
+    try {
+      oldUser = await userService.getProfile(userId);
+    } catch (e) {
+      console.error('[Audit] Failed to fetch old user profile for assignment diff:', e.message);
+    }
+
     const user = await userService.assignAgent(userId, agentId);
 
     // Audit critical sales/admin action
@@ -300,7 +319,10 @@ exports.adminAssignAgent = async (req, res, next) => {
       action: 'AGENT_ASSIGNED',
       targetId: userId,
       targetModel: 'User',
-      changes: { after: { assignedAgent: agentId } }
+      changes: {
+        before: { assignedAgent: oldUser ? oldUser.assignedAgent : null },
+        after: { assignedAgent: agentId }
+      }
     }, req);
 
     try {
@@ -504,7 +526,38 @@ exports.adminUpdateUser = async (req, res, next) => {
     updateData.adminId = req.user._id;
     updateData.adminName = `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || 'Admin';
 
+    // Get old user state for audit logging
+    let oldUser = null;
+    try {
+      oldUser = await userService.getProfile(userId);
+    } catch (e) {
+      console.error('[Audit] Failed to fetch old user profile for diff:', e.message);
+    }
+
     const user = await userService.updateProfile(userId, updateData);
+
+    // Compute diff for audit log
+    const beforeChanges = {};
+    const afterChanges = {};
+    if (oldUser) {
+      const oldUserObj = typeof oldUser.toObject === 'function' ? oldUser.toObject() : oldUser;
+      Object.keys(req.body).forEach(key => {
+        let oldVal;
+        let newVal = req.body[key];
+        if (key === 'leadStatus') {
+          oldVal = oldUserObj.status;
+        } else if (key === 'leadNotes') {
+          oldVal = oldUserObj.notes;
+        } else {
+          oldVal = oldUserObj[key];
+        }
+
+        if (JSON.stringify(oldVal) !== JSON.stringify(newVal)) {
+          beforeChanges[key] = oldVal;
+          afterChanges[key] = newVal;
+        }
+      });
+    }
 
     // Audit critical sales/admin action
     auditService.logAction({
@@ -513,7 +566,10 @@ exports.adminUpdateUser = async (req, res, next) => {
       action: 'USER_PROFILE_UPDATED',
       targetId: userId,
       targetModel: 'User',
-      changes: { after: req.body }
+      changes: {
+        before: beforeChanges,
+        after: afterChanges
+      }
     }, req);
 
     try {
@@ -713,7 +769,10 @@ exports.adminToggleBlockUser = async (req, res, next) => {
       action: isBlockedNow ? 'USER_BLOCKED' : 'USER_UNBLOCKED',
       targetId: userId,
       targetModel: 'User',
-      changes: { after: { isBlocked: isBlockedNow } }
+      changes: {
+        before: { isBlocked: !isBlockedNow },
+        after: { isBlocked: isBlockedNow }
+      }
     }, req);
 
     try {
