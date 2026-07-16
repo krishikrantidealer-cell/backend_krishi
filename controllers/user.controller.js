@@ -965,4 +965,31 @@ exports.createNotification = async (req, res, next) => {
   }
 };
 
+exports.deleteNotification = async (req, res, next) => {
+  try {
+    const { notificationId } = req.params;
+
+    if (notificationId === 'all') {
+      // Delete all notifications for this user
+      await Notification.deleteMany({ user: req.user._id });
+      return res.json({ success: true, message: 'All notifications deleted' });
+    }
+
+    // Delete a single notification belonging to this user
+    const deleted = await Notification.findOneAndDelete({
+      _id: notificationId,
+      user: req.user._id,
+    });
+
+    if (!deleted) {
+      return res.status(404).json({ success: false, message: 'Notification not found' });
+    }
+
+    res.json({ success: true, message: 'Notification deleted' });
+  } catch (error) {
+    next(error);
+  }
+};
+
+
 

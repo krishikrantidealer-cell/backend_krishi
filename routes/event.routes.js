@@ -16,7 +16,7 @@ router.post('/heartbeat', eventController.handleHeartbeat);
 
 // --- Dashboard Queries (Admin Only) ---
 // Fetch historical logs
-router.get('/', protect, authorizeRoles('admin'), eventController.getEvents);
+router.get('/', protect, authorizeRoles('admin', 'sales'), eventController.getEvents);
 
 // Fetch real-time active users presence
 router.get('/realtime', protect, authorizeRoles('admin'), eventController.getActiveUsers);

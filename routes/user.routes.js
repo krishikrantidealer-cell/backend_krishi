@@ -18,6 +18,8 @@ router.post('/fcm-token', userController.updateFcmToken);
 // Fetch persistent notification history
 router.get('/notifications', userController.getMyNotifications);
 router.put('/notifications/read', userController.markNotificationsAsRead);
+router.delete('/notifications/all', userController.deleteNotification);
+router.delete('/notifications/:notificationId', userController.deleteNotification);
 // Admin: Send a notification to a specific user (used for admin notes)
 router.post('/notifications/send', authorizeRoles('admin', 'sales'), userController.createNotification);
 
