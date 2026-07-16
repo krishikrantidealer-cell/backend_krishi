@@ -72,8 +72,22 @@ class NotificationService {
 
   async sendMarketingNotification(userId, title, body, actionRoute, imageUrl) {
     try {
+      // 1. Save to Database (Enterprise Persistent Log)
+      const dbNotification = await Notification.create({
+        user: userId,
+        title: title,
+        body: body,
+        category: 'marketing',
+        actionRoute: actionRoute || '/cart'
+      });
+      console.log(`Marketing Notification logged to database with ID: ${dbNotification._id}`);
+
+      // 2. Send Push Notification via Firebase
       const user = await User.findById(userId);
-      if (!user || !user.fcmToken) return;
+      if (!user || !user.fcmToken) {
+        console.log("FCM Token missing. Push notification skipped, but logged to DB.");
+        return;
+      }
 
       if (!admin.apps.length) {
         console.warn("Firebase Admin not initialized. Skipping marketing notification.");
@@ -93,8 +107,8 @@ class NotificationService {
         }
       };
 
-      await admin.messaging().send(message);
-      console.log(`Marketing Notification sent successfully to user ${userId}`);
+      const response = await admin.messaging().send(message);
+      console.log(`Marketing Notification sent successfully to user ${userId}:`, response);
     } catch (error) {
       console.error('Error sending marketing notification:', error);
     }
