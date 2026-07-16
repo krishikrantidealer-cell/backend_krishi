@@ -113,6 +113,39 @@ class NotificationService {
       console.error('Error sending marketing notification:', error);
     }
   }
+
+  async notifyAdmins(title, body, actionRoute) {
+    try {
+      const admins = await User.find({ role: 'admin', isDeleted: { $ne: true } });
+      for (const adminUser of admins) {
+        await this.sendUtilityNotification(adminUser._id, title, body, actionRoute);
+      }
+    } catch (error) {
+      console.error('Error in notifyAdmins:', error);
+    }
+  }
+
+  async notifyAdminsAndAgent(agentId, title, body, actionRoute) {
+    try {
+      let recipients;
+      if (agentId) {
+        recipients = await User.find({
+          $or: [
+            { role: 'admin', isDeleted: { $ne: true } },
+            { _id: agentId, isDeleted: { $ne: true } }
+          ]
+        });
+      } else {
+        recipients = await User.find({ role: 'admin', isDeleted: { $ne: true } });
+      }
+
+      for (const recipient of recipients) {
+        await this.sendUtilityNotification(recipient._id, title, body, actionRoute);
+      }
+    } catch (error) {
+      console.error('Error in notifyAdminsAndAgent:', error);
+    }
+  }
 }
 
 module.exports = new NotificationService();

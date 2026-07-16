@@ -50,8 +50,34 @@ exports.createOrder = async (req, res, next) => {
     const whatsappAutomationService = require('../services/whatsappAutomation.service');
     const User = require('../models/User');
 
-    User.findById(req.user._id).then(user => {
-      if (user) whatsappAutomationService.notifyOrderConfirmation(user, order).catch(err => console.error("WA Confirm Err:", err));
+    User.findById(req.user._id).then(async (user) => {
+      if (user) {
+        whatsappAutomationService.notifyOrderConfirmation(user, order).catch(err => console.error("WA Confirm Err:", err));
+        
+        // Notify Admins and Agent of new order
+        try {
+          const nameStr = (user.firstName || user.lastName)
+            ? `${user.firstName || ''} ${user.lastName || ''}`.trim()
+            : user.shopName || user.phoneNumber;
+          
+          if (user.assignedAgent) {
+            await notificationService.notifyAdminsAndAgent(
+              user.assignedAgent,
+              'New Order Placed 📦',
+              `Order #${order._id.toString().substring(0, 6)} has been placed by ${nameStr} for amount ₹${order.total || order.totalAmount || 0}.`,
+              '/orders'
+            );
+          } else {
+            await notificationService.notifyAdmins(
+              'New Order Placed 📦',
+              `Order #${order._id.toString().substring(0, 6)} has been placed by ${nameStr} for amount ₹${order.total || order.totalAmount || 0}.`,
+              '/orders'
+            );
+          }
+        } catch (notifErr) {
+          console.error("Error sending admin order notification:", notifErr.message);
+        }
+      }
     });
 
     notificationService.sendUtilityNotification(
@@ -203,6 +229,36 @@ exports.cancelOrder = async (req, res, next) => {
       `Your order #${order._id.toString().slice(-6).toUpperCase()} has been cancelled successfully.`,
       `/order_details/${order._id}`
     ).catch(err => console.error("Error sending cancellation notification:", err));
+
+    // Notify admins and agent of order cancellation
+    try {
+      const User = require('../models/User');
+      const buyer = await User.findById(req.user._id);
+      if (buyer) {
+        const nameStr = (buyer.firstName || buyer.lastName)
+          ? `${buyer.firstName || ''} ${buyer.lastName || ''}`.trim()
+          : buyer.shopName || buyer.phoneNumber;
+        
+        const orderShortId = order._id.toString().slice(-6).toUpperCase();
+        
+        if (buyer.assignedAgent) {
+          await notificationService.notifyAdminsAndAgent(
+            buyer.assignedAgent,
+            'Order Cancelled ❌',
+            `Order #${orderShortId} has been cancelled by ${nameStr}.`,
+            '/orders'
+          );
+        } else {
+          await notificationService.notifyAdmins(
+            'Order Cancelled ❌',
+            `Order #${orderShortId} has been cancelled by ${nameStr}.`,
+            '/orders'
+          );
+        }
+      }
+    } catch (notifErr) {
+      console.error("Error sending cancellation notification to admin:", notifErr.message);
+    }
 
     try {
       const { broadcastToRoles } = require('../services/websocket.service');

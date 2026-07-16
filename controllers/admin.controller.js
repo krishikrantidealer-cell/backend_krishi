@@ -67,10 +67,35 @@ exports.getAuditLogs = async (req, res, next) => {
 
     if (search) {
       const searchRegex = new RegExp(search, 'i');
+      const matchedUsers = await User.find({
+        $or: [
+          { firstName: searchRegex },
+          { lastName: searchRegex },
+          { email: searchRegex },
+          { phoneNumber: searchRegex },
+          { shopName: searchRegex }
+        ]
+      }).select('_id');
+      const matchedUserIds = matchedUsers.map(u => u._id);
+
       query.$or = [
         { adminEmail: searchRegex },
         { action: searchRegex },
-        { targetModel: searchRegex }
+        { targetModel: searchRegex },
+        { adminId: { $in: matchedUserIds } },
+        { targetId: { $in: matchedUserIds } },
+        { 'changes.before.phoneNumber': searchRegex },
+        { 'changes.after.phoneNumber': searchRegex },
+        { 'changes.before.phone': searchRegex },
+        { 'changes.after.phone': searchRegex },
+        { 'changes.before.firstName': searchRegex },
+        { 'changes.after.firstName': searchRegex },
+        { 'changes.before.lastName': searchRegex },
+        { 'changes.after.lastName': searchRegex },
+        { 'changes.before.email': searchRegex },
+        { 'changes.after.email': searchRegex },
+        { 'changes.before.shopName': searchRegex },
+        { 'changes.after.shopName': searchRegex }
       ];
     }
 

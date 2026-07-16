@@ -114,6 +114,21 @@ exports.submitKyc = async (req, res, next) => {
       // Notify Admin via WhatsApp
       const whatsappService = require('../services/whatsapp.service');
       whatsappService.notifyKycSubmissionToAdmin(user);
+
+      // Notify Admin via Database Notifications
+      try {
+        const nameStr = (user.firstName || user.lastName)
+          ? `${user.firstName || ''} ${user.lastName || ''}`.trim()
+          : user.shopName || user.phoneNumber;
+        const notificationService = require('../services/notification.service');
+        await notificationService.notifyAdmins(
+          'New KYC Submission 📄',
+          `${nameStr} has submitted KYC documents for verification.`,
+          '/leads'
+        );
+      } catch (notifErr) {
+        console.error('[Notification] Failed to notify admins on KYC submission:', notifErr.message);
+      }
     } catch (wsErr) {}
 
     return res.status(200).json({
@@ -846,10 +861,18 @@ exports.adminToggleBlockUser = async (req, res, next) => {
 
 exports.markNotificationsAsRead = async (req, res, next) => {
   try {
-    await Notification.updateMany(
-      { user: req.user._id, isRead: false },
-      { $set: { isRead: true } }
-    );
+    const { notificationId } = req.body;
+    if (notificationId) {
+      await Notification.updateOne(
+        { _id: notificationId, user: req.user._id, isRead: false },
+        { $set: { isRead: true } }
+      );
+    } else {
+      await Notification.updateMany(
+        { user: req.user._id, isRead: false },
+        { $set: { isRead: true } }
+      );
+    }
     res.json({ success: true, message: 'Notifications marked as read' });
   } catch (error) {
     next(error);
@@ -876,6 +899,19 @@ exports.deleteSelfAccount = async (req, res, next) => {
       sendToAll({ type: 'LEADS_UPDATE' });
     } catch (wsErr) {
       console.error('[WS] Failed to broadcast user self-deletion:', wsErr.message);
+    }
+
+    // Notify admins of account deletion
+    try {
+      const nameStr = `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || req.user.phoneNumber || 'User';
+      const notificationService = require('../services/notification.service');
+      await notificationService.notifyAdmins(
+        'Account Self-Deleted ⚠️',
+        `${nameStr} has deleted their account.`,
+        '/logs'
+      );
+    } catch (notifErr) {
+      console.error('[Notification] Failed to notify admins on self-deletion:', notifErr.message);
     }
 
     res.json({
