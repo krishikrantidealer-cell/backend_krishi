@@ -42,6 +42,8 @@ class AuthController {
         user: {
           id: user._id,
           email: user.email,
+          firstName: user.firstName,
+          lastName: user.lastName,
           phoneNumber: user.phoneNumber,
           isVerified: user.isVerified,
           isProfileComplete: user.isProfileComplete,
@@ -197,6 +199,9 @@ class AuthController {
         user: {
           id: user._id,
           phoneNumber: user.phoneNumber,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          email: user.email,
           isVerified: user.isVerified,
           isProfileComplete: user.isProfileComplete,
           isKycComplete: user.isKycComplete,
@@ -267,18 +272,28 @@ class AuthController {
 
   async resetPassword(req, res) {
     try {
-      const { newPassword } = req.body;
+      const { currentPassword, newPassword } = req.body;
       if (!newPassword || newPassword.length < 6) {
-        return res.status(400).json({ success: false, message: 'Password must be at least 6 characters long' });
+        return res.status(400).json({ success: false, message: 'New password must be at least 6 characters long' });
+      }
+      if (!currentPassword) {
+        return res.status(400).json({ success: false, message: 'Current password is required' });
+      }
+
+      const user = await User.findById(req.user._id).select('+password');
+      if (!user) {
+        return res.status(404).json({ success: false, message: 'User not found' });
+      }
+
+      // Verify current password
+      const { compareData } = require('../utils/hash');
+      const isMatch = await compareData(currentPassword, user.password);
+      if (!isMatch) {
+        return res.status(401).json({ success: false, message: 'Incorrect current password' });
       }
 
       const { hashData } = require('../utils/hash');
       const hashedPassword = await hashData(newPassword);
-
-      const user = await User.findById(req.user._id);
-      if (!user) {
-        return res.status(404).json({ success: false, message: 'User not found' });
-      }
 
       user.password = hashedPassword;
       await user.save();
