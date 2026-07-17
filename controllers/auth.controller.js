@@ -264,6 +264,45 @@ class AuthController {
       res.status(500).json({ success: false, message: 'Failed to fetch sessions' });
     }
   }
+
+  async resetPassword(req, res) {
+    try {
+      const { newPassword } = req.body;
+      if (!newPassword || newPassword.length < 6) {
+        return res.status(400).json({ success: false, message: 'Password must be at least 6 characters long' });
+      }
+
+      const { hashData } = require('../utils/hash');
+      const hashedPassword = await hashData(newPassword);
+
+      const user = await User.findById(req.user._id);
+      if (!user) {
+        return res.status(404).json({ success: false, message: 'User not found' });
+      }
+
+      user.password = hashedPassword;
+      await user.save();
+
+      // Audit Log: Password Reset
+      try {
+        const auditService = require('../services/audit.service');
+        auditService.logAction({
+          adminId: user._id,
+          adminEmail: user.email,
+          action: 'PASSWORD_RESET_SELF',
+          targetId: user._id,
+          targetModel: 'User',
+          details: `User reset their own password: ${user.firstName || ''} ${user.lastName || ''}`.trim(),
+        }, req);
+      } catch (auditErr) {
+        console.error('Failed to write audit log for self password reset:', auditErr.message);
+      }
+
+      res.status(200).json({ success: true, message: 'Password reset successfully' });
+    } catch (error) {
+      res.status(500).json({ success: false, message: error.message });
+    }
+  }
 }
 
 module.exports = new AuthController();

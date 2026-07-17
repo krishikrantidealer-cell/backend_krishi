@@ -54,5 +54,14 @@ router.post(
 router.post('/logout', protect, authController.logout);
 router.post('/logout-all', protect, authController.logoutAll);
 router.get('/sessions', protect, authController.getSessions);
+router.post(
+  '/reset-password',
+  protect,
+  [
+    body('newPassword').isLength({ min: 6 }).withMessage('Password must be at least 6 characters long')
+  ],
+  validate,
+  authController.resetPassword
+);
 
 module.exports = router;
