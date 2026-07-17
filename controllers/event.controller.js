@@ -203,7 +203,7 @@ exports.ingestBatch = async (req, res, next) => {
 exports.getEvents = async (req, res, next) => {
   try {
     const limit = parseInt(req.query.limit) || 300;
-    const { user, before, filter } = req.query;
+    const { user, before, filter, actorOnly } = req.query;
 
     let query = {};
     let resolvedIdentifiers = [];
@@ -230,14 +230,18 @@ exports.getEvents = async (req, res, next) => {
       } catch (_) {}
 
       resolvedIdentifiers = [...new Set(resolvedIdentifiers)];
-      query.$or = [
-        { user: { $in: resolvedIdentifiers } },
-        ...resolvedIdentifiers.map(id => ({ "payload.dealerId": id })),
-        ...resolvedIdentifiers.map(id => ({ "payload.dealerEmail": id })),
-        ...resolvedIdentifiers.map(id => ({ "payload.dealerPhone": id })),
-        ...resolvedIdentifiers.map(id => ({ "payload.userId": id })),
-        ...resolvedIdentifiers.map(id => ({ "payload.userEmail": id }))
-      ];
+      if (actorOnly === 'true') {
+        query.user = { $in: resolvedIdentifiers };
+      } else {
+        query.$or = [
+          { user: { $in: resolvedIdentifiers } },
+          ...resolvedIdentifiers.map(id => ({ "payload.dealerId": id })),
+          ...resolvedIdentifiers.map(id => ({ "payload.dealerEmail": id })),
+          ...resolvedIdentifiers.map(id => ({ "payload.dealerPhone": id })),
+          ...resolvedIdentifiers.map(id => ({ "payload.userId": id })),
+          ...resolvedIdentifiers.map(id => ({ "payload.userEmail": id }))
+        ];
+      }
     }
 
     // 2. Handle Pagination
