@@ -1004,5 +1004,107 @@ exports.deleteNotification = async (req, res, next) => {
   }
 };
 
+exports.adminBulkCreateUsers = async (req, res, next) => {
+  try {
+    const { users } = req.body;
+
+    if (!users || !Array.isArray(users)) {
+      return res.status(400).json({ success: false, message: 'Users array is required' });
+    }
+
+    const User = require('../models/User');
+    const results = {
+      success: [],
+      failed: [],
+    };
+
+    const seenPhones = new Set();
+    const seenEmails = new Set();
+
+    for (const userData of users) {
+      try {
+        // Validate minimal requirement: phoneNumber
+        if (!userData.phoneNumber) {
+          results.failed.push({ data: userData, reason: 'Phone number is required' });
+          continue;
+        }
+
+        const phoneNumber = String(userData.phoneNumber).trim();
+        const email = userData.email ? String(userData.email).trim().toLowerCase() : null;
+
+        // Check for duplicates within the current uploaded batch
+        if (seenPhones.has(phoneNumber)) {
+          results.failed.push({ data: userData, reason: 'Duplicate phone number within the uploaded batch' });
+          continue;
+        }
+        if (email && seenEmails.has(email)) {
+          results.failed.push({ data: userData, reason: 'Duplicate email within the uploaded batch' });
+          continue;
+        }
+
+        // Check if user already exists in the database
+        const existingUser = await User.findOne({
+          $or: [
+            { phoneNumber },
+            ...(email ? [{ email }] : [])
+          ]
+        });
+
+        if (existingUser) {
+          results.failed.push({ data: userData, reason: 'User with this phone/email already exists' });
+          continue;
+        }
+
+        // Mark as seen in this batch
+        seenPhones.add(phoneNumber);
+        if (email) seenEmails.add(email);
+
+        const newUser = await User.create({
+          ...userData,
+          phoneNumber,
+          email: email || undefined,
+          role: userData.role || 'user',
+          isVerified: true,
+          isProfileComplete: !!(userData.firstName && userData.lastName),
+          source: userData.source || 'Bulk Import',
+          status: userData.status || 'prospect',
+          kycStatus: userData.kycStatus || 'pending',
+          ...(req.user.role === 'sales' ? { assignedAgent: req.user._id } : {}),
+        });
+
+        results.success.push(newUser._id);
+      } catch (err) {
+        results.failed.push({ data: userData, reason: err.message });
+      }
+    }
+
+    // Log Activity
+    try {
+      auditService.logAction({
+        adminId: req.user._id,
+        adminEmail: req.user.email,
+        action: 'BULK_USER_IMPORT',
+        targetModel: 'User',
+        details: `Imported ${results.success.length} users via bulk upload. ${results.failed.length} failed.`,
+      }, req);
+    } catch (auditErr) {
+      console.error('[Audit] Failed to log bulk import:', auditErr.message);
+    }
+
+    try {
+      const { broadcastToRoles } = require('../services/websocket.service');
+      broadcastToRoles(['admin', 'sales'], { type: 'LEADS_UPDATE' });
+    } catch (wsErr) {}
+
+    res.json({
+      success: true,
+      message: `Successfully imported ${results.success.length} users. ${results.failed.length} failed.`,
+      results,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 
 

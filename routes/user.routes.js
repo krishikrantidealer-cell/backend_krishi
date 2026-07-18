@@ -107,6 +107,9 @@ router.patch('/addresses/:addressId/default', userController.setDefaultAddress);
 // Get all users (Admin and Sales)
 router.get('/', authorizeRoles('admin', 'sales'), userController.getAllUsers);
 
+// Bulk Create Users (Admin and Sales)
+router.post('/bulk', authorizeRoles('admin', 'sales'), userController.adminBulkCreateUsers);
+
 // Get specific user (Admin and Sales)
 router.get('/:userId', authorizeRoles('admin', 'sales'), userController.getUserById);
 

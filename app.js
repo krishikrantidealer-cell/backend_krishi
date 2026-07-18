@@ -53,6 +53,14 @@ app.use('/api/sales-coupons', salesCouponRoutes);
 app.use('/api/events', eventRoutes);
 app.use('/api/cron', cronRoutes);
 
+// 404 Handler for API routes
+app.use('/api', (req, res) => {
+  res.status(404).json({
+    success: false,
+    message: `API Route not found: ${req.method} ${req.originalUrl}`
+  });
+});
+
 app.get('/health', async (req, res) => {
   const { redisClient } = require('./config/redis');
   let redisStatus = 'disconnected';
