@@ -368,3 +368,107 @@ exports.getDashboardAnalytics = async (req, res, next) => {
     next(error);
   }
 };
+
+const Estimate = require('../models/Estimate');
+
+// Get all estimates
+exports.getAllEstimates = async (req, res, next) => {
+  try {
+    const estimates = await Estimate.find().sort({ createdAt: -1 });
+    res.status(200).json({
+      success: true,
+      estimates
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Create new estimate
+exports.createEstimate = async (req, res, next) => {
+  try {
+    let estimateNo = req.body.estimateNo;
+    if (!estimateNo) {
+      const now = new Date();
+      const year = now.getFullYear() % 100;
+      const nextYear = (now.getFullYear() + 1) % 100;
+      const rand = Math.floor(1000 + Math.random() * 9000).toString();
+      estimateNo = `EBS/${year}-${nextYear}/EST/${rand}`;
+    }
+
+    // Check uniqueness
+    let existing = await Estimate.findOne({ estimateNo });
+    while (existing) {
+      const now = new Date();
+      const year = now.getFullYear() % 100;
+      const nextYear = (now.getFullYear() + 1) % 100;
+      const rand = Math.floor(1000 + Math.random() * 9000).toString();
+      estimateNo = `EBS/${year}-${nextYear}/EST/${rand}`;
+      existing = await Estimate.findOne({ estimateNo });
+    }
+
+    const estimate = await Estimate.create({
+      ...req.body,
+      estimateNo
+    });
+
+    res.status(201).json({
+      success: true,
+      estimate
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Update estimate
+exports.updateEstimate = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    
+    const estimate = await Estimate.findById(id);
+    if (!estimate) {
+      return res.status(404).json({
+        success: false,
+        message: 'Estimate not found'
+      });
+    }
+
+    const updateData = { ...req.body };
+    delete updateData.estimateNo;
+
+    const updatedEstimate = await Estimate.findByIdAndUpdate(
+      id,
+      updateData,
+      { new: true, runValidators: true }
+    );
+
+    res.status(200).json({
+      success: true,
+      estimate: updatedEstimate
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Delete estimate
+exports.deleteEstimate = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const estimate = await Estimate.findByIdAndDelete(id);
+    if (!estimate) {
+      return res.status(404).json({
+        success: false,
+        message: 'Estimate not found'
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Estimate deleted successfully'
+    });
+  } catch (error) {
+    next(error);
+  }
+};

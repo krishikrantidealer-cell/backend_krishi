@@ -71,7 +71,49 @@ You can set them in the **Google Cloud Console UI** under Cloud Run > `krishi-ba
 ```bash
 gcloud run services update krishi-backend \
     --region us-central1 \
-    --set-env-vars="NODE_ENV=production,PORT=8080,MONGODB_URI=your_mongo_uri,REDIS_URL=your_redis_url,JWT_ACCESS_SECRET=your_secret,JWT_REFRESH_SECRET=your_secret,MASTER_OTP=123456,GCS_PROJECT_ID=strong-keel-494809-j3,GCS_BUCKET_NAME=krishi-product-images,AIRTEL_IQ_CUSTOMER_ID=your_id,AIRTEL_IQ_USERNAME=your_username,AIRTEL_IQ_PASSWORD=your_password,AIRTEL_IQ_SOURCE_ADDRESS=KRORCS,AIRTEL_IQ_DLT_TEMPLATE_ID=your_dlt_id,AIRTEL_IQ_ENTITY_ID=your_entity_id,AIRTEL_IQ_MESSAGE_TEMPLATE=your_message_template"
+    --set-env-vars="NODE_ENV=production,PORT=8080,MONGODB_URI=your_mongo_uri,REDIS_URL=your_redis_url,JWT_ACCESS_SECRET=your_secret,JWT_REFRESH_SECRET=your_secret,MASTER_OTP=123456,GCS_PROJECT_ID=strong-keel-494809-j3,GCS_BUCKET_NAME=krishi-product-images,AIRTEL_IQ_CUSTOMER_ID=your_id,AIRTEL_IQ_USERNAME=your_username,AIRTEL_IQ_PASSWORD=your_password,AIRTEL_IQ_SOURCE_ADDRESS=KRORCS,AIRTEL_IQ_DLT_TEMPLATE_ID=your_dlt_id,AIRTEL_IQ_ENTITY_ID=your_entity_id,AIRTEL_IQ_MESSAGE_TEMPLATE=your_message_template,DELHIVERY_API_TOKEN=your_delhivery_token,DELHIVERY_WEBHOOK_SECRET=your_delhivery_webhook_secret"
+```
+
+---
+
+## 5b. ⚠️ CRITICAL: WebSocket Support on Cloud Run
+
+Cloud Run is stateless and may spin up **multiple container instances**. WebSocket connections are held in-memory per container (`clients` Map in `websocket.service.js`). If two instances run simultaneously, `sendToUser()` on one container won't reach connections on the other.
+
+**You MUST run this command to fix it:**
+
+```bash
+gcloud run services update krishi-backend \
+    --region asia-south1 \
+    --session-affinity \
+    --min-instances=1 \
+    --timeout=3600
+```
+
+### Flags explained:
+- `--session-affinity`: Routes each client's connections to the **same container instance** (sticky sessions). This ensures WebSocket connections stay on one container.
+- `--min-instances=1`: Prevents the container from scaling to zero (which would kill all open WebSocket connections).
+- `--timeout=3600`: Sets the request timeout to 1 hour (Cloud Run default is 5 min), allowing long-lived WebSocket connections.
+
+---
+
+## 5c. Registering the Delhivery Webhook URL
+
+In the **Delhivery Business Portal** → **Settings → Webhooks**, register:
+
+```
+https://krishi-backend-123180953109.asia-south1.run.app/api/orders/webhook
+```
+
+Set your `DELHIVERY_WEBHOOK_SECRET` value as the webhook token/secret in the Delhivery portal settings.
+
+---
+
+## 5d. Getting Your Delhivery API Token
+
+1. Log into [https://netcore.delhivery.com](https://netcore.delhivery.com)
+2. Go to **Settings → API Settings → Token**
+3. Copy your token and set it as `DELHIVERY_API_TOKEN` in your env vars
 ```
 
 ---

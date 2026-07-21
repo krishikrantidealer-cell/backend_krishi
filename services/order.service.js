@@ -473,7 +473,7 @@ class OrderService {
           if (!order.cancelledAt) order.cancelledAt = new Date();
         }
 
-        // Trigger Notification if status has actually changed
+        // Trigger Notification + WS push if status has actually changed
         if (previousStatus !== order.orderStatus) {
           const notificationService = require('./notification.service');
           notificationService.sendUtilityNotification(
@@ -482,6 +482,19 @@ class OrderService {
             `Your order ${order.orderId} is now ${order.orderStatus}.`,
             `/order_details/${order._id}`
           );
+
+          // Push real-time WebSocket update to the buyer (if their app is open)
+          try {
+            const { sendToUser } = require('./websocket.service');
+            sendToUser(userId.toString(), {
+              type: 'ORDER_STATUS_UPDATE',
+              orderId: order._id.toString(),
+              orderStatus: order.orderStatus,
+              courierStatus: order.courierStatus || null
+            });
+          } catch (wsErr) {
+            console.error('[WS] Failed to push ORDER_STATUS_UPDATE from Delhivery sync:', wsErr.message);
+          }
         }
 
         await order.save();

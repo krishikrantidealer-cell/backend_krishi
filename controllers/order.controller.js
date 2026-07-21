@@ -136,6 +136,17 @@ exports.getOrderDetails = async (req, res, next) => {
 
 exports.delhiveryWebhook = async (req, res, next) => {
   try {
+    // ── Security: verify that this request actually came from Delhivery ──────
+    const webhookSecret = process.env.DELHIVERY_WEBHOOK_SECRET;
+    if (webhookSecret && !webhookSecret.includes('YOUR_')) {
+      const authHeader = req.headers['authorization'] || req.headers['x-delhivery-token'] || '';
+      const receivedToken = authHeader.replace('Token ', '').trim();
+      if (receivedToken !== webhookSecret) {
+        console.warn('[Webhook] Unauthorized Delhivery webhook attempt from:', req.ip);
+        return res.status(401).json({ success: false, message: 'Unauthorized' });
+      }
+    }
+
     const rawStatus = req.body.status || req.body.current_status || '';
     const awb = req.body.awb || req.body.awb_number;
     const orderId = req.body.order_id || req.body.orderId;
@@ -197,6 +208,19 @@ exports.delhiveryWebhook = async (req, res, next) => {
       `Your package tracking status is now: ${order.courierStatus || order.orderStatus}.`,
       `/order_details/${order._id}`
     ).catch(err => console.error("Error sending webhook notification in background:", err));
+
+    // Push real-time update to buyer's open WebSocket connection (if any)
+    try {
+      const { sendToUser } = require('../services/websocket.service');
+      sendToUser(order.user.toString(), {
+        type: 'ORDER_STATUS_UPDATE',
+        orderId: order._id.toString(),
+        orderStatus: order.orderStatus,
+        courierStatus: order.courierStatus || null
+      });
+    } catch (wsErr) {
+      console.error('[WS] Failed to push ORDER_STATUS_UPDATE to buyer:', wsErr.message);
+    }
 
     res.json({ success: true, message: "Webhook processed and status synced successfully", orderStatus: order.orderStatus });
   } catch (error) {
@@ -261,10 +285,17 @@ exports.cancelOrder = async (req, res, next) => {
     }
 
     try {
-      const { broadcastToRoles } = require('../services/websocket.service');
+      const { broadcastToRoles, sendToUser } = require('../services/websocket.service');
       broadcastToRoles(['admin', 'sales'], { type: 'ORDERS_UPDATE' });
+      // Push real-time cancellation to buyer
+      sendToUser(order.user.toString(), {
+        type: 'ORDER_STATUS_UPDATE',
+        orderId: order._id.toString(),
+        orderStatus: 'Cancelled',
+        courierStatus: null
+      });
     } catch (wsErr) {
-      console.error("[WS] Failed to broadcast ORDERS_UPDATE on order cancellation:", wsErr.message);
+      console.error("[WS] Failed to push cancellation update to buyer:", wsErr.message);
     }
 
     res.json({ success: true, message: "Order cancelled successfully", order });
@@ -344,10 +375,17 @@ exports.adminUpdateOrderStatus = async (req, res, next) => {
     }, req);
 
     try {
-      const { broadcastToRoles } = require('../services/websocket.service');
+      const { broadcastToRoles, sendToUser } = require('../services/websocket.service');
       broadcastToRoles(['admin', 'sales'], { type: 'ORDERS_UPDATE' });
+      // Push real-time update to the buyer too
+      sendToUser(order.user.toString(), {
+        type: 'ORDER_STATUS_UPDATE',
+        orderId: order._id.toString(),
+        orderStatus: order.orderStatus,
+        courierStatus: order.courierStatus || null
+      });
     } catch (wsErr) {
-      console.error("[WS] Failed to broadcast ORDERS_UPDATE on admin status update:", wsErr.message);
+      console.error("[WS] Failed to broadcast order update:", wsErr.message);
     }
 
     res.json({ success: true, message: `Order status updated to ${status}`, order });
@@ -405,10 +443,17 @@ exports.sheetsWebhook = async (req, res, next) => {
     ).catch(err => console.error("Error sending order status notification:", err));
 
     try {
-      const { broadcastToRoles } = require('../services/websocket.service');
+      const { broadcastToRoles, sendToUser } = require('../services/websocket.service');
       broadcastToRoles(['admin', 'sales'], { type: 'ORDERS_UPDATE' });
+      // Push real-time update to the buyer too
+      sendToUser(order.user.toString(), {
+        type: 'ORDER_STATUS_UPDATE',
+        orderId: order._id.toString(),
+        orderStatus: order.orderStatus,
+        courierStatus: null
+      });
     } catch (wsErr) {
-      console.error("[WS] Failed to broadcast ORDERS_UPDATE on sheets webhook:", wsErr.message);
+      console.error("[WS] Failed to broadcast order update:", wsErr.message);
     }
 
     res.json({ success: true, message: `Order ${orderId} updated to ${status} from sheet`, orderStatus: status });

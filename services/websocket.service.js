@@ -11,6 +11,29 @@ const initWebSocket = (server) => {
   wss.on('connection', async (ws, req) => {
     const parameters = url.parse(req.url, true).query;
     const userId = parameters.userId;
+    const token = parameters.token;
+
+    // ── Security: verify the JWT token matches the claimed userId ─────────────
+    if (userId && token) {
+      try {
+        const jwt = require('jsonwebtoken');
+        const decoded = jwt.verify(token, process.env.JWT_ACCESS_SECRET);
+        // Reject if the token's user id doesn't match the claimed userId
+        if (decoded.id !== userId && decoded._id !== userId) {
+          console.warn(`[WS] Token userId mismatch — claimed: ${userId}, actual: ${decoded.id}`);
+          ws.close(4001, 'Unauthorized');
+          return;
+        }
+      } catch (err) {
+        console.warn(`[WS] Invalid token on connection attempt:`, err.message);
+        ws.close(4001, 'Unauthorized');
+        return;
+      }
+    } else if (!userId) {
+      // No userId at all — disconnect silently
+      ws.close(4002, 'Missing userId');
+      return;
+    }
 
     if (userId) {
       ws.userId = userId;

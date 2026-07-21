@@ -13,4 +13,10 @@ router.get('/dashboard', adminController.getDashboardAnalytics);
 // Audit Logs
 router.get('/audit-logs', adminController.getAuditLogs);
 
+// Estimates CRUD
+router.get('/estimates', adminController.getAllEstimates);
+router.post('/estimates', adminController.createEstimate);
+router.put('/estimates/:id', adminController.updateEstimate);
+router.delete('/estimates/:id', adminController.deleteEstimate);
+
 module.exports = router;
