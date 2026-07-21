@@ -19,8 +19,9 @@ const initWebSocket = (server) => {
         const jwt = require('jsonwebtoken');
         const decoded = jwt.verify(token, process.env.JWT_ACCESS_SECRET);
         // Reject if the token's user id doesn't match the claimed userId
-        if (decoded.id !== userId && decoded._id !== userId) {
-          console.warn(`[WS] Token userId mismatch — claimed: ${userId}, actual: ${decoded.id}`);
+        const tokenUserId = decoded.userId || decoded.id || decoded._id;
+        if (tokenUserId !== userId) {
+          console.warn(`[WS] Token userId mismatch — claimed: ${userId}, actual: ${tokenUserId}`);
           ws.close(4001, 'Unauthorized');
           return;
         }
