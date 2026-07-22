@@ -16,6 +16,8 @@ const adminRoutes = require('./routes/admin.routes');
 const salesCouponRoutes = require('./routes/salesCoupon.routes');
 const eventRoutes = require('./routes/event.routes');
 const cronRoutes = require('./routes/cron.routes');
+const webhookRoutes = require('./routes/webhook.routes');
+const conversationRoutes = require('./routes/conversation.routes');
 
 const app = express();
 const zlib = require('zlib');
@@ -31,7 +33,11 @@ app.use(cors({
   credentials: true
 }));
 
-app.use(express.json());
+app.use(express.json({
+  verify: (req, res, buf) => {
+    req.rawBody = buf.toString();
+  }
+}));
 app.use(express.urlencoded({ extended: true }));
 
 if (process.env.NODE_ENV === 'development') {
@@ -52,6 +58,8 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/sales-coupons', salesCouponRoutes);
 app.use('/api/events', eventRoutes);
 app.use('/api/cron', cronRoutes);
+app.use('/api', webhookRoutes);
+app.use('/api', conversationRoutes);
 
 // 404 Handler for API routes
 app.use('/api', (req, res) => {

@@ -240,6 +240,15 @@ exports.getUserById = async (req, res, next) => {
   try {
     // Admins and sales can see profiles even if marked as deleted (e.g. from trash)
     const user = await userService.getProfile(req.params.userId, true);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    // Role Security: Sales agents can ONLY view profile details for leads/dealers assigned to them
+    if (req.user.role === 'sales' && user.assignedAgent && String(user.assignedAgent._id || user.assignedAgent) !== String(req.user._id)) {
+      return res.status(403).json({ success: false, message: 'Access Denied: You can only view leads or dealers assigned to you.' });
+    }
+
     res.json({
       success: true,
       user
@@ -339,6 +348,34 @@ exports.adminAssignAgent = async (req, res, next) => {
     }
 
     const user = await userService.assignAgent(userId, agentId);
+
+    // Sync WhatsApp CRM Contact and Conversation assignments to match this change
+    if (user && user.phoneNumber) {
+      try {
+        const Contact = require('../models/Contact');
+        const Conversation = require('../models/Conversation');
+        const cleanPhone = user.phoneNumber.replace(/[^\d]/g, '');
+        const contact = await Contact.findOneAndUpdate(
+          {
+            $or: [
+              { phone: cleanPhone },
+              { phone: `91${cleanPhone}` },
+              { phone: `+91${cleanPhone}` }
+            ]
+          },
+          { assignedTo: agentId },
+          { new: true }
+        );
+        if (contact) {
+          await Conversation.findOneAndUpdate(
+            { contactId: contact._id },
+            { assignedTo: agentId }
+          );
+        }
+      } catch (err) {
+        console.error('[Sync] Failed to sync WhatsApp contact/conversation assignment:', err.message);
+      }
+    }
 
     // Audit critical sales/admin action
     auditService.logAction({
