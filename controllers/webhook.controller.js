@@ -1,27 +1,28 @@
-const axios = require('axios');
 const Contact = require('../models/Contact');
 const Conversation = require('../models/Conversation');
 const Message = require('../models/Message');
 const User = require('../models/User');
-const interaktService = require('../services/interakt.service');
+const myoperatorService = require('../services/myoperator.service');
 const wsService = require('../services/websocket.service');
 
 const handleWebhook = async (req, res) => {
   try {
     const payload = req.body;
     if (!payload || !payload.type) {
-      console.warn('[Interakt Webhook] Received invalid payload');
+      console.warn('[MyOperator Webhook] Received invalid or empty payload');
       return res.status(400).json({ success: false });
     }
 
     const { type, data } = payload;
-    console.log(`[Interakt Webhook] Received event: ${type}`);
+    console.log(`[MyOperator Webhook] Received event: ${type}`);
 
-    // Acknowledge receipt within 3 seconds as required by Interakt
+    // Acknowledge receipt immediately (required by MyOperator within 3 seconds)
     res.status(200).json({ success: true });
 
-    // Handle Incoming Customer Messages
-    const isIncomingMessage = type === 'message_received' ||
+    // ─── Handle Incoming Customer Messages (message.received) ─────────────────
+    const isIncomingMessage =
+      type === 'message.received' ||
+      type === 'message_received' ||
       type === 'customer_message_received' ||
       type === 'message_api_received' ||
       type === 'incoming_message' ||
@@ -30,27 +31,32 @@ const handleWebhook = async (req, res) => {
     if (isIncomingMessage) {
       const customer = data?.customer || data?.data?.customer || {};
       const messageData = data?.message || data?.data?.message || data || {};
-      const phone = customer.phoneNumber || customer.phone_number || customer.phone || messageData.phoneNumber || messageData.phone_number || messageData.from;
+      const phone =
+        customer.phoneNumber ||
+        customer.phone_number ||
+        customer.phone ||
+        messageData.phoneNumber ||
+        messageData.phone_number ||
+        messageData.from;
 
       if (!phone) {
-        console.warn('[Interakt Webhook] Received message_received without phone number', JSON.stringify(payload));
+        console.warn('[MyOperator Webhook] message.received missing phone number', JSON.stringify(payload));
         return;
       }
 
-      console.log(`[Interakt Webhook] Incoming message from: ${phone}`);
+      console.log(`[MyOperator Webhook] Incoming message from: ${phone}`);
 
-      // 1. Create or Find Contact (Robust phone lookup)
+      // 1. Find or Create Contact
       const cleanPhone = phone.replace(/[^\d]/g, '').replace(/^91/, '');
       let contact = await Contact.findOne({
         $or: [
-          { phone: phone },
+          { phone },
           { phone: cleanPhone },
           { phone: `91${cleanPhone}` },
           { phone: `+91${cleanPhone}` }
         ]
       });
 
-      // Look up if a User exists in the database with this phone number
       const existingUser = await User.findOne({
         $or: [
           { phoneNumber: phone },
@@ -60,28 +66,40 @@ const handleWebhook = async (req, res) => {
         ]
       });
 
-      let assignedAgentId = existingUser ? (existingUser.assignedAgent?._id || existingUser.assignedAgent) : null;
+      let assignedAgentId = existingUser
+        ? existingUser.assignedAgent?._id || existingUser.assignedAgent
+        : null;
 
       if (!contact) {
         if (!assignedAgentId) {
-          assignedAgentId = await interaktService.assignNextSalesAgent();
+          assignedAgentId = await myoperatorService.assignNextSalesAgent();
         }
         contact = new Contact({
-          name: customer.name || (existingUser ? `${existingUser.firstName || ''} ${existingUser.lastName || ''}`.trim() || existingUser.shopName : null) || `User ${phone.slice(-4)}`,
+          name:
+            customer.name ||
+            (existingUser
+              ? `${existingUser.firstName || ''} ${existingUser.lastName || ''}`.trim() ||
+                existingUser.shopName
+              : null) ||
+            `User ${phone.slice(-4)}`,
           phone: cleanPhone,
           assignedTo: assignedAgentId,
-          tags: ['interakt-lead']
+          tags: ['myoperator-lead']
         });
         await contact.save();
       } else {
-        // Sync: If the Contact exists but its assignment is different from the User's assignment, update it!
-        if (existingUser && assignedAgentId && String(contact.assignedTo) !== String(assignedAgentId)) {
+        // Sync assignment if it changed
+        if (
+          existingUser &&
+          assignedAgentId &&
+          String(contact.assignedTo) !== String(assignedAgentId)
+        ) {
           contact.assignedTo = assignedAgentId;
           await contact.save();
         }
       }
 
-      // 2. Create or Find Conversation
+      // 2. Find or Create Conversation
       let conversation = await Conversation.findOne({ contactId: contact._id });
       if (!conversation) {
         conversation = new Conversation({
@@ -91,36 +109,21 @@ const handleWebhook = async (req, res) => {
         });
         await conversation.save();
       } else {
-        // Auto-reopen conversation on customer message
+        // Auto-reopen on incoming message
         conversation.status = 'open';
-
-        // Sync Conversation's assignment to match Contact's assignment
         if (String(conversation.assignedTo) !== String(contact.assignedTo)) {
           conversation.assignedTo = contact.assignedTo;
         }
         await conversation.save();
       }
 
-      // Increment unread status
       conversation.unreadCount += 1;
-      
-      // Determine message fields
+
+      // 3. Extract message content
       let msgType = messageData.message_type || messageData.type || messageData.msg_type || 'text';
       let content = '';
 
-      if (typeof messageData.text === 'string') {
-        content = messageData.text;
-      } else if (messageData.text?.body) {
-        content = messageData.text.body;
-      } else if (typeof messageData.body === 'string') {
-        content = messageData.body;
-      } else if (typeof messageData.message === 'string') {
-        content = messageData.message;
-      } else if (messageData.message?.text?.body) {
-        content = messageData.message.text.body;
-      } else if (typeof messageData.message?.text === 'string') {
-        content = messageData.message.text;
-      } else if (messageData.button_reply?.title) {
+      if (messageData.button_reply?.title) {
         content = messageData.button_reply.title;
       } else if (messageData.list_reply?.title) {
         content = messageData.list_reply.title;
@@ -128,8 +131,32 @@ const handleWebhook = async (req, res) => {
         content = messageData.interactive.button_reply.title;
       } else if (messageData.interactive?.list_reply?.title) {
         content = messageData.interactive.list_reply.title;
+      } else if (messageData.text?.body) {
+        content = messageData.text.body;
+      } else if (typeof messageData.text === 'string') {
+        content = messageData.text;
+      } else if (typeof messageData.body === 'string') {
+        content = messageData.body;
+      } else if (messageData.message?.text?.body) {
+        content = messageData.message.text.body;
+      } else if (typeof messageData.message?.text === 'string') {
+        content = messageData.message.text;
+      } else if (typeof messageData.message === 'string') {
+        content = messageData.message;
       } else if (messageData.caption) {
         content = messageData.caption;
+      }
+
+      // Parse JSON-stringified interactive messages
+      if (typeof content === 'string' && content.trim().startsWith('{')) {
+        try {
+          const parsed = JSON.parse(content);
+          if (parsed.button_reply?.title) content = parsed.button_reply.title;
+          else if (parsed.list_reply?.title) content = parsed.list_reply.title;
+          else if (parsed.interactive?.button_reply?.title) content = parsed.interactive.button_reply.title;
+          else if (parsed.interactive?.list_reply?.title) content = parsed.interactive.list_reply.title;
+          else if (parsed.title) content = parsed.title;
+        } catch (_) {}
       }
 
       let mediaUrl = null;
@@ -158,24 +185,31 @@ const handleWebhook = async (req, res) => {
         mediaUrl = null;
       }
 
-      conversation.lastMessage = { type: msgType, content: content || (mediaUrl ? `[${msgType}]` : ''), mediaUrl };
+      conversation.lastMessage = {
+        type: msgType,
+        content: content || (mediaUrl ? `[${msgType}]` : ''),
+        mediaUrl
+      };
       conversation.lastMessageAt = new Date();
       await conversation.save();
 
-      // 3. Save Message record
+      // 4. Save Message record
+      const myopMsgId = messageData.id || messageData.message_id || messageData._id;
       const message = new Message({
         conversationId: conversation._id,
         contactId: contact._id,
         direction: 'incoming',
-        type: ['text', 'image', 'document', 'audio', 'video', 'template'].includes(msgType) ? msgType : 'text',
+        type: ['text', 'image', 'document', 'audio', 'video', 'template'].includes(msgType)
+          ? msgType
+          : 'text',
         content,
         mediaUrl,
-        interaktMessageId: messageData.id || messageData.message_id || messageData._id,
+        myoperatorMessageId: myopMsgId || undefined,
         status: 'delivered'
       });
       await message.save();
 
-      // 4. Broadcast via Native WebSocket Service
+      // 5. Broadcast via WebSocket
       const populatedMessage = await Message.findById(message._id).populate('sentBy', 'firstName lastName');
       const broadcastPayload = {
         type: 'NEW_MESSAGE',
@@ -185,27 +219,37 @@ const handleWebhook = async (req, res) => {
         }
       };
 
-      // Notify assigned sales agent if assigned
       if (contact.assignedTo) {
         wsService.sendToUser(contact.assignedTo.toString(), broadcastPayload);
       }
-      // Broadcast to admins (admins see all conversations)
       wsService.broadcastToRoles(['admin'], broadcastPayload);
-      console.log(`[Interakt Webhook] Success: Broadcasted NEW_MESSAGE for ${phone}`);
+      console.log(`[MyOperator Webhook] Broadcasted NEW_MESSAGE for ${phone}`);
     }
 
-    // Handle Message Status updates
-    else if (type.startsWith('message_api_')) {
-      const messageData = data.message;
-      const interaktMessageId = messageData.id;
-      
-      let status = 'sent';
-      if (type === 'message_api_delivered') status = 'delivered';
-      if (type === 'message_api_read') status = 'read';
-      if (type === 'message_api_failed') status = 'failed';
+    // ─── Handle Outgoing Message Status Updates (message.sent/delivered/read/failed) ──
+    else if (
+      type === 'message.sent' ||
+      type === 'message.delivered' ||
+      type === 'message.read' ||
+      type === 'message.failed' ||
+      type.startsWith('message_api_')
+    ) {
+      const messageData = data?.message || data || {};
+      const myopMsgId = messageData.id || messageData.message_id;
 
+      let status = 'sent';
+      if (type === 'message.delivered' || type === 'message_api_delivered') status = 'delivered';
+      if (type === 'message.read' || type === 'message_api_read') status = 'read';
+      if (type === 'message.failed' || type === 'message_api_failed') status = 'failed';
+
+      // Find by myoperatorMessageId (new) or interaktMessageId (legacy)
       const updatedMsg = await Message.findOneAndUpdate(
-        { interaktMessageId },
+        {
+          $or: [
+            { myoperatorMessageId: myopMsgId },
+            { interaktMessageId: myopMsgId }
+          ]
+        },
         { status },
         { new: true }
       );
@@ -219,18 +263,15 @@ const handleWebhook = async (req, res) => {
             status
           }
         };
-
-        // Notify assigned rep
         const conversation = await Conversation.findById(updatedMsg.conversationId);
-        if (conversation && conversation.assignedTo) {
+        if (conversation?.assignedTo) {
           wsService.sendToUser(conversation.assignedTo.toString(), broadcastPayload);
         }
-        // Notify admins
         wsService.broadcastToRoles(['admin'], broadcastPayload);
       }
     }
   } catch (error) {
-    console.error('[Webhook Processing Error]:', error);
+    console.error('[MyOperator Webhook Processing Error]:', error);
   }
 };
 

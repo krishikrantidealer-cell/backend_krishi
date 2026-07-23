@@ -32,9 +32,15 @@ const messageSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
-  interaktMessageId: {
+  myoperatorMessageId: {
     type: String,
     unique: true,
+    sparse: true,
+    index: true
+  },
+  // Legacy field — kept for backward compat with old messages, do not use for new messages
+  interaktMessageId: {
+    type: String,
     sparse: true,
     index: true
   },

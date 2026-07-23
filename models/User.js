@@ -167,6 +167,12 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  preferredLanguage: {
+    type: String,
+    enum: ['en', 'hi', 'ta', 'te', 'mr', 'kn'],
+    default: 'en',
+    index: true
+  },
   notesHistory: [{
     title: { type: String },
     note: { type: String, required: true },

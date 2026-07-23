@@ -12,5 +12,6 @@ router.post('/messages/send', controller.sendConversationMessage);
 router.post('/conversations/assign', authorizeRoles('admin'), controller.assignConversation);
 router.post('/notes', controller.addNote);
 router.put('/conversations/:id/status', controller.updateConversationStatus);
+router.put('/conversations/:id/language', controller.updateConversationLanguage);
 
 module.exports = router;

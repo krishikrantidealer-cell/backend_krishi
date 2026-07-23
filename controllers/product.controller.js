@@ -784,6 +784,9 @@ exports.completeChunkedUpload = async (req, res, next) => {
     }
 
     const { bucket } = require('../utils/gcs');
+    if (!bucket) {
+      return res.status(500).json({ success: false, message: 'Google Cloud Storage Bucket is not configured. Check GCS_BUCKET_NAME env var.' });
+    }
     const timestamp = Date.now();
     const slug = categoryName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
     const destination = `categorycatalogues/${slug}_${timestamp}.pdf`;
@@ -821,7 +824,7 @@ exports.completeChunkedUpload = async (req, res, next) => {
       await file.makePublic();
     } catch (_) {}
 
-    const fileUrl = `https://storage.googleapis.com/${bucketName}/${file.name}`;
+    const fileUrl = `https://storage.googleapis.com/${bucket.name}/${file.name}`;
 
     // Clean up
     await fs.promises.rm(chunksDir, { recursive: true, force: true });

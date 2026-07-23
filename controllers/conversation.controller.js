@@ -3,7 +3,7 @@ const Message = require('../models/Message');
 const Contact = require('../models/Contact');
 const Note = require('../models/Note');
 const User = require('../models/User');
-const interaktService = require('../services/interakt.service');
+const myoperatorService = require('../services/myoperator.service');
 const wsService = require('../services/websocket.service');
 
 // Get all conversations with pagination and role checks
@@ -89,7 +89,7 @@ const getMessages = async (req, res) => {
 // Send message via API (Text or Media)
 const sendConversationMessage = async (req, res) => {
   try {
-    const { conversationId, type, content, mediaUrl, templateName, bodyValues } = req.body;
+    const { conversationId, type, content, mediaUrl, templateName, bodyValues, languageCode } = req.body;
 
     const conversation = await Conversation.findById(conversationId).populate('contactId');
     if (!conversation) {
@@ -101,17 +101,20 @@ const sendConversationMessage = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Access Denied: You can only chat with leads assigned to you.' });
     }
 
-    // Dispatches message to Interakt API
-    const interaktResponse = await interaktService.sendMessage({
+    const selectedLang = languageCode || conversation.contactId?.preferredLanguage || 'en';
+
+    // Dispatches message to MyOperator WABA API
+    const myopResponse = await myoperatorService.sendMessage({
       phone: conversation.contactId.phone,
       type,
       textBody: content,
       mediaUrl,
       templateName,
-      bodyValues
+      bodyValues,
+      languageCode: selectedLang
     });
 
-    const messageId = interaktResponse?.id || interaktResponse?.data?.id || interaktResponse?.message?.id;
+    const messageId = myopResponse?.id || myopResponse?.data?.id || myopResponse?.message?.id || myopResponse?.message_id;
 
     const messageData = {
       conversationId: conversation._id,
@@ -125,7 +128,7 @@ const sendConversationMessage = async (req, res) => {
     };
 
     if (messageId) {
-      messageData.interaktMessageId = messageId.toString();
+      messageData.myoperatorMessageId = messageId.toString();
     }
 
     const message = new Message(messageData);
@@ -185,10 +188,20 @@ const assignConversation = async (req, res) => {
   }
 };
 
-// Add internal Note
+// Add internal Note & sync with Lead/Dealer User Profile
 const addNote = async (req, res) => {
   try {
     const { conversationId, note } = req.body;
+
+    // Find linked Contact and User profile (Lead/Dealer) to sync notes & notesHistory
+    const conversation = await Conversation.findById(conversationId).populate('contactId');
+    if (!conversation) {
+      return res.status(404).json({ success: false, message: 'Conversation not found' });
+    }
+
+    if (req.user.role === 'sales' && String(conversation.assignedTo) !== String(req.user.id)) {
+      return res.status(403).json({ success: false, message: 'Access Denied: You can only add notes to leads assigned to you.' });
+    }
 
     const newNote = new Note({
       conversationId,
@@ -196,6 +209,42 @@ const addNote = async (req, res) => {
       createdBy: req.user.id
     });
     await newNote.save();
+
+    if (conversation && conversation.contactId) {
+      const contactPhone = conversation.contactId.phone;
+      if (contactPhone) {
+        const cleanPhone = contactPhone.replace(/[^\d]/g, '').replace(/^91/, '');
+        
+        const userDoc = await User.findOne({
+          $or: [
+            { phoneNumber: cleanPhone },
+            { phoneNumber: `91${cleanPhone}` },
+            { phoneNumber: `+91${cleanPhone}` },
+            { phoneNumber: contactPhone }
+          ]
+        });
+
+        if (userDoc) {
+          userDoc.notes = note;
+          const adminUser = await User.findById(req.user.id);
+          const adminName = adminUser
+            ? `${adminUser.firstName || ''} ${adminUser.lastName || ''}`.trim() || adminUser.name || 'Agent'
+            : 'Agent';
+
+          userDoc.notesHistory = userDoc.notesHistory || [];
+          userDoc.notesHistory.push({
+            title: 'WhatsApp CRM Note',
+            note: note,
+            adminId: req.user.id,
+            adminName: adminName,
+            author: adminName,
+            createdAt: new Date(),
+            type: 'general'
+          });
+          await userDoc.save();
+        }
+      }
+    }
 
     res.status(201).json({ success: true, data: newNote });
   } catch (error) {
@@ -238,13 +287,13 @@ const startConversation = async (req, res) => {
 
     if (!contact) {
       if (!assignedAgentId) {
-        assignedAgentId = await interaktService.assignNextSalesAgent();
+        assignedAgentId = await myoperatorService.assignNextSalesAgent();
       }
       contact = new Contact({
         name: name || (existingUser ? `${existingUser.firstName || ''} ${existingUser.lastName || ''}`.trim() || existingUser.shopName : null) || `User ${cleanPhone.slice(-4)}`,
         phone: cleanPhone,
         assignedTo: assignedAgentId,
-        tags: ['interakt-lead']
+        tags: ['myoperator-lead']
       });
       await contact.save();
     }
@@ -325,6 +374,54 @@ const updateConversationStatus = async (req, res) => {
   }
 };
 
+const updateConversationLanguage = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { preferredLanguage } = req.body;
+
+    const validLanguages = ['en', 'hi', 'ta', 'te', 'mr', 'kn'];
+    if (!validLanguages.includes(preferredLanguage)) {
+      return res.status(400).json({ success: false, message: 'Invalid language code. Allowed: en, hi, ta, te, mr, kn' });
+    }
+
+    const conversation = await Conversation.findById(id).populate('contactId');
+    if (!conversation) {
+      return res.status(404).json({ success: false, message: 'Conversation not found' });
+    }
+
+    if (req.user.role === 'sales' && String(conversation.assignedTo) !== String(req.user.id)) {
+      return res.status(403).json({ success: false, message: 'Access Denied: You can only update language for leads assigned to you.' });
+    }
+
+    // Update Contact model preferredLanguage
+    if (conversation.contactId) {
+      await Contact.findByIdAndUpdate(conversation.contactId._id, { preferredLanguage });
+      
+      // Sync User model preferredLanguage if exists
+      const cleanPhone = conversation.contactId.phone.replace(/[^\d]/g, '').replace(/^91/, '');
+      await User.findOneAndUpdate(
+        {
+          $or: [
+            { phoneNumber: cleanPhone },
+            { phoneNumber: `91${cleanPhone}` },
+            { phoneNumber: `+91${cleanPhone}` },
+            { phoneNumber: conversation.contactId.phone }
+          ]
+        },
+        { preferredLanguage }
+      );
+    }
+
+    const updatedConv = await Conversation.findById(id)
+      .populate('contactId')
+      .populate('assignedTo', 'firstName lastName email');
+
+    res.json({ success: true, data: updatedConv });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 module.exports = {
   getConversations,
   getMessages,
@@ -332,5 +429,6 @@ module.exports = {
   assignConversation,
   addNote,
   startConversation,
-  updateConversationStatus
+  updateConversationStatus,
+  updateConversationLanguage
 };

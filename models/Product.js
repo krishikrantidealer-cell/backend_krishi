@@ -14,6 +14,7 @@ const variantSchema = new mongoose.Schema({
   size: { type: String, required: true },
   price: { type: Number, required: true, min: 0 },
   compareAtPrice: { type: Number, min: 0 },
+  farmerPrice: { type: Number, min: 0, default: 0 },
   packVolume: { type: Number, default: 1.0 },
   weight: { type: Number },
   rates: { type: Map, of: String },

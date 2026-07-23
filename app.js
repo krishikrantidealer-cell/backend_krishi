@@ -18,6 +18,8 @@ const eventRoutes = require('./routes/event.routes');
 const cronRoutes = require('./routes/cron.routes');
 const webhookRoutes = require('./routes/webhook.routes');
 const conversationRoutes = require('./routes/conversation.routes');
+const retargetingRoutes = require('./routes/retargeting.routes');
+const callRoutes = require('./routes/call.routes');
 
 const app = express();
 const zlib = require('zlib');
@@ -60,6 +62,8 @@ app.use('/api/events', eventRoutes);
 app.use('/api/cron', cronRoutes);
 app.use('/api', webhookRoutes);
 app.use('/api', conversationRoutes);
+app.use('/api/retargeting', retargetingRoutes);
+app.use('/api/calls', callRoutes);
 
 // 404 Handler for API routes
 app.use('/api', (req, res) => {

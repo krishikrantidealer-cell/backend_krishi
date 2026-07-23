@@ -48,7 +48,7 @@ async function seedBanners() {
 
       // URL encode the path segments so spaces and special chars render perfectly
       const encodedName = file.name.split('/').map(seg => encodeURIComponent(seg)).join('/');
-      const imageUrl = `https://storage.googleapis.com/${bucketName}/${encodedName}`;
+      const imageUrl = `https://storage.googleapis.com/${bucket.name}/${encodedName}`;
 
       let redirectType = 'none';
       let redirectTarget = undefined;

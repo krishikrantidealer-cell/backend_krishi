@@ -23,6 +23,12 @@ const contactSchema = new mongoose.Schema({
     type: String,
     trim: true
   }],
+  preferredLanguage: {
+    type: String,
+    enum: ['en', 'hi', 'ta', 'te', 'mr', 'kn'],
+    default: 'en',
+    index: true
+  },
   createdAt: {
     type: Date,
     default: Date.now
