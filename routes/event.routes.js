@@ -25,6 +25,9 @@ router.get('/realtime', protect, authorizeRoles('admin'), eventController.getAct
 router.get('/funnel', protect, authorizeRoles('admin'), eventController.getFunnelData);
 
 // Fetch overall summary metrics (high priority, failed payments, abandoned carts)
-router.get('/summary-metrics', protect, authorizeRoles('admin'), eventController.getSummaryMetrics);
+router.get('/summary-metrics', protect, authorizeRoles('admin', 'sales'), eventController.getSummaryMetrics);
+
+// Fetch regional district intelligence & revenue analytics
+router.get('/district-analytics', protect, authorizeRoles('admin', 'sales'), eventController.getDistrictAnalytics);
 
 module.exports = router;

@@ -223,6 +223,8 @@ exports.getAllUsers = async (req, res, next) => {
       kycStatus: req.query.kycStatus,
       trash: req.query.trash,
       search: req.query.search,
+      startDate: req.query.startDate,
+      endDate: req.query.endDate,
       page: req.query.page,
       limit: req.query.limit
     };
@@ -1142,6 +1144,31 @@ exports.adminBulkCreateUsers = async (req, res, next) => {
     next(error);
   }
 };
+
+exports.getDailyLeadStats = async (req, res, next) => {
+  try {
+    const { date, agentId } = req.query;
+    
+    // Sales role security restriction: if user is a sales agent, force agentId filter to their own ID unless admin
+    let selectedAgentId = agentId || null;
+    if (req.user && req.user.role === 'sales') {
+      selectedAgentId = req.user._id;
+    }
+
+    const stats = await userService.getDailyLeadStats({
+      dateStr: date,
+      agentId: selectedAgentId
+    });
+
+    res.json({
+      success: true,
+      ...stats
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 
 
 

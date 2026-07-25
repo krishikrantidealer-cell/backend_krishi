@@ -128,6 +128,14 @@ const userSchema = new mongoose.Schema({
     ref: 'User',
     default: null
   },
+  assignedAt: {
+    type: Date,
+    default: null
+  },
+  kycApprovedAt: {
+    type: Date,
+    default: null
+  },
   source: {
     type: String,
     default: 'App'

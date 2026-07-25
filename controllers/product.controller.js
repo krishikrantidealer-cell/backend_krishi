@@ -235,38 +235,38 @@ exports.getHomeDiscovery = async (req, res, next) => {
 
     const collectionsWithProducts = await Promise.all(collections.map(async (col) => {
       const subNames = (col.subCollections || []).map(s => s.name);
-      const allNames = [col.name, ...subNames];
+      const subIds = (col.subCollections || []).map(s => s._id ? s._id.toString() : '').filter(Boolean);
+      const colId = col._id ? col._id.toString() : '';
+      const allNames = [col.name, colId, ...subNames, ...subIds].filter(Boolean);
 
       let products = await Product.find({ 
         assignedCollections: { $in: allNames },
         availabilityStatus: { $ne: 'Out of Stock' } 
       })
-      .select('title brandName technicalName thumbnail variants minPrice maxPrice availabilityStatus averageRating order customOrders')
+      .select('title brandName technicalName thumbnail variants minPrice maxPrice availabilityStatus averageRating order customOrders assignedCollections')
       .lean();
 
-      // Sort products based on their customOrders for this collection or subcollections
-      products.sort((a, b) => {
-        let orderA = 1000000;
-        let orderB = 1000000;
+      // Sort products based on their customOrders for this collection or subcollections.
+      const safeColId = col._id ? col._id.toString().replace(/\./g, '_dot_') : '';
+      const safeColName = col.name ? col.name.replace(/\./g, '_dot_') : '';
+      const safeColSlug = col.slug ? col.slug.replace(/\./g, '_dot_') : '';
 
-        for (const name of allNames) {
-          if (a.assignedCollections && a.assignedCollections.includes(name)) {
-            const safeName = name.replace(/\./g, '_dot_');
-            const rawVal = (a.customOrders && a.customOrders[safeName] !== undefined)
-              ? a.customOrders[safeName]
-              : 1000000;
-            const val = Number(rawVal);
-            if (!isNaN(val) && val < orderA) orderA = val;
-          }
-          if (b.assignedCollections && b.assignedCollections.includes(name)) {
-            const safeName = name.replace(/\./g, '_dot_');
-            const rawVal = (b.customOrders && b.customOrders[safeName] !== undefined)
-              ? b.customOrders[safeName]
-              : 1000000;
-            const val = Number(rawVal);
-            if (!isNaN(val) && val < orderB) orderB = val;
+      const priorityKeys = [safeColId, safeColName, safeColSlug, ...allNames.map(n => n.replace(/\./g, '_dot_'))].filter(Boolean);
+
+      const getOrder = (p) => {
+        if (!p.customOrders) return 1000000;
+        for (const key of priorityKeys) {
+          if (p.customOrders[key] !== undefined && p.customOrders[key] !== null) {
+            const val = Number(p.customOrders[key]);
+            if (!isNaN(val)) return val;
           }
         }
+        return 1000000;
+      };
+
+      products.sort((a, b) => {
+        const orderA = getOrder(a);
+        const orderB = getOrder(b);
 
         if (orderA !== orderB) {
           return orderA - orderB;
@@ -280,8 +280,8 @@ exports.getHomeDiscovery = async (req, res, next) => {
         return a._id.toString().localeCompare(b._id.toString());
       });
 
-      // Slice to first 10
-      products = products.slice(0, 10);
+      // Slice to top products (increased limit to 60 to support larger collections like "Dealer First Choice")
+      products = products.slice(0, 60);
 
       // Find matching custom collection banner to set as the shopbycrop/collection bannerImage
       let bannerImage = col.bannerImage;
@@ -1101,20 +1101,73 @@ exports.deleteSubCategory = async (req, res, next) => {
 // Bulk Reorder Products in a Context (Admin)
 exports.reorderProducts = async (req, res, next) => {
   try {
-    const { contextId, productIds } = req.body;
+    const { contextId, contextName, productIds } = req.body;
     if (!contextId || !Array.isArray(productIds)) {
       return res.status(400).json({ success: false, message: 'Invalid payload' });
     }
 
-    const safeKey = contextId.replace(/\./g, '_dot_');
     const Product = require('../models/Product');
-    
-    const bulkOps = productIds.map((id, index) => ({
-      updateOne: {
-        filter: { _id: id },
-        update: { $set: { [`customOrders.${safeKey}`]: index } }
+    const Collection = require('../models/Collection');
+    const Category = require('../models/Category');
+
+    const keysToUpdate = new Set();
+    const addKey = (k) => {
+      if (k && typeof k === 'string' && k.trim().length > 0) {
+        keysToUpdate.add(k.trim().replace(/\./g, '_dot_'));
       }
-    }));
+    };
+
+    addKey(contextId);
+    if (contextName) {
+      addKey(contextName);
+      if (contextName.includes('_split_')) {
+        const parts = contextName.split('_split_');
+        addKey(parts[parts.length - 1]);
+      }
+    }
+
+    // Try finding collection by contextId or contextName
+    try {
+      const colQuery = [];
+      if (/^[0-9a-fA-F]{24}$/.test(contextId)) colQuery.push({ _id: contextId });
+      if (contextName) colQuery.push({ name: contextName });
+      colQuery.push({ name: contextId });
+      colQuery.push({ slug: contextId });
+
+      const collections = await Collection.find({ $or: colQuery });
+      collections.forEach(col => {
+        if (col._id) addKey(col._id.toString());
+        if (col.name) addKey(col.name);
+        if (col.slug) addKey(col.slug);
+      });
+    } catch (_) {}
+
+    // Try finding category/subcategory if applicable
+    try {
+      const catQuery = [];
+      if (/^[0-9a-fA-F]{24}$/.test(contextId)) catQuery.push({ _id: contextId });
+      if (contextName) catQuery.push({ name: contextName });
+      catQuery.push({ name: contextId });
+
+      const categories = await Category.find({ $or: catQuery });
+      categories.forEach(cat => {
+        if (cat._id) addKey(cat._id.toString());
+        if (cat.name) addKey(cat.name);
+      });
+    } catch (_) {}
+
+    const bulkOps = productIds.map((id, index) => {
+      const updateFields = {};
+      for (const key of keysToUpdate) {
+        updateFields[`customOrders.${key}`] = index;
+      }
+      return {
+        updateOne: {
+          filter: { _id: id },
+          update: { $set: updateFields }
+        }
+      };
+    });
 
     if (bulkOps.length > 0) {
       await Product.bulkWrite(bulkOps);

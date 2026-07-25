@@ -107,6 +107,9 @@ router.patch('/addresses/:addressId/default', userController.setDefaultAddress);
 // Get all users (Admin and Sales)
 router.get('/', authorizeRoles('admin', 'sales'), userController.getAllUsers);
 
+// Daily Lead & KYC Stats (Admin and Sales)
+router.get('/daily-lead-stats', authorizeRoles('admin', 'sales'), userController.getDailyLeadStats);
+
 // Bulk Create Users (Admin and Sales)
 router.post('/bulk', authorizeRoles('admin', 'sales'), userController.adminBulkCreateUsers);
 

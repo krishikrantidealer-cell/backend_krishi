@@ -10,6 +10,21 @@ class UserService {
     } else {
       query.isDeleted = { $ne: true };
     }
+
+    // Support Date Range Filtering
+    if (filters.startDate || filters.endDate) {
+      const dateField = (filters.trash === 'true' || filters.trash === true) ? 'deletedAt' : 'createdAt';
+      query[dateField] = {};
+      if (filters.startDate) {
+        query[dateField].$gte = new Date(filters.startDate);
+      }
+      if (filters.endDate) {
+        const end = new Date(filters.endDate);
+        end.setHours(23, 59, 59, 999);
+        query[dateField].$lte = end;
+      }
+    }
+
     if (filters.role) query.role = filters.role;
     
     if (filters.kycStatus) {
@@ -266,6 +281,10 @@ class UserService {
       status: status === 'verified' ? 'verified' : (status === 'rejected' ? 'rejected' : status)
     };
 
+    if (status === 'verified') {
+      updateData.kycApprovedAt = new Date();
+    }
+
     const user = await User.findByIdAndUpdate(
       userId,
       { $set: updateData },
@@ -311,6 +330,7 @@ class UserService {
         throw new Error('Assigned user must be a sales agent');
       }
       user.assignedAgent = agentId;
+      user.assignedAt = new Date();
 
       // When assigned to a sales agent, a 'prospect' lead becomes 'new'
       if (user.status === 'prospect') {
@@ -318,6 +338,7 @@ class UserService {
       }
     } else {
       user.assignedAgent = null;
+      user.assignedAt = null;
     }
 
     await user.save();
@@ -511,6 +532,162 @@ class UserService {
     }
 
     return true;
+  }
+
+  async getDailyLeadStats({ dateStr, agentId = null }) {
+    // Parse the date string the client sends as an IST (UTC+5:30) calendar date.
+    // Cloud Run servers run in UTC, so we must compute the day boundaries manually
+    // using the IST offset (+5h30m = +19800 seconds = +19800000 ms).
+    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000; // 5 hours 30 minutes in ms
+
+    let targetDateStr = dateStr;
+    if (!targetDateStr) {
+      // Default to today in IST
+      const nowIST = new Date(Date.now() + IST_OFFSET_MS);
+      const y = nowIST.getUTCFullYear();
+      const m = String(nowIST.getUTCMonth() + 1).padStart(2, '0');
+      const d = String(nowIST.getUTCDate()).padStart(2, '0');
+      targetDateStr = `${y}-${m}-${d}`;
+    }
+
+    // Parse YYYY-MM-DD and treat it as IST midnight
+    const [year, month, day] = targetDateStr.split('-').map(Number);
+    // IST midnight = UTC midnight minus 5h30m
+    const startOfDay = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0) - IST_OFFSET_MS);
+    const endOfDay   = new Date(Date.UTC(year, month - 1, day, 23, 59, 59, 999) - IST_OFFSET_MS);
+
+    // Get all active sales agents
+    const salesAgents = await User.find({
+      role: 'sales',
+      isDeleted: { $ne: true }
+    }).select('_id firstName lastName phoneNumber email');
+
+    // Query leads that were newly assigned within the date window (only assignedAt, no updatedAt fallback)
+    const assignedLeadsOnDate = await User.find({
+      isDeleted: { $ne: true },
+      assignedAgent: { $ne: null },
+      assignedAt: { $gte: startOfDay, $lte: endOfDay }
+    }).select('_id assignedAgent firstName lastName phoneNumber status kycStatus createdAt assignedAt');
+
+    // Query KYC verified dealers within the date window (only kycApprovedAt, no updatedAt fallback)
+    const kycApprovedOnDate = await User.find({
+      isDeleted: { $ne: true },
+      kycStatus: 'verified',
+      kycApprovedAt: { $gte: startOfDay, $lte: endOfDay }
+    }).select('_id assignedAgent firstName lastName shopName status kycStatus createdAt kycApprovedAt');
+
+    // Query deleted leads within the date window (only deletedAt, no updatedAt fallback)
+    const deletedLeadsOnDate = await User.find({
+      isDeleted: true,
+      deletedAt: { $gte: startOfDay, $lte: endOfDay }
+    }).select('_id assignedAgent firstName lastName phoneNumber createdAt deletedAt');
+
+    const totalTeamAssigned = assignedLeadsOnDate.length;
+    const totalTeamKycApproved = kycApprovedOnDate.length;
+    const totalTeamDeleted = deletedLeadsOnDate.length;
+
+    // Agent breakdown calculation
+    const agentBreakdown = salesAgents.map(agent => {
+      const agentIdStr = String(agent._id);
+      const assignedCount = assignedLeadsOnDate.filter(
+        lead => lead.assignedAgent && String(lead.assignedAgent) === agentIdStr
+      ).length;
+      const kycApprovedCount = kycApprovedOnDate.filter(
+        dealer => dealer.assignedAgent && String(dealer.assignedAgent) === agentIdStr
+      ).length;
+      const deletedCount = deletedLeadsOnDate.filter(
+        lead => lead.assignedAgent && String(lead.assignedAgent) === agentIdStr
+      ).length;
+
+      const conversionRate = assignedCount > 0 
+        ? ((kycApprovedCount / assignedCount) * 100).toFixed(1) + '%'
+        : '0.0%';
+
+      return {
+        agentId: agentIdStr,
+        agentName: `${agent.firstName || ''} ${agent.lastName || ''}`.trim() || agent.phoneNumber || 'Sales Agent',
+        phoneNumber: agent.phoneNumber || '',
+        email: agent.email || '',
+        assignedInDay: assignedCount,
+        kycApprovedInDay: kycApprovedCount,
+        deletedInDay: deletedCount,
+        conversionRate
+      };
+    });
+
+    let agentStats = null;
+    if (agentId) {
+      const selectedAgent = agentBreakdown.find(a => a.agentId === String(agentId));
+      if (selectedAgent) {
+        agentStats = selectedAgent;
+      }
+    }
+
+    // All-time complete database counts for Master Analytics Hub
+    const totalAllTimeUnassignedLeads = await User.countDocuments({
+      role: 'user',
+      isDeleted: { $ne: true },
+      kycStatus: { $ne: 'verified' },
+      $or: [
+        { assignedAgent: null },
+        { assignedAgent: { $exists: false } }
+      ]
+    });
+
+    const totalAllTimeAssignedLeads = await User.countDocuments({
+      role: 'user',
+      isDeleted: { $ne: true },
+      kycStatus: { $ne: 'verified' },
+      assignedAgent: { $ne: null, $exists: true }
+    });
+
+    const totalAllTimeKycPendingLeads = await User.countDocuments({
+      role: 'user',
+      isDeleted: { $ne: true },
+      kycStatus: { $in: ['pending', 'submitted', 'processing'] }
+    });
+
+    const totalAllTimeVerifiedDealers = await User.countDocuments({
+      role: 'user',
+      isDeleted: { $ne: true },
+      kycStatus: 'verified'
+    });
+
+    const totalAllTimeDeletedLeads = await User.countDocuments({
+      role: 'user',
+      isDeleted: true
+    });
+
+    const totalAllTimeDeletedDealers = await User.countDocuments({
+      role: 'dealer',
+      isDeleted: true
+    });
+
+    return {
+      date: targetDateStr,
+      totalAllTimeUnassignedLeads,
+      totalAllTimeAssignedLeads,
+      totalAllTimeKycPendingLeads,
+      totalAllTimeVerifiedDealers,
+      totalDeletedLeads: totalAllTimeDeletedLeads,
+      totalDeletedDealers: totalAllTimeDeletedDealers,
+      teamStats: {
+        totalAssignedInDay: totalTeamAssigned,
+        totalKycApprovedInDay: totalTeamKycApproved,
+        totalDeletedInDay: totalTeamDeleted
+      },
+      agentStats: agentStats || {
+        agentId: null,
+        agentName: 'All Sales Team',
+        assignedInDay: totalTeamAssigned,
+        kycApprovedInDay: totalTeamKycApproved,
+        deletedInDay: totalTeamDeleted,
+        conversionRate: totalTeamAssigned > 0 
+          ? ((totalTeamKycApproved / totalTeamAssigned) * 100).toFixed(1) + '%' 
+          : '0.0%'
+      },
+      agentBreakdown
+    };
   }
 }
 

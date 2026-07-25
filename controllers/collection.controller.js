@@ -46,24 +46,37 @@ exports.getCollectionsWithProducts = async (req, res, next) => {
       .lean();
 
     const result = await Promise.all(collections.map(async (col) => {
+      const colIdStr = col._id ? col._id.toString() : '';
+      const colNameStr = col.name || '';
+      const colSlugStr = col.slug || '';
+      const matchQuery = [colNameStr, colIdStr, colSlugStr].filter(Boolean);
+
       let products = await Product.find({
-        assignedCollections: col.name,
+        assignedCollections: { $in: matchQuery },
         availabilityStatus: { $ne: 'Out of Stock' }
       })
         .select('title brandName technicalName thumbnail variants minPrice maxPrice availabilityStatus averageRating order customOrders')
         .lean();
 
-      products.sort((a, b) => {
-        const safeName = col.name.replace(/\./g, '_dot_');
-        const rawA = (a.customOrders && a.customOrders[safeName] !== undefined)
-            ? a.customOrders[safeName]
-            : 1000000;
-        const rawB = (b.customOrders && b.customOrders[safeName] !== undefined)
-            ? b.customOrders[safeName]
-            : 1000000;
+      const safeId = colIdStr.replace(/\./g, '_dot_');
+      const safeName = colNameStr.replace(/\./g, '_dot_');
+      const safeSlug = colSlugStr.replace(/\./g, '_dot_');
+      const priorityKeys = [safeId, safeName, safeSlug].filter(Boolean);
 
-        const orderA = Number(rawA);
-        const orderB = Number(rawB);
+      const getOrder = (p) => {
+        if (!p.customOrders) return 1000000;
+        for (const key of priorityKeys) {
+          if (p.customOrders[key] !== undefined && p.customOrders[key] !== null) {
+            const val = Number(p.customOrders[key]);
+            if (!isNaN(val)) return val;
+          }
+        }
+        return 1000000;
+      };
+
+      products.sort((a, b) => {
+        const orderA = getOrder(a);
+        const orderB = getOrder(b);
 
         if (orderA !== orderB) {
           return orderA - orderB;

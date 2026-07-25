@@ -40,8 +40,7 @@ const eventSchema = new mongoose.Schema({
   timestamp: {
     type: Date,
     default: Date.now,
-    index: true,
-    expires: '90d' // Automatic cleanup: raw events are purged after 90 days
+    index: true // Preserved for long-term historical analytics & enterprise pipeline
   },
   role: {
     type: String,
