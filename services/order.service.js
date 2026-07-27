@@ -24,6 +24,7 @@ class OrderService {
       totalAmount: session.totalAmount,
       discountAmount: session.discountAmount,
       couponCode: session.couponCode,
+      freeItems: session.freeItems || [],
       shippingAddress: overrideAddress || session.shippingAddress,
       paymentMethod: session.paymentMethod,
       paymentStatus: session.paymentMethod === 'Online' ? 'Paid' : 'Partially Paid',
@@ -73,7 +74,9 @@ class OrderService {
     if (!user) {
       throw new Error('User not found');
     }
-    if (!user.isKycComplete) {
+    // Safety: If they've already paid (razorpayPaymentId is present), we MUST allow order creation
+    // even if KYC is pending, otherwise we lose the order while having their money.
+    if (!user.isKycComplete && !paymentData.razorpayPaymentId) {
       throw new Error('KYC verification is pending. Please wait for administrator approval to place orders.');
     }
 
@@ -110,26 +113,32 @@ class OrderService {
       throw new Error('Your cart is empty');
     }
 
-    // 2. Take a snapshot of the cart items
-    const orderItems = cart.items.map(item => {
-      let variantName = 'Standard';
-      if (item.product && item.product.variants) {
-        const variant = item.product.variants.id(item.variantId);
-        if (variant) {
-          variantName = variant.size || 'Standard';
+    // 2. Take a snapshot of the cart items (with safety checks)
+    const orderItems = cart.items
+      .filter(item => item.product) // Skip items where product was deleted
+      .map(item => {
+        let variantName = 'Standard';
+        if (item.product.variants) {
+          const variant = item.product.variants.id(item.variantId);
+          if (variant) {
+            variantName = variant.size || 'Standard';
+          }
         }
-      }
-      return {
-        product: item.product._id,
-        variantId: item.variantId,
-        title: item.product.title,
-        vendor: item.product.vendor,
-        image: item.product.images && item.product.images.length > 0 ? item.product.images[0] : null,
-        quantity: item.quantity,
-        price: item.price,
-        variant: variantName
-      };
-    });
+        return {
+          product: item.product._id,
+          variantId: item.variantId,
+          title: item.product.title || 'Unknown Product',
+          vendor: item.product.vendor,
+          image: item.product.images && item.product.images.length > 0 ? item.product.images[0] : null,
+          quantity: item.quantity,
+          price: item.price,
+          variant: variantName
+        };
+      });
+
+    if (orderItems.length === 0) {
+      throw new Error('All products in your cart are no longer available. Please clear your cart and try again.');
+    }
 
     // 3. Figure out the shipping address
     const address = shippingAddress || user.address;
@@ -219,7 +228,9 @@ class OrderService {
     if (!user) {
       throw new Error('User not found');
     }
-    if (!user.isKycComplete) {
+    // Safety: If they've already paid (razorpayPaymentId is present), we MUST allow order creation
+    // even if KYC is pending, otherwise we lose the order while having their money.
+    if (!user.isKycComplete && !paymentData.razorpayPaymentId) {
       throw new Error('KYC verification is pending. Please wait for administrator approval to place orders.');
     }
 
@@ -268,7 +279,11 @@ class OrderService {
       const response = await axios.post('https://api.razorpay.com/v1/orders', {
         amount: amountInPaise,
         currency: 'INR',
-        receipt: `rcpt_ORD_${Date.now().toString().slice(-6)}`
+        receipt: `rcpt_ORD_${Date.now().toString().slice(-6)}`,
+        notes: {
+          userId: userId.toString(),
+          userPhone: user.phoneNumber || ''
+        }
       }, {
         headers: {
           'Authorization': `Basic ${auth}`,
@@ -307,6 +322,12 @@ class OrderService {
           totalAmount: finalAmount,
           discountAmount: cart.discountAmount || 0,
           couponCode: cart.appliedCoupon,
+          freeItems: cart.freeItems && cart.freeItems.length > 0 ? cart.freeItems.map(f => ({
+            name: f.name,
+            imageUrl: f.imageUrl || null,
+            quantity: f.quantity || 1,
+            isFree: true
+          })) : [],
           shippingAddress: user.address, // Capture current address
           paymentMethod: paymentMethod,
           advanceAmount: amountToPay,

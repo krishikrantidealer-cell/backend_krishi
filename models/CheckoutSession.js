@@ -32,6 +32,12 @@ const checkoutSessionSchema = new mongoose.Schema({
     default: 0
   },
   couponCode: String,
+  freeItems: [{
+    name: String,
+    imageUrl: String,
+    quantity: { type: Number, default: 1 },
+    isFree: { type: Boolean, default: true }
+  }],
   shippingAddress: {
     name: String,
     phoneNumber: String,

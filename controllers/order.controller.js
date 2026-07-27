@@ -522,7 +522,28 @@ exports.razorpayWebhook = async (req, res, next) => {
         return res.json({ success: true, message: 'Order recovered from session' });
       }
 
-      console.log(`[Razorpay Webhook] No session found for ${razorpayOrderId}. Manual verification might be required.`);
+      // 3. Fallback: Try to recover via userId in notes if session/orderId is missing
+      const userIdFromNotes = payment.notes ? payment.notes.userId : null;
+      if (userIdFromNotes) {
+        console.log(`[Razorpay Webhook] No session found, but found userId in notes: ${userIdFromNotes}. Attempting direct cart-to-order recovery.`);
+        try {
+          await orderService.createOrderFromCart(
+            userIdFromNotes,
+            'Online',
+            null, // Use default address
+            {
+              razorpayPaymentId,
+              razorpayOrderId,
+              razorpaySignature: 'recovered_from_webhook_notes'
+            }
+          );
+          return res.json({ success: true, message: 'Order recovered via userId in notes' });
+        } catch (recoveryErr) {
+          console.error(`[Razorpay Webhook] Recovery via notes failed for user ${userIdFromNotes}:`, recoveryErr.message);
+        }
+      }
+
+      console.log(`[Razorpay Webhook] No session or userId notes found for ${razorpayOrderId}. Manual verification might be required.`);
     }
 
     res.json({ success: true });

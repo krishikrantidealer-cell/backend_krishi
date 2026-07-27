@@ -497,17 +497,14 @@ async function getSalesAssignedUserData(req) {
   const User = require('../models/User');
 
   const orConditions = [];
-  if (agentIdStr) {
+  if (agentIdStr && mongoose.Types.ObjectId.isValid(agentIdStr)) {
+    orConditions.push({ assignedAgent: new mongoose.Types.ObjectId(agentIdStr) });
     orConditions.push({ assignedAgentId: agentIdStr });
-    orConditions.push({ assignedAgent: agentIdStr });
-    if (mongoose.Types.ObjectId.isValid(agentIdStr)) {
-      orConditions.push({ assignedAgent: new mongoose.Types.ObjectId(agentIdStr) });
-    }
   }
-  if (agentEmail) {
-    orConditions.push({ assignedAgent: agentEmail });
-    orConditions.push({ 'assignedAgent.email': agentEmail });
-  }
+
+  // If we have an email but no valid ObjectId for it yet, we don't want to crash.
+  // We only query assignedAgent with things that look like ObjectIds if the schema expects ObjectIds.
+  // If there are legacy records with email strings, they would be in a different field or we'd need a different approach.
 
   try {
     const assignedUsers = await User.find({ $or: orConditions }, { _id: 1, email: 1, phoneNumber: 1, phone: 1, firstName: 1, lastName: 1, shopName: 1 }).lean();
