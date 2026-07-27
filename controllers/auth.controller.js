@@ -142,6 +142,7 @@ class AuthController {
         user = await User.create({ 
           phoneNumber,
           isVerified: true,
+          source: req.body.source || 'App',
           ...(isTestPhone && {
             isProfileComplete: true,
             isKycComplete: true,
