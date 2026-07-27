@@ -141,7 +141,7 @@ exports.getHomeDiscovery = async (req, res, next) => {
   try {
     const categoriesPromise = productService.getCategoriesHierarchy();
     
-    const featuredPromise = productService.getProducts({ isFeatured: true }, { limit: 10 });
+    const featuredPromise = productService.getProducts({ isFeatured: true }, { limit: 10, contextId: 'featured' });
     
     const collectionsPromise = Collection.find({ isActive: true })
       .sort({ priority: -1, name: 1 })
