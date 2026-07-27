@@ -71,7 +71,7 @@ You can set them in the **Google Cloud Console UI** under Cloud Run > `krishi-ba
 ```bash
 gcloud run services update krishi-backend \
     --region us-central1 \
-    --set-env-vars="NODE_ENV=production,PORT=8080,MONGODB_URI=your_mongo_uri,REDIS_URL=your_redis_url,JWT_ACCESS_SECRET=your_secret,JWT_REFRESH_SECRET=your_secret,MASTER_OTP=123456,GCS_PROJECT_ID=strong-keel-494809-j3,GCS_BUCKET_NAME=krishi-product-images,AIRTEL_IQ_CUSTOMER_ID=your_id,AIRTEL_IQ_USERNAME=your_username,AIRTEL_IQ_PASSWORD=your_password,AIRTEL_IQ_SOURCE_ADDRESS=KRORCS,AIRTEL_IQ_DLT_TEMPLATE_ID=your_dlt_id,AIRTEL_IQ_ENTITY_ID=your_entity_id,AIRTEL_IQ_MESSAGE_TEMPLATE=your_message_template,DELHIVERY_API_TOKEN=your_delhivery_token,DELHIVERY_WEBHOOK_SECRET=your_delhivery_webhook_secret"
+    --set-env-vars="NODE_ENV=production,PORT=8080,MONGODB_URI=your_mongo_uri,REDIS_URL=your_redis_url,JWT_ACCESS_SECRET=your_secret,JWT_REFRESH_SECRET=your_secret,MASTER_OTP=123456,GCS_PROJECT_ID=strong-keel-494809-j3,GCS_BUCKET_NAME=krishi-product-images,AIRTEL_IQ_CUSTOMER_ID=your_id,AIRTEL_IQ_USERNAME=your_username,AIRTEL_IQ_PASSWORD=your_password,AIRTEL_IQ_SOURCE_ADDRESS=KRORCS,AIRTEL_IQ_DLT_TEMPLATE_ID=your_dlt_id,AIRTEL_IQ_ENTITY_ID=your_entity_id,AIRTEL_IQ_MESSAGE_TEMPLATE='{otp} is your login OTP for Krishikranti Organics. This OTP is valid for 10 minutes.',ANDROID_APP_HASH=f+v7N8/S6k7,DELHIVERY_API_TOKEN=your_delhivery_token,DELHIVERY_WEBHOOK_SECRET=your_delhivery_webhook_secret"
 ```
 
 ---

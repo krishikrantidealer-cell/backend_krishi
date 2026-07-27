@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const User = require('../models/User');
 const { redisClient } = require('../config/redis');
 const { sendToAll } = require('../services/websocket.service');
+const { autoIdentifyDistrict, autoIdentifyState } = require('../utils/geoNormalizer');
 
 /**
  * Handle individual event ingestion (legacy support)
@@ -839,6 +840,127 @@ exports.getSummaryMetrics = async (req, res, next) => {
 /**
  * Regional District & Crop Intelligence Analytics
  */
+// Multilingual State and District Normalization Dictionaries
+
+const DISTRICT_ALIASES = {
+  // Maharashtra
+  'पुणे': 'Pune', 'पुणे जिल्हा': 'Pune', 'పుణే': 'Pune', 'ಪುಣೆ': 'Pune', 'பூனே': 'Pune',
+  'नाशिक': 'Nashik', 'नासिक': 'Nashik', 'નાસિક': 'Nashik', 'ನಾಶಿಕ್': 'Nashik',
+  'मुंबई': 'Mumbai', 'बंबई': 'Mumbai', 'મુંબઈ': 'Mumbai', 'மும்பை': 'Mumbai', 'ముంబై': 'Mumbai', 'ಮುಂಬೈ': 'Mumbai',
+  'नागपुर': 'Nagpur', 'નાગપુર': 'Nagpur', 'நாக்பூர்': 'Nagpur', 'నాగ్‌పూర్': 'Nagpur',
+  'सोलापूर': 'Solapur', 'सोलापुर': 'Solapur',
+  'सातारा': 'Satara',
+  'कोल्हापूर': 'Kolhapur', 'कोल्हापुर': 'Kolhapur',
+  'अहमदनगर': 'Ahmednagar', 'अहिल्या नगर': 'Ahmednagar', 'अहिल्यानगर': 'Ahmednagar',
+  'औरंगाबाद': 'Chhatrapati Sambhajinagar', 'छत्रपती संभाजीनगर': 'Chhatrapati Sambhajinagar', 'छत्रपति संभाजीनगर': 'Chhatrapati Sambhajinagar', 'aurangabad': 'Chhatrapati Sambhajinagar',
+  'सांगली': 'Sangli',
+  'लातूर': 'Latur', 'लातुर': 'Latur',
+  'नांदेड': 'Nanded',
+  'जळगाव': 'Jalgaon', 'जलगांव': 'Jalgaon',
+  'अमरावती': 'Amravati',
+  'ठाणे': 'Thane', 'ठाणा': 'Thane',
+  'पालघर': 'Palghar',
+  'रायगड': 'Raigad', 'रायगढ़': 'Raigad',
+  'धुळे': 'Dhule', 'धुलिया': 'Dhule',
+  'जालना': 'Jalna',
+  'यवतमाळ': 'Yavatmal', 'यवतमाल': 'Yavatmal',
+  'अकोला': 'Akola',
+  'बुलढाणा': 'Buldhana', 'बुलढाना': 'Buldhana',
+  'भंडारा': 'Bhandara',
+  'चंद्रपूर': 'Chandrapur', 'चंद्रपुर': 'Chandrapur',
+  'गोंदिया': 'Gondia',
+  'हिंगोली': 'Hingoli',
+  'धाराशिव': 'Dharashiv', 'उस्मानाबाद': 'Dharashiv', 'dharashiv': 'Dharashiv', 'osmanabad': 'Dharashiv',
+  'परभणी': 'Parbhani',
+  'रत्नागिरी': 'Ratnagiri',
+  'सिंधुदुर्ग': 'Sindhudurg',
+  'वाशिम': 'Washim',
+  'वर्धा': 'Wardha',
+  'गडचिरोली': 'Gadchiroli',
+
+  // Gujarat
+  'सूरत': 'Surat', 'સુરત': 'Surat',
+  'राजकोट': 'Rajkot', 'રાજકોટ': 'Rajkot',
+  'अहमदाबाद': 'Ahmedabad', 'અમેદાવાદ': 'Ahmedabad', 'અમદાવાદ': 'Ahmedabad',
+  'वडोदरा': 'Vadodara', 'વડોદરા': 'Vadodara', 'बड़ौदा': 'Vadodara',
+  'गांधीनगर': 'Gandhinagar', 'ગાંધીનગર': 'Gandhinagar',
+
+  // Karnataka
+  'बेंगलुरु': 'Bengaluru', 'बंगलौर': 'Bengaluru', 'ಬೆಂಗಳೂರು': 'Bengaluru', 'బెంగళూరు': 'Bengaluru',
+  'मैसूर': 'Mysuru', 'ಮೈಸೂರು': 'Mysuru',
+  'हुबली': 'Hubballi', 'ಹುಬ್ಬಳ್ಳಿ': 'Hubballi',
+  'बेलगाम': 'Belagavi', 'ಬೆಳಗಾವಿ': 'Belagavi',
+
+  // Telangana / AP
+  'हैदराबाद': 'Hyderabad', 'హైదరాబాద్': 'Hyderabad',
+  'विजयवाडा': 'Vijayawada', 'విజయవాడ': 'Vijayawada',
+  'विशाखापत्तनम': 'Visakhapatnam', 'విశాఖపట్నం': 'Visakhapatnam',
+
+  // Tamil Nadu
+  'चेन्नई': 'Chennai', 'சென்னை': 'Chennai',
+  'कोयंबटूर': 'Coimbatore', 'கோயம்புத்தூர்': 'Coimbatore',
+  'मदुरै': 'Madurai', 'மதுரை': 'Madurai',
+
+  // Rajasthan
+  'जयपुर': 'Jaipur', 'જયપુર': 'Jaipur',
+  'जोधपुर': 'Jodhpur',
+  'उदयपुर': 'Udaipur',
+  'कोटा': 'Kota',
+};
+
+
+function cleanGeoString(str) {
+  return str.replace(/[\s\u00A0._\-]+/g, '').toLowerCase();
+}
+
+function normalizeGeoName(input, aliasMap, stateContext = '') {
+  if (!input || typeof input !== 'string') return '';
+  const cleaned = input.trim();
+  if (!cleaned) return '';
+
+  // Reject phone numbers, IDs, and other pure numeric garbage (only 6-digit pincodes are valid numbers)
+  if (/^\d+$/.test(cleaned) && cleaned.length !== 6) return '';
+  if (cleaned.length < 2) return '';
+
+  // First: Automatically identify using 154k Indian location dataset
+  const autoResolved = autoIdentifyDistrict(cleaned, stateContext);
+  if (autoResolved && autoResolved.toLowerCase() !== 'unknown') {
+    for (const [key, val] of Object.entries(aliasMap)) {
+      if (cleanGeoString(key) === cleanGeoString(autoResolved)) {
+        return val;
+      }
+    }
+    return autoResolved;
+  }
+
+  // Fallback checks
+  const parts = cleaned.split(/[,()/\\-]+/).map(p => p.trim()).filter(Boolean);
+  for (const part of parts) {
+    const partClean = cleanGeoString(part);
+    for (const [key, val] of Object.entries(aliasMap)) {
+      if (cleanGeoString(key) === partClean) {
+        return val;
+      }
+    }
+  }
+
+  let stripped = cleaned
+    .replace(/\b(tehsil|tahsil|taluka|taluk|district|dist|block|mandal|gram|panchayat|city|town|jilla|jila|जिला|जिल्हा|જિલ્લો|జిల్లా|ಜಿಲ್ಲೆ|மாவட்டம்|प्रदेश|राज्य)\b/gi, '')
+    .replace(/[\s\u00A0._\-]+/g, ' ')
+    .trim();
+
+  if (!stripped) stripped = cleaned;
+  const strippedClean = cleanGeoString(stripped);
+
+  for (const [key, val] of Object.entries(aliasMap)) {
+    if (cleanGeoString(key) === strippedClean) {
+      return val;
+    }
+  }
+
+  return stripped.charAt(0).toUpperCase() + stripped.slice(1);
+}
+
 exports.getDistrictAnalytics = async (req, res, next) => {
   try {
     if (req.user && req.user.role === 'sales') {
@@ -846,6 +968,9 @@ exports.getDistrictAnalytics = async (req, res, next) => {
     }
     const Order = require('../models/Order');
     const User = require('../models/User');
+    const Product = require('../models/Product');
+    const Category = require('../models/Category');
+    const Collection = require('../models/Collection');
 
     const { days = '30', startDate: reqStart, endDate: reqEnd } = req.query;
     let startDate = new Date(0);
@@ -867,8 +992,16 @@ exports.getDistrictAnalytics = async (req, res, next) => {
 
     const salesData = await getSalesAssignedUserData(req);
 
-    const orderMatch = { 'shippingAddress.cityTehsil': { $exists: true, $ne: '' } };
-    const userMatch = { 'address.cityTehsil': { $exists: true, $ne: '' } };
+    const orderMatch = {
+      $or: [
+        { 'shippingAddress.cityTehsil': { $exists: true, $ne: '' } },
+        { 'shippingAddress.district': { $exists: true, $ne: '' } },
+        { 'shippingAddress.city': { $exists: true, $ne: '' } },
+        { 'shippingAddress.villageArea': { $exists: true, $ne: '' } },
+        { 'shippingAddress.addressLine2': { $exists: true, $ne: '' } },
+        { 'shippingAddress.address2': { $exists: true, $ne: '' } }
+      ]
+    };
 
     if (days !== 'all' && days !== 'All Time') {
       orderMatch.createdAt = { $gte: startDate };
@@ -882,80 +1015,263 @@ exports.getDistrictAnalytics = async (req, res, next) => {
         return res.json({ success: true, data: [] });
       }
       orderMatch.user = { $in: salesData.objectIds };
-      userMatch._id = { $in: salesData.objectIds };
     }
 
-    // 1. Aggregate real order revenue & buyer count by district/cityTehsil & state from Orders
-    const districtOrderStats = await Order.aggregate([
-      { $match: orderMatch },
-      {
-        $group: {
-          _id: {
-            district: '$shippingAddress.cityTehsil',
-            state: '$shippingAddress.state'
-          },
-          totalRevenue: { $sum: '$totalAmount' },
-          buyers: { $addToSet: '$user' },
-          orderCount: { $sum: 1 }
-        }
-      },
-      { $sort: { totalRevenue: -1 } }
+    // 1. Fetch real master taxonomy from MongoDB
+    const [allCategories, allCollections, allProducts] = await Promise.all([
+      Category.find({}).lean(),
+      Collection.find({}).lean(),
+      Product.find({}).select('title categoryId subCategoryId brandName vendor').lean()
     ]);
 
-    // 2. Group Users by district/cityTehsil to count registered farmers/dealers per district
-    const districtUserStats = await User.aggregate([
-      { $match: userMatch },
-      {
-        $group: {
-          _id: {
-            district: '$address.cityTehsil',
-            state: '$address.state'
-          },
-          userCount: { $sum: 1 }
+    const categoryMap = new Map();
+    const subCategoryMap = new Map();
+    allCategories.forEach(c => {
+      if (c && c.name) {
+        categoryMap.set(c._id.toString(), c.name);
+        if (Array.isArray(c.subCategories)) {
+          c.subCategories.forEach(sc => {
+            if (sc && sc.name) {
+              subCategoryMap.set(sc._id ? sc._id.toString() : sc.name, sc.name);
+            }
+          });
         }
       }
-    ]);
-
-    const userCountMap = new Map();
-    districtUserStats.forEach(u => {
-      const dist = (u._id && u._id.district ? u._id.district : '').trim().toLowerCase();
-      const st = (u._id && u._id.state ? u._id.state : '').trim().toLowerCase();
-      const key = `${dist}_${st}`;
-      userCountMap.set(key, u.userCount);
     });
 
-    const results = [];
-    const processedKeys = new Set();
+    const collectionMap = new Map();
+    const subCollectionMap = new Map();
+    allCollections.forEach(col => {
+      if (col && col.name) {
+        collectionMap.set(col._id.toString(), col.name);
+        if (Array.isArray(col.subCollections)) {
+          col.subCollections.forEach(sc => {
+            if (sc && sc.name) {
+              subCollectionMap.set(sc._id ? sc._id.toString() : sc.name, sc.name);
+            }
+          });
+        }
+      }
+    });
 
-    districtOrderStats.forEach(stat => {
-      const dist = (stat._id && stat._id.district ? stat._id.district : 'Unknown').trim();
-      const st = (stat._id && stat._id.state ? stat._id.state : 'Maharashtra').trim();
-      const key = `${dist.toLowerCase()}_${st.toLowerCase()}`;
-      processedKeys.add(key);
-
-      const buyersCount = salesData
-        ? stat.buyers.filter(b => b && salesData.idSet.has(b.toString().toLowerCase())).length
-        : stat.buyers.length;
-      if (salesData && buyersCount === 0) return;
-
-      const totalUsersInDistrict = Math.max(userCountMap.get(key) || 0, buyersCount);
-      const conversionRate = totalUsersInDistrict > 0 ? Math.min(100.0, Number(((buyersCount / totalUsersInDistrict) * 100).toFixed(1))) : 0.0;
-      const searchVolumeIndex = Math.min(99, Math.max(10, Math.round((stat.orderCount * 15) + (buyersCount * 5))));
-
-      if (stat.totalRevenue > 0) {
-        results.push({
-          districtName: dist,
-          stateName: st,
-          primaryCrop: 'Agri Inputs & Crops',
-          activeFarmers: totalUsersInDistrict,
-          searchVolumeIndex: searchVolumeIndex,
-          conversionRate: conversionRate,
-          grossRevenueRupees: stat.totalRevenue
+    const productDetailMap = new Map();
+    allProducts.forEach(p => {
+      if (p) {
+        const catName = p.categoryId ? categoryMap.get(p.categoryId.toString()) || 'General Products' : 'General Products';
+        const subCatName = p.subCategoryId ? subCategoryMap.get(p.subCategoryId.toString()) || '' : '';
+        productDetailMap.set(p._id.toString(), {
+          title: p.title || 'Product',
+          brandName: p.brandName || '',
+          vendor: p.vendor || '',
+          categoryName: catName,
+          subCategoryName: subCatName
         });
       }
     });
 
-    res.json({ success: true, data: results });
+    // 2. Fetch Order & User documents to aggregate with Multilingual Geographic Normalization
+    const [rawOrders, rawUsers] = await Promise.all([
+      Order.find(orderMatch).select('shippingAddress totalAmount user items createdAt').lean(),
+      User.find(salesData ? { _id: { $in: salesData.objectIds } } : {}).select('address cityTehsil city district state role').lean()
+    ]);
+
+    function extractAllUserDistricts(u) {
+      const addr = u.address || {};
+      const fields = [
+        addr.cityTehsil,
+        addr.district,
+        addr.villageArea,
+        addr.addressLine2,
+        addr.address2,
+        u.cityTehsil,
+        u.city,
+        u.district
+      ];
+      const found = new Set();
+      fields.forEach(f => {
+        if (f && typeof f === 'string' && f.trim().length > 0) {
+          const val = f.trim();
+          const norm = normalizeGeoName(val, DISTRICT_ALIASES);
+          if (norm && norm.toLowerCase() !== 'unknown') {
+            found.add(norm.toLowerCase());
+          }
+          val.split(/[,/\s]+/).forEach(part => {
+            if (part.trim().length >= 3) {
+              const pNorm = normalizeGeoName(part.trim(), DISTRICT_ALIASES);
+              if (pNorm && pNorm.toLowerCase() !== 'unknown') {
+                found.add(pNorm.toLowerCase());
+              }
+            }
+          });
+        }
+      });
+      return Array.from(found);
+    }
+
+    // Group Registered Dealers by Normalized District & State with Multi-field Fallback
+    const userCountMapByGeo = new Map();
+    const userCountMapByDist = new Map();
+
+    rawUsers.forEach(u => {
+      const addr = u.address || {};
+      const rawSt = (addr.state || u.state || '').toString().trim();
+      const rawDist = (
+        addr.district ||
+        u.district ||
+        addr.cityTehsil ||
+        u.cityTehsil ||
+        u.city ||
+        addr.villageArea ||
+        addr.addressLine2 ||
+        addr.address2 ||
+        ''
+      ).toString().trim();
+
+      if (rawDist) {
+        const normDist = normalizeGeoName(rawDist, DISTRICT_ALIASES, rawSt);
+        if (!normDist || normDist.toLowerCase() === 'unknown') return;
+
+        const normSt = rawSt ? autoIdentifyState(rawSt) : '';
+        const distKey = normDist.toLowerCase();
+
+        userCountMapByDist.set(distKey, (userCountMapByDist.get(distKey) || 0) + 1);
+
+        if (normSt) {
+          const geoKey = `${distKey}_${normSt.toLowerCase()}`;
+          userCountMapByGeo.set(geoKey, (userCountMapByGeo.get(geoKey) || 0) + 1);
+        }
+      }
+    });
+
+    // Group Orders by Normalized District & State
+    const districtAggMap = new Map();
+    rawOrders.forEach(ord => {
+      const ship = ord.shippingAddress || {};
+      const rawSt = ship.state || '';
+      const rawDist = (
+        ship.district ||
+        ship.cityTehsil ||
+        ship.city ||
+        ship.villageArea ||
+        ship.addressLine2 ||
+        ship.address2 ||
+        ''
+      ).toString().trim();
+
+      if (rawDist) {
+        const normDist = normalizeGeoName(rawDist, DISTRICT_ALIASES, rawSt) || 'Unknown';
+        const normSt = rawSt ? autoIdentifyState(rawSt) : 'Madhya Pradesh';
+        const geoKey = `${normDist.toLowerCase()}_${normSt.toLowerCase()}`;
+
+        if (!districtAggMap.has(geoKey)) {
+          districtAggMap.set(geoKey, {
+            districtName: normDist,
+            stateName: normSt,
+            totalRevenue: 0,
+            buyersSet: new Set(),
+            orderCount: 0,
+            orderDocs: []
+          });
+        }
+
+        const agg = districtAggMap.get(geoKey);
+        agg.totalRevenue += (ord.totalAmount || 0);
+        if (ord.user) agg.buyersSet.add(ord.user.toString());
+        agg.orderCount += 1;
+        if (Array.isArray(ord.items)) {
+          agg.orderDocs.push({ items: ord.items });
+        }
+      }
+    });
+
+    const results = [];
+
+    districtAggMap.forEach((agg, geoKey) => {
+      const buyersList = Array.from(agg.buyersSet);
+      const buyersCount = salesData
+        ? buyersList.filter(b => b && salesData.idSet.has(b.toLowerCase())).length
+        : buyersList.length;
+      if (salesData && buyersCount === 0) return;
+
+      const distKey = agg.districtName.toLowerCase();
+      const registeredDealers = userCountMapByGeo.get(geoKey) || userCountMapByDist.get(distKey) || 0;
+      // conversionRate = unique buyers ÷ registered dealers × 100
+      // (can exceed 100 if buyers come from tehsils not in user registration — signals data gap)
+      const conversionRate = registeredDealers > 0
+        ? Math.min(100.0, Number(((buyersCount / registeredDealers) * 100).toFixed(1)))
+        : (buyersCount > 0 ? 100.0 : 0.0);
+
+      // Real category, subcategory, and product breakdown calculation
+      const categoryBreakdown = {};
+      const subCategoryBreakdown = {};
+      const productBreakdown = {};
+
+      agg.orderDocs.forEach(ord => {
+        if (Array.isArray(ord.items)) {
+          ord.items.forEach(item => {
+            const pId = item.product ? item.product.toString() : '';
+            const pMeta = productDetailMap.get(pId) || {
+              title: item.title || 'Product',
+              categoryName: 'General Products',
+              subCategoryName: ''
+            };
+            const itemRev = (item.price || 0) * (item.quantity || 1);
+            const cat = pMeta.categoryName || 'General Products';
+            categoryBreakdown[cat] = (categoryBreakdown[cat] || 0) + itemRev;
+            if (pMeta.subCategoryName) {
+              subCategoryBreakdown[pMeta.subCategoryName] = (subCategoryBreakdown[pMeta.subCategoryName] || 0) + itemRev;
+            }
+            const pTitle = pMeta.title || item.title || 'Product';
+            productBreakdown[pTitle] = (productBreakdown[pTitle] || 0) + itemRev;
+          });
+        }
+      });
+
+      let topCategory = 'General Products';
+      let maxCatRev = -1;
+      Object.entries(categoryBreakdown).forEach(([cat, rev]) => { if (rev > maxCatRev) { maxCatRev = rev; topCategory = cat; } });
+      let topSubCategory = '';
+      let maxSubRev = -1;
+      Object.entries(subCategoryBreakdown).forEach(([scat, rev]) => { if (rev > maxSubRev) { maxSubRev = rev; topSubCategory = scat; } });
+
+      if (agg.totalRevenue > 0) {
+        results.push({
+          districtName: agg.districtName,
+          stateName: agg.stateName,
+          primaryCrop: topSubCategory ? `${topCategory} • ${topSubCategory}` : topCategory,
+          category: topCategory,
+          subCategory: topSubCategory,
+          registeredDealers: registeredDealers,   // actual registered users in district
+          activeBuyers: buyersCount,               // unique users who placed ≥1 order
+          activeDealers: registeredDealers,        // kept for backward compat (= registeredDealers)
+          searchVolumeIndex: Math.min(99, Math.max(10, Math.round((agg.orderCount * 15) + (buyersCount * 5)))),
+          conversionRate: conversionRate,
+          grossRevenueRupees: agg.totalRevenue,
+          orderCount: agg.orderCount,
+          categoryBreakdown: categoryBreakdown,
+          subCategoryBreakdown: subCategoryBreakdown,
+          productBreakdown: productBreakdown
+        });
+      }
+    });
+
+    results.sort((a, b) => b.grossRevenueRupees - a.grossRevenueRupees);
+
+    const masterCategories = Array.from(new Set(Array.from(categoryMap.values())));
+    const masterSubCategories = Array.from(new Set(Array.from(subCategoryMap.values())));
+    const masterCollections = Array.from(new Set(Array.from(collectionMap.values())));
+    const masterSubCollections = Array.from(new Set(Array.from(subCollectionMap.values())));
+
+    res.json({
+      success: true,
+      data: results,
+      masterTaxonomy: {
+        categories: masterCategories,
+        subCategories: masterSubCategories,
+        collections: masterCollections,
+        subCollections: masterSubCollections
+      }
+    });
   } catch (error) {
     next(error);
   }

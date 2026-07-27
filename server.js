@@ -7,30 +7,10 @@ const PORT = process.env.PORT || 5000;
 
 const startServer = async () => {
   try {
+    // 1. Connect to Database (Essential)
     await connectDB();
 
-    // Run database migrations/self-healing tasks on startup
-    try {
-      const migrateCoupons = require('./utils/couponMigration');
-      await migrateCoupons();
-    } catch (migErr) {
-      console.error('Migration failed (Coupons):', migErr.message);
-    }
-
-    try {
-      const migrateCustomOrders = require('./utils/customOrdersMigration');
-      await migrateCustomOrders();
-    } catch (migErr) {
-      console.error('Migration failed (customOrders):', migErr.message);
-    }
-
-    try {
-      await connectRedis();
-    } catch (redisErr) {
-      console.error('⚠️ Redis connection failed during startup, continuing without Redis:', redisErr.message);
-    }
-
-    // Import app
+    // 2. Initialize App & Server early to satisfy Cloud Run health checks
     const app = require('./app');
     const http = require('http');
     const server = http.createServer(app);
@@ -41,8 +21,33 @@ const startServer = async () => {
     server.listen(PORT, () => {
       console.log(`Server running in ${process.env.NODE_ENV} mode on port ${PORT}`);
       
-      // Start background tasks (Order Tracker, etc.)
-      cronService.initCronJobs();
+      // 3. Run background tasks (Migrations & Redis) AFTER server starts listening
+      // This ensures Cloud Run health checks pass immediately.
+
+      (async () => {
+        try {
+          await connectRedis();
+        } catch (redisErr) {
+          console.error('⚠️ Redis connection failed:', redisErr.message);
+        }
+
+        try {
+          const migrateCoupons = require('./utils/couponMigration');
+          await migrateCoupons();
+        } catch (migErr) {
+          console.error('Migration failed (Coupons):', migErr.message);
+        }
+
+        try {
+          const migrateCustomOrders = require('./utils/customOrdersMigration');
+          await migrateCustomOrders();
+        } catch (migErr) {
+          console.error('Migration failed (customOrders):', migErr.message);
+        }
+
+        // Start background tasks (Order Tracker, etc.)
+        cronService.initCronJobs();
+      })();
     });
   } catch (error) {
     console.error('Failed to start server:', error.message);

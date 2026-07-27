@@ -99,7 +99,22 @@ class SmsService {
     
     // Dynamic message based on approved DLT template
     const templateMessage = process.env.AIRTEL_IQ_MESSAGE_TEMPLATE || 'Your OTP is {otp}.';
-    const message = templateMessage.replace('{otp}', otp);
+    let message = templateMessage.replace('{otp}', otp);
+
+    // ── SMS Retriever API Support (Android) ──────────────────────────────────
+    // To enable silent auto-fetch, the message must:
+    // 1. Start with '<#> '
+    // 2. End with the 11-character App Signature Hash
+    const appHash = process.env.ANDROID_APP_HASH;
+    if (appHash) {
+      if (!message.startsWith('<#>')) {
+        message = `<#> ${message}`;
+      }
+      if (!message.endsWith(appHash)) {
+        message = `${message.trim()} ${appHash}`;
+      }
+    }
+    // ─────────────────────────────────────────────────────────────────────────
 
     const payload = {
       customerId,

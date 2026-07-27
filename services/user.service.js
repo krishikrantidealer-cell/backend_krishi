@@ -663,6 +663,20 @@ class UserService {
       isDeleted: true
     });
 
+    // TRUE registrations today — counts ALL role:'user' created today regardless
+    // of deletion status. This is what a raw MongoDB createdAt query would return.
+    const totalRegisteredToday = await User.countDocuments({
+      role: 'user',
+      createdAt: { $gte: startOfDay, $lte: endOfDay }
+    });
+
+    // How many of today's registrations are currently soft-deleted
+    const registeredTodayNowDeleted = await User.countDocuments({
+      role: 'user',
+      isDeleted: true,
+      createdAt: { $gte: startOfDay, $lte: endOfDay }
+    });
+
     return {
       date: targetDateStr,
       totalAllTimeUnassignedLeads,
@@ -671,6 +685,10 @@ class UserService {
       totalAllTimeVerifiedDealers,
       totalDeletedLeads: totalAllTimeDeletedLeads,
       totalDeletedDealers: totalAllTimeDeletedDealers,
+      // Accurate daily registration counts
+      totalRegisteredToday,          // ALL who joined today (active + deleted)
+      registeredTodayNowDeleted,     // Subset of above who are soft-deleted
+      activeRegisteredToday: totalRegisteredToday - registeredTodayNowDeleted,
       teamStats: {
         totalAssignedInDay: totalTeamAssigned,
         totalKycApprovedInDay: totalTeamKycApproved,
