@@ -146,6 +146,7 @@ class ProductService {
             availabilityStatus: 1,
             averageRating: 1,
             numReviews: 1,
+            dosage: 1,
             minPrice: 1,
             maxPrice: 1,
             categoryId: 1,
@@ -193,7 +194,7 @@ class ProductService {
 
     // 2. Fallback to MongoDB
     const products = await Product.find(query)
-      .select('title brandName technicalName vendor thumbnail variants images availabilityStatus averageRating numReviews minPrice maxPrice categoryId subCategoryId categoryIds subCategoryIds assignedCollections tags description isFeatured specifications mediumImages originalImages order customOrders')
+      .select('title brandName technicalName vendor thumbnail variants images availabilityStatus averageRating numReviews dosage minPrice maxPrice categoryId subCategoryId categoryIds subCategoryIds assignedCollections tags description isFeatured specifications mediumImages originalImages order customOrders')
       .populate('categoryId')
       .populate('categoryIds')
       .sort(sortOrder)

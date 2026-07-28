@@ -141,6 +141,11 @@ const productSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  dosage: {
+    perLiterWater: { type: String, trim: true },
+    perAcre: { type: String, trim: true },
+    method: { type: String, trim: true }
+  },
   specifications: {
     type: Map,
     of: String
