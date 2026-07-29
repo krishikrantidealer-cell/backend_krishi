@@ -675,10 +675,24 @@ exports.adminCreateOrder = async (req, res, next) => {
     // Generate a short unique orderId
     const shortId = `KD-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 5).toUpperCase()}`;
 
+    const itemsSubtotal = resolvedItems.reduce((s, i) => s + (i.price * i.quantity), 0);
+
+    // Apply Cart Discount from Sales Coupon if any
+    let salesCouponDiscount = 0;
+    if (appliedSalesCoupon && appliedSalesCoupon.cartDiscountType && appliedSalesCoupon.cartDiscountType !== 'None') {
+      if (appliedSalesCoupon.cartDiscountType === 'Fixed') {
+        salesCouponDiscount = appliedSalesCoupon.cartDiscountValue || 0;
+      } else if (appliedSalesCoupon.cartDiscountType === 'Percentage') {
+        salesCouponDiscount = (itemsSubtotal * (appliedSalesCoupon.cartDiscountValue || 0)) / 100;
+      }
+    }
+
     // Fix: totalAmount can be 0 (if coupon covers everything)
+    // If totalAmount is provided by admin panel, we trust it as the final value.
+    // Otherwise, we calculate it: subtotal - standard discount - sales discount.
     const computed_total = (totalAmount !== undefined && totalAmount !== null)
       ? totalAmount
-      : resolvedItems.reduce((s, i) => s + (i.price * i.quantity), 0);
+      : Math.max(0, itemsSubtotal - (discountAmount || 0) - salesCouponDiscount);
 
     const advance = paymentMethod === 'Partial' ? (advanceAmount || 0) : computed_total;
     const remaining = computed_total - advance;
@@ -700,7 +714,7 @@ exports.adminCreateOrder = async (req, res, next) => {
         price: i.price,
       })),
       totalAmount: computed_total,
-      discountAmount: discountAmount || 0,
+      discountAmount: (discountAmount || 0) + salesCouponDiscount,
       couponCode: couponCode || (appliedSalesCoupon ? appliedSalesCoupon.code : undefined),
       freeItems: freeItems || [],
       shippingAddress,

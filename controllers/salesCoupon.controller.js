@@ -3,10 +3,13 @@ const auditService = require('../services/audit.service');
 
 exports.createSalesCoupon = async (req, res, next) => {
   try {
-    const { overrides, expiresAt } = req.body;
+    const { overrides, expiresAt, cartDiscountType, cartDiscountValue } = req.body;
 
-    if (!overrides || !Array.isArray(overrides) || overrides.length === 0) {
-      return res.status(400).json({ success: false, message: 'At least one product override is required' });
+    const hasOverrides = overrides && Array.isArray(overrides) && overrides.length > 0;
+    const hasCartDiscount = cartDiscountType && cartDiscountType !== 'None' && cartDiscountValue > 0;
+
+    if (!hasOverrides && !hasCartDiscount) {
+      return res.status(400).json({ success: false, message: 'At least one product override or cart discount is required' });
     }
 
     // Generate a unique code (e.g. SA-XXXX)
@@ -22,7 +25,9 @@ exports.createSalesCoupon = async (req, res, next) => {
     const coupon = await SalesAgentCoupon.create({
       code,
       createdBy: req.user._id,
-      overrides,
+      overrides: overrides || [],
+      cartDiscountType: cartDiscountType || 'None',
+      cartDiscountValue: cartDiscountValue || 0,
       expiresAt,
       isActive: true,
       isUsed: false

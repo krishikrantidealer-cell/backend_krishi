@@ -37,16 +37,16 @@ const STATE_NAME_CORRECTIONS = {
   'uttarakhand': 'Uttarakhand',
   'west bengal': 'West Bengal',
   'andaman and nicobar islands': 'Andaman & Nicobar',
-  'chandigarh': 'Chandigarh',
-  'dadra and nagar haveli and daman and diu': 'Dadra & NH and DD',
-  'dadra and nagar haveli': 'Dadra & NH and DD',
-  'daman and diu': 'Dadra & NH and DD',
-  'delhi': 'Delhi',
-  'jammu and kashmir': 'Jammu & Kashmir',
+  'chandigarh': 'Chandigarh (UT)',
+  'dadra and nagar haveli and daman and diu': 'Dadra and Nagar Haveli (UT)',
+  'dadra and nagar haveli': 'Dadra and Nagar Haveli (UT)',
+  'daman and diu': 'Daman and Diu (UT)',
+  'delhi': 'Delhi (NCT)',
+  'jammu and kashmir': 'Jammu and Kashmir',
   'ladakh': 'Ladakh',
-  'lakshadweep': 'Lakshadweep',
-  'puducherry': 'Puducherry',
-  'pondicherry': 'Puducherry',
+  'lakshadweep': 'Lakshadweep (UT)',
+  'puducherry': 'Puducherry (UT)',
+  'pondicherry': 'Puducherry (UT)',
 };
 
 // Abbreviation / script alias map for state names (covers Hindi, Gujarati, Marathi etc.)
@@ -147,7 +147,13 @@ function autoIdentifyState(input) {
   const cleaned = input.trim();
   if (!cleaned) return '';
 
-  // Reject pure numeric strings (phone numbers, IDs, pincodes stored in state field)
+  // 1. Check 6-digit Pincode resolution first
+  if (/^\d{6}$/.test(cleaned)) {
+    const stateMatch = pincodeToStateMap.get(cleaned);
+    if (stateMatch) return autoIdentifyState(stateMatch); // Recursively normalize the resolved state name
+  }
+
+  // Reject other pure numeric strings (phone numbers, IDs)
   if (/^\d+$/.test(cleaned)) return '';
   if (cleaned.length < 2) return '';
 

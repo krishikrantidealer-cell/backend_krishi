@@ -33,6 +33,15 @@ const salesAgentCouponSchema = new mongoose.Schema({
     required: true
   },
   overrides: [overrideSchema],
+  cartDiscountType: {
+    type: String,
+    enum: ['Fixed', 'Percentage', 'None'],
+    default: 'None'
+  },
+  cartDiscountValue: {
+    type: Number,
+    default: 0
+  },
   isUsed: {
     type: Boolean,
     default: false

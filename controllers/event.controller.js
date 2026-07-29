@@ -540,11 +540,8 @@ async function getSalesAssignedUserIds(req) {
  */
 exports.getFunnelData = async (req, res, next) => {
   try {
-    if (req.user && req.user.role === 'sales') {
-      return res.status(403).json({ success: false, message: 'Conversion Funnel is reserved for Marketing & Admin roles.' });
-    }
     const assignedUserIds = await getSalesAssignedUserIds(req);
-    const { days = '30', startDate: reqStart, endDate: reqEnd } = req.query;
+    const { days = 'all', startDate: reqStart, endDate: reqEnd } = req.query;
     let startDate = new Date(0);
     let endDate = null;
 
@@ -614,7 +611,14 @@ exports.getFunnelData = async (req, res, next) => {
 
     const allRegisteredUsersSet = new Set();
     try {
-      let userQuery = {};
+      let userQuery = {
+        isDeleted: { $ne: true },
+        role: { $nin: ['admin', 'sales'] },
+        $or: [
+          { kycStatus: 'verified' },
+          { isKycComplete: true }
+        ]
+      };
       if (days !== 'all' && days !== 'All Time') {
         userQuery.createdAt = { $gte: startDate };
         if (endDate) {
@@ -960,16 +964,13 @@ function normalizeGeoName(input, aliasMap, stateContext = '') {
 
 exports.getDistrictAnalytics = async (req, res, next) => {
   try {
-    if (req.user && req.user.role === 'sales') {
-      return res.status(403).json({ success: false, message: 'Regional Heatmap is reserved for Marketing & Admin roles.' });
-    }
     const Order = require('../models/Order');
     const User = require('../models/User');
     const Product = require('../models/Product');
     const Category = require('../models/Category');
     const Collection = require('../models/Collection');
 
-    const { days = '30', startDate: reqStart, endDate: reqEnd } = req.query;
+    const { days = 'all', startDate: reqStart, endDate: reqEnd } = req.query;
     let startDate = new Date(0);
     let endDate = null;
 
@@ -990,7 +991,9 @@ exports.getDistrictAnalytics = async (req, res, next) => {
     const salesData = await getSalesAssignedUserData(req);
 
     const orderMatch = {
+      orderStatus: { $ne: 'Cancelled' },
       $or: [
+        { 'shippingAddress.pincode': { $exists: true, $ne: '' } },
         { 'shippingAddress.cityTehsil': { $exists: true, $ne: '' } },
         { 'shippingAddress.district': { $exists: true, $ne: '' } },
         { 'shippingAddress.city': { $exists: true, $ne: '' } },
@@ -1067,9 +1070,21 @@ exports.getDistrictAnalytics = async (req, res, next) => {
     });
 
     // 2. Fetch Order & User documents to aggregate with Multilingual Geographic Normalization
+    const userQuery = {
+      isDeleted: { $ne: true },
+      role: { $nin: ['admin', 'sales'] },
+      $or: [
+        { kycStatus: 'verified' },
+        { isKycComplete: true }
+      ]
+    };
+    if (salesData) {
+      userQuery._id = { $in: salesData.objectIds };
+    }
+
     const [rawOrders, rawUsers] = await Promise.all([
       Order.find(orderMatch).select('shippingAddress totalAmount user items createdAt').lean(),
-      User.find(salesData ? { _id: { $in: salesData.objectIds } } : {}).select('address cityTehsil city district state role').lean()
+      User.find(userQuery).select('address cityTehsil city district state role kycStatus').lean()
     ]);
 
     function extractAllUserDistricts(u) {
@@ -1108,35 +1123,52 @@ exports.getDistrictAnalytics = async (req, res, next) => {
     // Group Registered Dealers by Normalized District & State with Multi-field Fallback
     const userCountMapByGeo = new Map();
     const userCountMapByDist = new Map();
+    const userGeoNamesMap = new Map();
 
     rawUsers.forEach(u => {
       const addr = u.address || {};
-      const rawSt = (addr.state || u.state || '').toString().trim();
-      const rawDist = (
-        addr.district ||
-        u.district ||
-        addr.cityTehsil ||
-        u.cityTehsil ||
-        u.city ||
-        addr.villageArea ||
-        addr.addressLine2 ||
-        addr.address2 ||
-        ''
-      ).toString().trim();
+      const rawPin = (addr.pincode || '').toString().trim();
+      let normDist = '';
+      let normSt = '';
 
-      if (rawDist) {
-        const normDist = normalizeGeoName(rawDist, DISTRICT_ALIASES, rawSt);
-        if (!normDist || normDist.toLowerCase() === 'unknown') return;
+      if (rawPin && /^\d{6}$/.test(rawPin)) {
+        normDist = autoIdentifyDistrict(rawPin);
+        normSt = autoIdentifyState(rawPin);
+      }
 
-        const normSt = rawSt ? autoIdentifyState(rawSt) : '';
-        const distKey = normDist.toLowerCase();
+      if (!normDist || !normSt) {
+        const rawSt = (addr.state || u.state || '').toString().trim();
+        const rawDist = (
+          addr.district ||
+          u.district ||
+          addr.cityTehsil ||
+          u.cityTehsil ||
+          u.city ||
+          addr.villageArea ||
+          addr.addressLine2 ||
+          addr.address2 ||
+          ''
+        ).toString().trim();
 
-        userCountMapByDist.set(distKey, (userCountMapByDist.get(distKey) || 0) + 1);
-
-        if (normSt) {
-          const geoKey = `${distKey}_${normSt.toLowerCase()}`;
-          userCountMapByGeo.set(geoKey, (userCountMapByGeo.get(geoKey) || 0) + 1);
+        if (rawDist) {
+          if (!normDist) normDist = normalizeGeoName(rawDist, DISTRICT_ALIASES, rawSt);
+          if (!normSt) normSt = rawSt ? autoIdentifyState(rawSt) : '';
         }
+      }
+
+      if (!normDist || normDist.toLowerCase() === 'unknown') {
+        normDist = 'Other District';
+      }
+      if (!normSt) {
+        normSt = 'Maharashtra';
+      }
+
+      const distKey = normDist.toLowerCase();
+      const geoKey = `${distKey}_${normSt.toLowerCase()}`;
+      userCountMapByDist.set(distKey, (userCountMapByDist.get(distKey) || 0) + 1);
+      userCountMapByGeo.set(geoKey, (userCountMapByGeo.get(geoKey) || 0) + 1);
+      if (!userGeoNamesMap.has(geoKey)) {
+        userGeoNamesMap.set(geoKey, { districtName: normDist, stateName: normSt });
       }
     });
 
@@ -1144,20 +1176,35 @@ exports.getDistrictAnalytics = async (req, res, next) => {
     const districtAggMap = new Map();
     rawOrders.forEach(ord => {
       const ship = ord.shippingAddress || {};
-      const rawSt = ship.state || '';
-      const rawDist = (
-        ship.district ||
-        ship.cityTehsil ||
-        ship.city ||
-        ship.villageArea ||
-        ship.addressLine2 ||
-        ship.address2 ||
-        ''
-      ).toString().trim();
+      const rawPin = (ship.pincode || '').toString().trim();
+      let normDist = '';
+      let normSt = '';
 
-      if (rawDist) {
-        const normDist = normalizeGeoName(rawDist, DISTRICT_ALIASES, rawSt) || 'Unknown';
-        const normSt = rawSt ? autoIdentifyState(rawSt) : 'Madhya Pradesh';
+      if (rawPin && /^\d{6}$/.test(rawPin)) {
+        normDist = autoIdentifyDistrict(rawPin);
+        normSt = autoIdentifyState(rawPin);
+      }
+
+      if (!normDist || !normSt) {
+        const rawSt = ship.state || '';
+        const rawDist = (
+          ship.district ||
+          ship.cityTehsil ||
+          ship.city ||
+          ship.villageArea ||
+          ship.addressLine2 ||
+          ship.address2 ||
+          ''
+        ).toString().trim();
+
+        if (rawDist) {
+          if (!normDist) normDist = normalizeGeoName(rawDist, DISTRICT_ALIASES, rawSt) || 'Unknown';
+          if (!normSt) normSt = rawSt ? autoIdentifyState(rawSt) : 'Madhya Pradesh';
+        }
+      }
+
+      if (normDist) {
+        if (!normSt) normSt = 'Madhya Pradesh'; // Ultimate fallback
         const geoKey = `${normDist.toLowerCase()}_${normSt.toLowerCase()}`;
 
         if (!districtAggMap.has(geoKey)) {
@@ -1181,6 +1228,20 @@ exports.getDistrictAnalytics = async (req, res, next) => {
       }
     });
 
+    // Ensure all districts with registered dealers exist in districtAggMap
+    userGeoNamesMap.forEach((meta, geoKey) => {
+      if (!districtAggMap.has(geoKey)) {
+        districtAggMap.set(geoKey, {
+          districtName: meta.districtName,
+          stateName: meta.stateName,
+          totalRevenue: 0,
+          buyersSet: new Set(),
+          orderCount: 0,
+          orderDocs: []
+        });
+      }
+    });
+
     const results = [];
 
     districtAggMap.forEach((agg, geoKey) => {
@@ -1188,17 +1249,15 @@ exports.getDistrictAnalytics = async (req, res, next) => {
       const buyersCount = salesData
         ? buyersList.filter(b => b && salesData.idSet.has(b.toLowerCase())).length
         : buyersList.length;
-      if (salesData && buyersCount === 0) return;
-
       const distKey = agg.districtName.toLowerCase();
       const registeredDealers = userCountMapByGeo.get(geoKey) || userCountMapByDist.get(distKey) || 0;
-      // conversionRate = unique buyers ÷ registered dealers × 100
-      // (can exceed 100 if buyers come from tehsils not in user registration — signals data gap)
+
+      if (salesData && buyersCount === 0 && registeredDealers === 0) return;
+
       const conversionRate = registeredDealers > 0
         ? Math.min(100.0, Number(((buyersCount / registeredDealers) * 100).toFixed(1)))
         : (buyersCount > 0 ? 100.0 : 0.0);
 
-      // Real category, subcategory, and product breakdown calculation
       const categoryBreakdown = {};
       const subCategoryBreakdown = {};
       const productBreakdown = {};
@@ -1231,7 +1290,7 @@ exports.getDistrictAnalytics = async (req, res, next) => {
       let maxSubRev = -1;
       Object.entries(subCategoryBreakdown).forEach(([scat, rev]) => { if (rev > maxSubRev) { maxSubRev = rev; topSubCategory = scat; } });
 
-      if (agg.totalRevenue > 0) {
+      if (agg.totalRevenue > 0 || registeredDealers > 0) {
         results.push({
           districtName: agg.districtName,
           stateName: agg.stateName,
@@ -1240,7 +1299,7 @@ exports.getDistrictAnalytics = async (req, res, next) => {
           subCategory: topSubCategory,
           registeredDealers: registeredDealers,   // actual registered users in district
           activeBuyers: buyersCount,               // unique users who placed ≥1 order
-          activeDealers: registeredDealers,        // kept for backward compat (= registeredDealers)
+          activeDealers: buyersCount,              // active dealers who placed ≥1 order
           searchVolumeIndex: Math.min(99, Math.max(10, Math.round((agg.orderCount * 15) + (buyersCount * 5)))),
           conversionRate: conversionRate,
           grossRevenueRupees: agg.totalRevenue,
