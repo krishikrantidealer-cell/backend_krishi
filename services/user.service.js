@@ -446,7 +446,7 @@ class UserService {
     return true;
   }
 
-  async deleteUser(userId) {
+  async deleteUser(userId, adminId = null, adminName = null) {
     const user = await User.findById(userId);
     if (!user) throw new Error('User not found');
 
@@ -466,6 +466,10 @@ class UserService {
 
     user.isDeleted = true;
     user.deletedAt = new Date();
+
+    if (adminId) user.deletedByAdminId = adminId;
+    if (adminName) user.deletedByAdminName = adminName;
+
     await user.save();
 
     // Invalidate sessions
@@ -514,6 +518,8 @@ class UserService {
     user.email = restoredEmail;
     user.isDeleted = false;
     user.deletedAt = undefined;
+    user.deletedByAdminId = undefined;
+    user.deletedByAdminName = undefined;
     await user.save();
     return user;
   }

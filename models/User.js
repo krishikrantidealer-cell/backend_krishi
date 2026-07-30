@@ -208,6 +208,13 @@ const userSchema = new mongoose.Schema({
   },
   deletedAt: {
     type: Date
+  },
+  deletedByAdminId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  deletedByAdminName: {
+    type: String
   }
 }, {
   timestamps: true

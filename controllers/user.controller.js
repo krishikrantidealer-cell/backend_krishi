@@ -672,7 +672,9 @@ exports.adminDeleteUser = async (req, res, next) => {
       }
     }
 
-    await userService.deleteUser(userId);
+    // Soft delete via service with admin metadata
+    const adminName = `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || req.user.email || 'Admin';
+    await userService.deleteUser(userId, req.user._id, adminName);
 
     // Audit Log: Lead/Dealer Deleted
     auditService.logAction({
@@ -934,7 +936,8 @@ exports.markNotificationsAsRead = async (req, res, next) => {
 exports.deleteSelfAccount = async (req, res, next) => {
   try {
     const userId = req.user._id;
-    await userService.deleteUser(userId);
+    const nameStr = `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || 'User';
+    await userService.deleteUser(userId, userId, nameStr);
 
     // Audit Log: Account Self-Deleted
     auditService.logAction({
