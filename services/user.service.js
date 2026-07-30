@@ -562,71 +562,99 @@ class UserService {
       isDeleted: { $ne: true }
     }).select('_id firstName lastName phoneNumber email');
 
-    // Query leads that were newly assigned within the date window (only assignedAt, no updatedAt fallback)
-    const assignedLeadsOnDate = await User.find({
+    // Query leads that were newly assigned within the date window
+    const assignedLeadsQuery = {
       isDeleted: { $ne: true },
-      assignedAgent: { $ne: null },
+      assignedAgent: agentId ? agentId : { $ne: null },
       assignedAt: { $gte: startOfDay, $lte: endOfDay }
-    }).select('_id assignedAgent firstName lastName phoneNumber status kycStatus createdAt assignedAt');
+    };
+    const assignedLeadsOnDate = await User.find(assignedLeadsQuery)
+      .select('_id assignedAgent firstName lastName phoneNumber status kycStatus createdAt assignedAt');
 
-    // Query KYC verified dealers within the date window (only kycApprovedAt, no updatedAt fallback)
-    const kycApprovedOnDate = await User.find({
+    // Query KYC verified dealers within the date window
+    const kycApprovedQuery = {
       isDeleted: { $ne: true },
       kycStatus: 'verified',
       kycApprovedAt: { $gte: startOfDay, $lte: endOfDay }
-    }).select('_id assignedAgent firstName lastName shopName status kycStatus createdAt kycApprovedAt');
+    };
+    if (agentId) kycApprovedQuery.assignedAgent = agentId;
 
-    // Query deleted leads within the date window (only deletedAt, no updatedAt fallback)
-    const deletedLeadsOnDate = await User.find({
+    const kycApprovedOnDate = await User.find(kycApprovedQuery)
+      .select('_id assignedAgent firstName lastName shopName status kycStatus createdAt kycApprovedAt');
+
+    // Query deleted leads within the date window
+    const deletedLeadsQuery = {
       isDeleted: true,
       deletedAt: { $gte: startOfDay, $lte: endOfDay }
-    }).select('_id assignedAgent firstName lastName phoneNumber createdAt deletedAt');
+    };
+    if (agentId) deletedLeadsQuery.assignedAgent = agentId;
+
+    const deletedLeadsOnDate = await User.find(deletedLeadsQuery)
+      .select('_id assignedAgent firstName lastName phoneNumber createdAt deletedAt');
 
     const totalTeamAssigned = assignedLeadsOnDate.length;
     const totalTeamKycApproved = kycApprovedOnDate.length;
     const totalTeamDeleted = deletedLeadsOnDate.length;
 
-    // Agent breakdown calculation
-    const agentBreakdown = salesAgents.map(agent => {
-      const agentIdStr = String(agent._id);
-      const assignedCount = assignedLeadsOnDate.filter(
-        lead => lead.assignedAgent && String(lead.assignedAgent) === agentIdStr
-      ).length;
-      const kycApprovedCount = kycApprovedOnDate.filter(
-        dealer => dealer.assignedAgent && String(dealer.assignedAgent) === agentIdStr
-      ).length;
-      const deletedCount = deletedLeadsOnDate.filter(
-        lead => lead.assignedAgent && String(lead.assignedAgent) === agentIdStr
-      ).length;
+    // Agent breakdown calculation - only include other agents for admins
+    let agentBreakdown = [];
+    if (!agentId) {
+      agentBreakdown = salesAgents.map(agent => {
+        const agentIdStr = String(agent._id);
+        const assignedCount = assignedLeadsOnDate.filter(
+          lead => lead.assignedAgent && String(lead.assignedAgent) === agentIdStr
+        ).length;
+        const kycApprovedCount = kycApprovedOnDate.filter(
+          dealer => dealer.assignedAgent && String(dealer.assignedAgent) === agentIdStr
+        ).length;
+        const deletedCount = deletedLeadsOnDate.filter(
+          lead => lead.assignedAgent && String(lead.assignedAgent) === agentIdStr
+        ).length;
 
-      const conversionRate = assignedCount > 0 
-        ? ((kycApprovedCount / assignedCount) * 100).toFixed(1) + '%'
-        : '0.0%';
+        const conversionRate = assignedCount > 0
+          ? ((kycApprovedCount / assignedCount) * 100).toFixed(1) + '%'
+          : '0.0%';
 
-      return {
-        agentId: agentIdStr,
-        agentName: `${agent.firstName || ''} ${agent.lastName || ''}`.trim() || agent.phoneNumber || 'Sales Agent',
-        phoneNumber: agent.phoneNumber || '',
-        email: agent.email || '',
-        assignedInDay: assignedCount,
-        kycApprovedInDay: kycApprovedCount,
-        deletedInDay: deletedCount,
-        conversionRate
-      };
-    });
+        return {
+          agentId: agentIdStr,
+          agentName: `${agent.firstName || ''} ${agent.lastName || ''}`.trim() || agent.phoneNumber || 'Sales Agent',
+          phoneNumber: agent.phoneNumber || '',
+          email: agent.email || '',
+          assignedInDay: assignedCount,
+          kycApprovedInDay: kycApprovedCount,
+          deletedInDay: deletedCount,
+          conversionRate
+        };
+      });
+    }
 
     let agentStats = null;
     if (agentId) {
-      const selectedAgent = agentBreakdown.find(a => a.agentId === String(agentId));
-      if (selectedAgent) {
-        agentStats = selectedAgent;
-      }
+      // Calculate individual stats directly since we filtered assignedLeadsOnDate etc above
+      agentStats = {
+        agentId: String(agentId),
+        agentName: 'Your Stats',
+        assignedInDay: totalTeamAssigned,
+        kycApprovedInDay: totalTeamKycApproved,
+        deletedInDay: totalTeamDeleted,
+        conversionRate: totalTeamAssigned > 0
+          ? ((totalTeamKycApproved / totalTeamAssigned) * 100).toFixed(1) + '%'
+          : '0.0%'
+      };
     }
 
     // All-time complete database counts for Master Analytics Hub
-    const totalAllTimeUnassignedLeads = await User.countDocuments({
+    // If agentId is provided, we filter these counts to only include users assigned to that agent
+    const allTimeFilter = {
       role: 'user',
-      isDeleted: { $ne: true },
+      isDeleted: { $ne: true }
+    };
+    if (agentId) {
+      allTimeFilter.assignedAgent = agentId;
+    }
+
+    const totalAllTimeUnassignedLeads = agentId ? 0 : await User.countDocuments({
+      ...allTimeFilter,
       kycStatus: { $ne: 'verified' },
       $or: [
         { assignedAgent: null },
@@ -635,46 +663,47 @@ class UserService {
     });
 
     const totalAllTimeAssignedLeads = await User.countDocuments({
-      role: 'user',
-      isDeleted: { $ne: true },
+      ...allTimeFilter,
       kycStatus: { $ne: 'verified' },
-      assignedAgent: { $ne: null, $exists: true }
+      assignedAgent: agentId ? agentId : { $ne: null, $exists: true }
     });
 
     const totalAllTimeKycPendingLeads = await User.countDocuments({
-      role: 'user',
-      isDeleted: { $ne: true },
+      ...allTimeFilter,
       kycStatus: { $in: ['pending', 'submitted', 'processing'] }
     });
 
     const totalAllTimeVerifiedDealers = await User.countDocuments({
-      role: 'user',
-      isDeleted: { $ne: true },
+      ...allTimeFilter,
       kycStatus: 'verified'
     });
 
     const totalAllTimeDeletedLeads = await User.countDocuments({
       role: 'user',
-      isDeleted: true
+      isDeleted: true,
+      ...(agentId ? { assignedAgent: agentId } : {})
     });
 
     const totalAllTimeDeletedDealers = await User.countDocuments({
       role: 'dealer',
-      isDeleted: true
+      isDeleted: true,
+      ...(agentId ? { assignedAgent: agentId } : {})
     });
 
-    // TRUE registrations today — counts ALL role:'user' created today regardless
-    // of deletion status. This is what a raw MongoDB createdAt query would return.
+    // TRUE registrations today
+    // For agents, "Registered Today" typically refers to leads assigned to them today
     const totalRegisteredToday = await User.countDocuments({
       role: 'user',
-      createdAt: { $gte: startOfDay, $lte: endOfDay }
+      createdAt: { $gte: startOfDay, $lte: endOfDay },
+      ...(agentId ? { assignedAgent: agentId } : {})
     });
 
     // How many of today's registrations are currently soft-deleted
     const registeredTodayNowDeleted = await User.countDocuments({
       role: 'user',
       isDeleted: true,
-      createdAt: { $gte: startOfDay, $lte: endOfDay }
+      createdAt: { $gte: startOfDay, $lte: endOfDay },
+      ...(agentId ? { assignedAgent: agentId } : {})
     });
 
     return {

@@ -33,7 +33,17 @@ const estimateSchema = new mongoose.Schema({
 
   items: [estimateItemSchema],
   grandTotal: { type: Number, required: true },
-  totalQty: { type: Number, required: true }
+  totalQty: { type: Number, required: true },
+  createdBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  status: {
+    type: String,
+    enum: ['draft', 'finalized'],
+    default: 'draft'
+  }
 }, {
   timestamps: true
 });

@@ -5,6 +5,38 @@ const { redisClient } = require('../config/redis');
 const { sendToAll } = require('../services/websocket.service');
 const { autoIdentifyDistrict, autoIdentifyState } = require('../utils/geoNormalizer');
 
+function calculateIntentScore(screen = '', action = '', payload = {}) {
+  let score = 10;
+  const lowerScreen = String(screen || '').toLowerCase();
+  const lowerAction = String(action || '').toLowerCase();
+
+  if (lowerScreen.includes('checkout') || lowerScreen.includes('payment') || lowerAction.includes('checkout') || lowerAction.includes('order')) {
+    score += 65;
+  } else if (lowerScreen.includes('cart') || lowerAction.includes('cart') || lowerAction.includes('add_to_cart')) {
+    score += 45;
+  } else if (lowerScreen.includes('product') || lowerAction.includes('product') || lowerAction.includes('search')) {
+    score += 30;
+  } else if (lowerScreen.includes('kyc') || lowerAction.includes('kyc')) {
+    score += 25;
+  }
+
+  if (payload && (payload.cartCount > 0 || payload.itemCount > 0)) {
+    score += 15;
+  }
+
+  let label = 'Browsing 🍃';
+  let badgeColor = 'blue';
+  if (score >= 70) {
+    label = 'Hot Intent 🔥';
+    badgeColor = 'red';
+  } else if (score >= 35) {
+    label = 'Warm Interest ☀️';
+    badgeColor = 'orange';
+  }
+
+  return { intentScore: String(Math.min(100, score)), intentLabel: label, intentBadgeColor: badgeColor };
+}
+
 /**
  * Handle individual event ingestion (legacy support)
  */
@@ -19,17 +51,20 @@ exports.createEvent = async (req, res, next) => {
       details,
       payload,
       timestamp: timestamp ? new Date(timestamp) : new Date(),
-      role
+      role: role || 'user' // Default to user role for direct app ingestion
     });
 
     // Update Real-time Presence in Redis
     if (redisClient.isOpen && user) {
       const presenceKey = `presence:${user}`;
+      const intentInfo = calculateIntentScore(payload?.screen || 'Active', eventType, payload);
       const presenceData = {
         lastSeen: new Date().toISOString(),
         currentScreen: payload?.screen || 'Active',
         action: eventType,
-        device: device || 'Unknown'
+        device: device || 'Unknown',
+        intentScore: intentInfo.intentScore,
+        intentLabel: intentInfo.intentLabel
       };
       await redisClient.hSet(presenceKey, presenceData);
       await redisClient.expire(presenceKey, 120);
@@ -65,19 +100,22 @@ exports.handleHeartbeat = async (req, res, next) => {
       const presenceKey = `presence:${user}`;
 
       // Fetch user info for enrichment
-      let userName = 'Unknown';
+      let userName = 'New User';
       let userPhone = 'N/A';
+      let userRole = 'user';
       try {
         const userData = await User.findOne({
           $or: [{ email: user }, { phoneNumber: user }, { _id: mongoose.Types.ObjectId.isValid(user) ? user : null }]
         }).select('firstName lastName shopName phoneNumber role');
 
         if (userData) {
-          userName = `${userData.firstName || ''} ${userData.lastName || ''}`.trim() || userData.shopName;
-          userPhone = userData.phoneNumber;
+          userName = `${userData.firstName || ''} ${userData.lastName || ''}`.trim() || userData.shopName || 'New User';
+          userPhone = userData.phoneNumber || 'N/A';
           userRole = userData.role || 'user';
         }
       } catch (_) {}
+
+      const intentInfo = calculateIntentScore(currentScreen, lastAction);
 
       const presenceData = {
         lastSeen: new Date().toISOString(),
@@ -86,7 +124,9 @@ exports.handleHeartbeat = async (req, res, next) => {
         device: device || 'Unknown',
         userName,
         userPhone,
-        role: userRole
+        role: userRole,
+        intentScore: intentInfo.intentScore,
+        intentLabel: intentInfo.intentLabel
       };
 
       await redisClient.hSet(presenceKey, presenceData);
@@ -148,7 +188,7 @@ exports.ingestBatch = async (req, res, next) => {
       const presenceKey = `presence:${user}`;
 
       // Fetch user info for enrichment
-      let userName = 'Unknown';
+      let userName = 'New User';
       let userPhone = 'N/A';
       try {
         const userData = await User.findOne({
@@ -156,8 +196,8 @@ exports.ingestBatch = async (req, res, next) => {
         }).select('firstName lastName shopName phoneNumber');
 
         if (userData) {
-          userName = `${userData.firstName || ''} ${userData.lastName || ''}`.trim() || userData.shopName;
-          userPhone = userData.phoneNumber;
+          userName = `${userData.firstName || ''} ${userData.lastName || ''}`.trim() || userData.shopName || 'New User';
+          userPhone = userData.phoneNumber || 'N/A';
         }
       } catch (_) {}
 
@@ -167,7 +207,7 @@ exports.ingestBatch = async (req, res, next) => {
         action: String(lastEvent.event || lastEvent.eventType || 'unknown'),
         device: String(lastEvent.device || lastEvent.platform || 'Unknown'),
         sessionId: String(lastEvent.sessionId || 'unknown'),
-        userName: String(userName || 'Unknown'),
+        userName: String(userName || 'New User'),
         userPhone: String(userPhone || 'N/A')
       };
 
@@ -213,36 +253,50 @@ exports.getEvents = async (req, res, next) => {
 
     // 1. Resolve Global User Search if provided
     if (user) {
-      resolvedIdentifiers = [user, user.toLowerCase()];
+      const cleanUser = String(user).trim();
+      resolvedIdentifiers = [cleanUser, cleanUser.toLowerCase()];
       try {
-        const matchedUsers = await User.find({
-          $or: [
-            { email: new RegExp(user, 'i') },
-            { phoneNumber: new RegExp(user, 'i') },
-            { firstName: new RegExp(user, 'i') },
-            { lastName: new RegExp(user, 'i') },
-            { shopName: new RegExp(user, 'i') }
-          ]
-        }).select('_id email phoneNumber').lean();
+        const isPhone = /^\+?\d{7,15}$/.test(cleanUser);
+        const searchCond = isPhone
+          ? [{ phoneNumber: cleanUser }]
+          : [
+              { email: new RegExp(`^${cleanUser.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
+              { phoneNumber: cleanUser },
+              { firstName: new RegExp(cleanUser.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') },
+              { lastName: new RegExp(cleanUser.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') },
+              { shopName: new RegExp(cleanUser.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') }
+            ];
+
+        if (mongoose.Types.ObjectId.isValid(cleanUser)) {
+          searchCond.push({ _id: new mongoose.Types.ObjectId(cleanUser) });
+        }
+
+        const matchedUsers = await User.find({ $or: searchCond })
+          .select('_id email phoneNumber')
+          .lean();
         
         matchedUsers.forEach(u => {
-          if (u.email) resolvedIdentifiers.push(u.email, u.email.toLowerCase());
-          if (u.phoneNumber) resolvedIdentifiers.push(u.phoneNumber);
+          if (u.email && u.email.trim()) resolvedIdentifiers.push(u.email.trim(), u.email.trim().toLowerCase());
+          if (u.phoneNumber && u.phoneNumber.trim()) resolvedIdentifiers.push(u.phoneNumber.trim());
           if (u._id) resolvedIdentifiers.push(u._id.toString());
         });
       } catch (_) {}
 
-      resolvedIdentifiers = [...new Set(resolvedIdentifiers)];
+      resolvedIdentifiers = [...new Set(resolvedIdentifiers.filter(Boolean))];
       if (actorOnly === 'true') {
         query.user = { $in: resolvedIdentifiers };
       } else {
         query.$or = [
           { user: { $in: resolvedIdentifiers } },
-          ...resolvedIdentifiers.map(id => ({ "payload.dealerId": id })),
-          ...resolvedIdentifiers.map(id => ({ "payload.dealerEmail": id })),
-          ...resolvedIdentifiers.map(id => ({ "payload.dealerPhone": id })),
+          ...resolvedIdentifiers.map(id => ({ "payload.targetUserId": id })),
           ...resolvedIdentifiers.map(id => ({ "payload.userId": id })),
-          ...resolvedIdentifiers.map(id => ({ "payload.userEmail": id }))
+          ...resolvedIdentifiers.map(id => ({ "payload.dealerId": id })),
+          ...resolvedIdentifiers.map(id => ({ "payload.leadId": id })),
+          ...resolvedIdentifiers.map(id => ({ "payload.targetEmail": id })),
+          ...resolvedIdentifiers.map(id => ({ "payload.dealerEmail": id })),
+          ...resolvedIdentifiers.map(id => ({ "payload.userEmail": id })),
+          ...resolvedIdentifiers.map(id => ({ "payload.targetPhone": id })),
+          ...resolvedIdentifiers.map(id => ({ "payload.dealerPhone": id }))
         ];
       }
     }
@@ -361,9 +415,26 @@ exports.getEvents = async (req, res, next) => {
       return res.json({ success: true, data: [], nextCursor: null });
     }
 
-    // 5. Enrich with User Details
-    const uniqueUsernames = [...new Set(rawEvents.map(e => e.user).filter(Boolean))];
-    const userOrConditions = uniqueUsernames.map(u => {
+    // 5. Enrich with User Details (Both Actors & Target Customers)
+    const rawUserKeys = [];
+    rawEvents.forEach(e => {
+      if (e.user) rawUserKeys.push(e.user);
+      if (e.payload) {
+        const p = e.payload;
+        if (p.targetUserId) rawUserKeys.push(p.targetUserId);
+        if (p.userId) rawUserKeys.push(p.userId);
+        if (p.dealerId) rawUserKeys.push(p.dealerId);
+        if (p.leadId) rawUserKeys.push(p.leadId);
+        if (p.targetEmail) rawUserKeys.push(p.targetEmail);
+        if (p.dealerEmail) rawUserKeys.push(p.dealerEmail);
+        if (p.userEmail) rawUserKeys.push(p.userEmail);
+        if (p.targetPhone) rawUserKeys.push(p.targetPhone);
+        if (p.dealerPhone) rawUserKeys.push(p.dealerPhone);
+      }
+    });
+
+    const uniqueIdentifiers = [...new Set(rawUserKeys.filter(Boolean))];
+    const userOrConditions = uniqueIdentifiers.map(u => {
       const cond = [{ email: u }, { phoneNumber: u }];
       if (mongoose.Types.ObjectId.isValid(u)) cond.push({ _id: new mongoose.Types.ObjectId(u) });
       return cond;
@@ -378,26 +449,66 @@ exports.getEvents = async (req, res, next) => {
 
     const userMap = new Map();
     usersList.forEach(u => {
-      if (u.email) userMap.set(u.email.toLowerCase(), u);
-      if (u.phoneNumber) userMap.set(u.phoneNumber, u);
-      if (u._id) userMap.set(u._id.toString(), u);
+      const rawName = `${u.firstName || ''} ${u.lastName || ''}`.trim();
+      const name = (rawName.length > 0 ? rawName : null) || u.shopName || u.phoneNumber || 'New Customer';
+      const info = { ...u, name };
+      if (u.email) userMap.set(u.email.toLowerCase(), info);
+      if (u.phoneNumber) userMap.set(u.phoneNumber, info);
+      if (u._id) userMap.set(u._id.toString(), info);
     });
 
     const enrichedEvents = rawEvents.map(event => {
-      const uKey = event.user ? event.user.toString() : '';
-      const matchedUser = userMap.get(uKey) || userMap.get(uKey.toLowerCase());
+      const actorKey = event.user ? event.user.toString() : '';
+      const actorUser = userMap.get(actorKey) || userMap.get(actorKey.toLowerCase());
+      const actorName = actorUser ? (actorUser.name && actorUser.name !== 'New Customer' ? actorUser.name : actorUser.email || 'Sales Agent') : (actorKey || 'Sales Agent');
+
+      // Check if event targets a customer in payload
+      const p = event.payload || {};
+      const targetKey = (p.targetUserId || p.userId || p.dealerId || p.leadId || p.targetEmail || p.dealerEmail || p.userEmail || p.targetPhone || p.dealerPhone || '').toString();
+      const targetUser = targetKey ? (userMap.get(targetKey) || userMap.get(targetKey.toLowerCase())) : null;
+
+      const isStaffAction = ['delete_lead', 'assign_agent', 'kyc_verified', 'kyc_rejected', 'toggle_block', 'create_sales_agent', 'bulk_assign_agent'].includes(event.eventType) ||
+                            (actorUser && actorUser.role !== 'user');
+
+      // Group event under Target Customer if available so staff actions show on customer timeline
+      let displayUser = event.user;
+      let displayUserDetails = actorUser;
+
+      if (isStaffAction) {
+        if (targetUser) {
+          displayUser = targetUser.phoneNumber || targetUser.email || targetUser._id.toString();
+          displayUserDetails = targetUser;
+        } else if (targetKey) {
+          displayUser = targetKey;
+          displayUserDetails = null;
+        }
+      }
+
       return {
         ...event,
-        userDetails: matchedUser ? {
-          firstName: matchedUser.firstName,
-          lastName: matchedUser.lastName,
-          phoneNumber: matchedUser.phoneNumber,
-          shopName: matchedUser.shopName,
-          role: matchedUser.role,
-          kycStatus: matchedUser.kycStatus,
-          userType: matchedUser.userType
-        } : null
+        user: displayUser,
+        actor: actorKey,
+        performedBy: actorName,
+        userDetails: displayUserDetails ? {
+          firstName: displayUserDetails.firstName,
+          lastName: displayUserDetails.lastName,
+          phoneNumber: displayUserDetails.phoneNumber,
+          shopName: displayUserDetails.shopName,
+          role: displayUserDetails.role,
+          kycStatus: displayUserDetails.kycStatus,
+          userType: displayUserDetails.userType
+        } : null,
+        payload: {
+          ...(event.payload || {}),
+          performedBy: actorName,
+        }
       };
+    }).filter(event => {
+      if (user) return true;
+      // In main customer feed, exclude staff events that do not target a customer
+      const isCustomerEvent = (event.role || 'user').toLowerCase() === 'user' || (event.userDetails?.role?.toLowerCase() === 'user');
+      const isTargetedAction = event.payload && (event.payload.targetUserId || event.payload.userId || event.payload.leadId || event.payload.dealerId);
+      return isCustomerEvent || isTargetedAction;
     });
 
     let nextCursor = null;
@@ -474,11 +585,25 @@ exports.getActiveUsers = async (req, res, next) => {
         u.phoneNumber === raw.user ||
         u._id.toString() === raw.user
       );
+      const computedName = match ? (`${match.firstName || ''} ${match.lastName || ''}`.trim() || match.shopName) : (raw.userName !== 'Unknown' && raw.userName !== 'Guest' ? raw.userName : '');
+      const finalName = (computedName && computedName.trim().length > 0 && !computedName.toLowerCase().includes('admin')) ? computedName.trim() : 'New Customer';
+      const intentInfo = calculateIntentScore(raw.currentScreen, raw.action);
       return {
         ...raw,
-        userName: match ? `${match.firstName || ''} ${match.lastName || ''}`.trim() || match.shopName : (raw.userName || 'Unknown'),
-        userPhone: match ? match.phoneNumber : (raw.userPhone || 'N/A')
+        userName: finalName,
+        userPhone: match ? match.phoneNumber : (raw.userPhone || 'N/A'),
+        role: match ? match.role : (raw.role || 'user'),
+        intentScore: raw.intentScore || intentInfo.intentScore,
+        intentLabel: raw.intentLabel || intentInfo.intentLabel
       };
+    }).filter(u => {
+      // STRICTLY ONLY show users with role 'user' (Exclude admins and sales reps)
+      const isRoleUser = (u.role || 'user').toLowerCase() === 'user';
+      const isNameOrEmailAdmin = (u.user || '').toLowerCase().includes('admin') ||
+                                (u.user || '').toLowerCase().includes('sales') ||
+                                (u.userName || '').toLowerCase().includes('admin') ||
+                                (u.userName || '').toLowerCase().includes('sales');
+      return isRoleUser && !isNameOrEmailAdmin;
     });
 
     res.json({ success: true, count: enrichedUsers.length, data: enrichedUsers });
@@ -560,10 +685,10 @@ exports.getFunnelData = async (req, res, next) => {
     }
 
     const funnelStages = [
-      { step: '1. App Browse & Search', aliases: ['product_view', 'product_search', 'category_view', 'page_view', 'app_launch', 'login_success', 'search', 'kyc_verified', 'lead_created', 'user_registered', 'all'] },
-      { step: '2. Add To Cart', aliases: ['add_to_cart', 'cart_add', 'cart_view'] },
-      { step: '3. Checkout Started', aliases: ['checkout_started', 'checkout_init', 'apply_coupon', 'payment_initiated'] },
-      { step: '4. Order Completed', aliases: ['order_placed', 'payment_success', 'order_completed', 'order_created'] }
+      { step: '1. App Visits & Browsing', aliases: ['product_view', 'product_search', 'category_view', 'page_view', 'app_launch', 'login_success', 'search', 'kyc_verified', 'lead_created', 'user_registered', 'all'] },
+      { step: '2. High Interest (Added to Cart)', aliases: ['add_to_cart', 'cart_add', 'cart_view'] },
+      { step: '3. Initiated Checkout', aliases: ['checkout_started', 'checkout_init', 'apply_coupon', 'payment_initiated'] },
+      { step: '4. Successful Purchases', aliases: ['order_placed', 'payment_success', 'order_completed', 'order_created'] }
     ];
 
     let matchCond = {};

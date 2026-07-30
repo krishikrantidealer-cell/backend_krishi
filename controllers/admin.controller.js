@@ -374,7 +374,18 @@ const Estimate = require('../models/Estimate');
 // Get all estimates
 exports.getAllEstimates = async (req, res, next) => {
   try {
-    const estimates = await Estimate.find().sort({ createdAt: -1 });
+    const query = {};
+
+    // If user is sales, only show their own estimates
+    // If user is admin, show all estimates (including drafts)
+    if (req.user && req.user.role === 'sales') {
+      query.createdBy = req.user._id;
+    }
+
+    const estimates = await Estimate.find(query)
+      .populate('createdBy', 'firstName lastName email')
+      .sort({ createdAt: -1 });
+
     res.status(200).json({
       success: true,
       estimates
@@ -409,7 +420,9 @@ exports.createEstimate = async (req, res, next) => {
 
     const estimate = await Estimate.create({
       ...req.body,
-      estimateNo
+      estimateNo,
+      createdBy: req.user._id,
+      status: req.body.status || 'draft'
     });
 
     res.status(201).json({
@@ -434,8 +447,17 @@ exports.updateEstimate = async (req, res, next) => {
       });
     }
 
+    // Role Security: Sales agents can ONLY update their own estimates
+    if (req.user.role === 'sales' && String(estimate.createdBy) !== String(req.user._id)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access Denied: You can only edit estimates you created.'
+      });
+    }
+
     const updateData = { ...req.body };
     delete updateData.estimateNo;
+    delete updateData.createdBy;
 
     const updatedEstimate = await Estimate.findByIdAndUpdate(
       id,
@@ -456,13 +478,24 @@ exports.updateEstimate = async (req, res, next) => {
 exports.deleteEstimate = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const estimate = await Estimate.findByIdAndDelete(id);
+
+    const estimate = await Estimate.findById(id);
     if (!estimate) {
       return res.status(404).json({
         success: false,
         message: 'Estimate not found'
       });
     }
+
+    // Role Security: Sales agents can ONLY delete their own estimates
+    if (req.user.role === 'sales' && String(estimate.createdBy) !== String(req.user._id)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access Denied: You can only delete estimates you created.'
+      });
+    }
+
+    await Estimate.findByIdAndDelete(id);
 
     res.status(200).json({
       success: true,
