@@ -450,7 +450,11 @@ exports.getEvents = async (req, res, next) => {
     const userMap = new Map();
     usersList.forEach(u => {
       const rawName = `${u.firstName || ''} ${u.lastName || ''}`.trim();
-      const name = (rawName.length > 0 ? rawName : null) || u.shopName || u.phoneNumber || 'New Customer';
+      const hasRealName = rawName.length > 0 &&
+                         !rawName.toLowerCase().includes('admin') &&
+                         !rawName.toLowerCase().includes('sales');
+
+      const name = hasRealName ? rawName : (u.shopName || u.phoneNumber || 'New Customer');
       const info = { ...u, name };
 
       if (u.email) userMap.set(u.email.toLowerCase(), info);
@@ -468,19 +472,39 @@ exports.getEvents = async (req, res, next) => {
 
     const enrichedEvents = rawEvents.map(event => {
       const actorKey = event.user ? event.user.toString() : '';
-      const actorLast10 = actorKey.replace(/\D/g, '').slice(-10);
+      const isActorId = mongoose.Types.ObjectId.isValid(actorKey);
+      const actorLast10 = !isActorId ? actorKey.replace(/\D/g, '').slice(-10) : '';
 
-      // Try exact, then lowercase, then last 10 digits normalization
+      // Try exact, then lowercase, then last 10 digits normalization (only for non-IDs)
       const actorUser = userMap.get(actorKey) ||
                         userMap.get(actorKey.toLowerCase()) ||
                         (actorLast10.length === 10 ? userMap.get(actorLast10) : null);
 
-      const actorName = actorUser ? (actorUser.name && actorUser.name !== 'New Customer' ? actorUser.name : actorUser.email || 'Sales Agent') : (actorKey || 'Sales Agent');
+      // Smart Actor Name Resolution
+      let actorName = actorKey || 'Unknown';
+      if (actorUser) {
+        const isActuallyStaff = actorUser.role === 'admin' || actorUser.role === 'sales';
+        const nameVal = String(actorUser.name || '');
+        const isPlaceholderName = nameVal === 'New Customer' ||
+                                 /^\d+$/.test(nameVal) ||
+                                 nameVal.toLowerCase().includes('admin') ||
+                                 nameVal.toLowerCase().includes('sales');
+
+        if (isActuallyStaff) {
+          actorName = (!isPlaceholderName ? nameVal : actorUser.email) || (actorUser.role === 'sales' ? 'Sales Agent' : 'Admin User');
+        } else {
+          // Customer: Use name if real, else fallback to phone
+          actorName = !isPlaceholderName ? nameVal : (actorUser.phoneNumber || actorKey);
+        }
+      } else if (actorKey === 'anonymous' || actorKey === 'guest') {
+        actorName = 'Guest User';
+      }
 
       // Check if event targets a customer in payload
       const p = event.payload || {};
       const targetKey = (p.targetUserId || p.userId || p.dealerId || p.leadId || p.targetEmail || p.dealerEmail || p.userEmail || p.targetPhone || p.dealerPhone || '').toString();
-      const targetLast10 = targetKey.replace(/\D/g, '').slice(-10);
+      const isTargetId = mongoose.Types.ObjectId.isValid(targetKey);
+      const targetLast10 = !isTargetId ? targetKey.replace(/\D/g, '').slice(-10) : '';
 
       const targetUser = targetKey ? (
         userMap.get(targetKey) ||
@@ -511,6 +535,7 @@ exports.getEvents = async (req, res, next) => {
         actor: actorKey,
         performedBy: actorName,
         userDetails: displayUserDetails ? {
+          _id: displayUserDetails._id,
           firstName: displayUserDetails.firstName,
           lastName: displayUserDetails.lastName,
           phoneNumber: displayUserDetails.phoneNumber,
@@ -602,13 +627,14 @@ exports.getActiveUsers = async (req, res, next) => {
 
     const enrichedUsers = rawActiveUsers.map(raw => {
       const userKey = raw.user ? raw.user.toString() : '';
-      const userLast10 = userKey.replace(/\D/g, '').slice(-10);
+      const isId = mongoose.Types.ObjectId.isValid(userKey);
+      const userLast10 = !isId ? userKey.replace(/\D/g, '').slice(-10) : '';
 
       const match = users.find(u =>
         u.email === userKey ||
         u.phoneNumber === userKey ||
         u._id.toString() === userKey ||
-        (userLast10.length === 10 && u.phoneNumber && u.phoneNumber.replace(/\D/g, '').slice(-10) === userLast10)
+        (!isId && userLast10.length === 10 && u.phoneNumber && u.phoneNumber.replace(/\D/g, '').slice(-10) === userLast10)
       );
       const computedName = match ? (`${match.firstName || ''} ${match.lastName || ''}`.trim() || match.shopName) : (raw.userName !== 'Unknown' && raw.userName !== 'Guest' ? raw.userName : '');
       const finalName = (computedName && computedName.trim().length > 0 && !computedName.toLowerCase().includes('admin')) ? computedName.trim() : 'New Customer';

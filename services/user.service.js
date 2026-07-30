@@ -69,7 +69,21 @@ class UserService {
   }
 
   async getProfile(userId, includeDeleted = false) {
-    const user = await User.findById(userId);
+    let user;
+    const mongoose = require('mongoose');
+
+    if (mongoose.Types.ObjectId.isValid(userId)) {
+      user = await User.findById(userId);
+    } else {
+      // Fallback: search by phone or email if not a valid ObjectId
+      user = await User.findOne({
+        $or: [
+          { phoneNumber: userId },
+          { email: userId }
+        ]
+      });
+    }
+
     if (!user || (user.isDeleted && !includeDeleted)) {
       throw new Error('User not found');
     }
