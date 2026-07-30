@@ -452,20 +452,41 @@ exports.getEvents = async (req, res, next) => {
       const rawName = `${u.firstName || ''} ${u.lastName || ''}`.trim();
       const name = (rawName.length > 0 ? rawName : null) || u.shopName || u.phoneNumber || 'New Customer';
       const info = { ...u, name };
+
       if (u.email) userMap.set(u.email.toLowerCase(), info);
-      if (u.phoneNumber) userMap.set(u.phoneNumber, info);
       if (u._id) userMap.set(u._id.toString(), info);
+
+      if (u.phoneNumber) {
+        userMap.set(u.phoneNumber, info);
+        // Normalize: Index by last 10 digits for loose matching
+        const clean = u.phoneNumber.replace(/\D/g, '');
+        if (clean.length >= 10) {
+          userMap.set(clean.slice(-10), info);
+        }
+      }
     });
 
     const enrichedEvents = rawEvents.map(event => {
       const actorKey = event.user ? event.user.toString() : '';
-      const actorUser = userMap.get(actorKey) || userMap.get(actorKey.toLowerCase());
+      const actorLast10 = actorKey.replace(/\D/g, '').slice(-10);
+
+      // Try exact, then lowercase, then last 10 digits normalization
+      const actorUser = userMap.get(actorKey) ||
+                        userMap.get(actorKey.toLowerCase()) ||
+                        (actorLast10.length === 10 ? userMap.get(actorLast10) : null);
+
       const actorName = actorUser ? (actorUser.name && actorUser.name !== 'New Customer' ? actorUser.name : actorUser.email || 'Sales Agent') : (actorKey || 'Sales Agent');
 
       // Check if event targets a customer in payload
       const p = event.payload || {};
       const targetKey = (p.targetUserId || p.userId || p.dealerId || p.leadId || p.targetEmail || p.dealerEmail || p.userEmail || p.targetPhone || p.dealerPhone || '').toString();
-      const targetUser = targetKey ? (userMap.get(targetKey) || userMap.get(targetKey.toLowerCase())) : null;
+      const targetLast10 = targetKey.replace(/\D/g, '').slice(-10);
+
+      const targetUser = targetKey ? (
+        userMap.get(targetKey) ||
+        userMap.get(targetKey.toLowerCase()) ||
+        (targetLast10.length === 10 ? userMap.get(targetLast10) : null)
+      ) : null;
 
       const isStaffAction = ['delete_lead', 'assign_agent', 'kyc_verified', 'kyc_rejected', 'toggle_block', 'create_sales_agent', 'bulk_assign_agent'].includes(event.eventType) ||
                             (actorUser && actorUser.role !== 'user');
@@ -580,10 +601,14 @@ exports.getActiveUsers = async (req, res, next) => {
     }).select('firstName lastName phoneNumber shopName email');
 
     const enrichedUsers = rawActiveUsers.map(raw => {
+      const userKey = raw.user ? raw.user.toString() : '';
+      const userLast10 = userKey.replace(/\D/g, '').slice(-10);
+
       const match = users.find(u =>
-        u.email === raw.user ||
-        u.phoneNumber === raw.user ||
-        u._id.toString() === raw.user
+        u.email === userKey ||
+        u.phoneNumber === userKey ||
+        u._id.toString() === userKey ||
+        (userLast10.length === 10 && u.phoneNumber && u.phoneNumber.replace(/\D/g, '').slice(-10) === userLast10)
       );
       const computedName = match ? (`${match.firstName || ''} ${match.lastName || ''}`.trim() || match.shopName) : (raw.userName !== 'Unknown' && raw.userName !== 'Guest' ? raw.userName : '');
       const finalName = (computedName && computedName.trim().length > 0 && !computedName.toLowerCase().includes('admin')) ? computedName.trim() : 'New Customer';
