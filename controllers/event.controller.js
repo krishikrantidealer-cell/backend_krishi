@@ -661,14 +661,19 @@ async function getSalesAssignedUserIds(req) {
 }
 
 /**
- * Funnel Analytics Aggregation
+ * Funnel Analytics Aggregation - Uses Actual Collections for Precision
  */
 exports.getFunnelData = async (req, res, next) => {
   try {
-    const assignedUserIds = await getSalesAssignedUserIds(req);
+    const Order = require('../models/Order');
+    const User = require('../models/User');
+    const Cart = require('../models/Cart');
+    const CheckoutSession = require('../models/CheckoutSession');
+
+    const assignedUserData = await getSalesAssignedUserData(req);
     const { days = 'all', startDate: reqStart, endDate: reqEnd } = req.query;
     let startDate = new Date(0);
-    let endDate = null;
+    let endDate = new Date();
 
     if (reqStart && reqEnd) {
       startDate = new Date(reqStart);
@@ -684,138 +689,132 @@ exports.getFunnelData = async (req, res, next) => {
       startDate = new Date(Date.now() - numDays * 24 * 60 * 60 * 1000);
     }
 
-    const funnelStages = [
-      { step: '1. App Visits & Browsing', aliases: ['product_view', 'product_search', 'category_view', 'page_view', 'app_launch', 'login_success', 'search', 'kyc_verified', 'lead_created', 'user_registered', 'all'] },
-      { step: '2. High Interest (Added to Cart)', aliases: ['add_to_cart', 'cart_add', 'cart_view'] },
-      { step: '3. Initiated Checkout', aliases: ['checkout_started', 'checkout_init', 'apply_coupon', 'payment_initiated'] },
-      { step: '4. Successful Purchases', aliases: ['order_placed', 'payment_success', 'order_completed', 'order_created'] }
-    ];
+    const timeframeQuery = { createdAt: { $gte: startDate, $lte: endDate } };
+    const cartTimeframeQuery = { updatedAt: { $gte: startDate, $lte: endDate } };
 
-    let matchCond = {};
-    if (days !== 'all' && days !== 'All Time') {
-      matchCond.timestamp = { $gte: startDate };
-      if (endDate) {
-        matchCond.timestamp.$lte = endDate;
-      }
+    // Function to filter user sets by sales agent assignment
+    const filterByAssignment = (userSet) => {
+      if (!assignedUserData) return userSet.size;
+      let count = 0;
+      userSet.forEach(u => {
+        if (assignedUserData.idSet.has(u.toString().toLowerCase())) {
+          count++;
+        }
+      });
+      return count;
+    };
+
+    // --- STEP 4: Successful Purchases (Orders) ---
+    const orders = await Order.find({
+      ...timeframeQuery,
+      orderStatus: { $ne: 'Cancelled' }
+    }).select('user').lean();
+    const step4UserSet = new Set(orders.map(o => o.user.toString()));
+    const step4Count = filterByAssignment(step4UserSet);
+
+    // --- STEP 3: Initiated Checkout (Sessions + History) ---
+    const checkouts = await CheckoutSession.find(timeframeQuery).select('user').lean();
+    const step3UserSet = new Set(checkouts.map(c => c.user.toString()));
+    const historicalIntentUsers = await Event.distinct('user', {
+      timestamp: { $gte: startDate, $lte: endDate },
+      eventType: { $in: ['checkout_started', 'checkout_init', 'payment_failed', 'payment_fail', 'payment_initiated', 'apply_coupon'] }
+    });
+    historicalIntentUsers.forEach(u => { if (u && u !== 'guest') step3UserSet.add(u.toString()); });
+    step4UserSet.forEach(u => step3UserSet.add(u));
+    const step3Count = filterByAssignment(step3UserSet);
+
+    // --- STEP 2: Added to Cart (Active Carts + Checkouts) ---
+    const carts = await Cart.find({
+      ...cartTimeframeQuery,
+      'items.0': { $exists: true }
+    }).select('user').lean();
+    const step2UserSet = new Set(carts.map(c => c.user.toString()));
+    const historicalCartUsers = await Event.distinct('user', {
+      timestamp: { $gte: startDate, $lte: endDate },
+      eventType: { $in: ['add_to_cart', 'cart_add', 'cart_view'] }
+    });
+    historicalCartUsers.forEach(u => { if (u && u !== 'guest') step2UserSet.add(u.toString()); });
+    step3UserSet.forEach(u => step2UserSet.add(u));
+    const step2Count = filterByAssignment(step2UserSet);
+
+    // --- STEP 1: App Visits & Browsing (Source: Events + Cart Fallback) ---
+    const step1Users = await Event.distinct('user', {
+      timestamp: { $gte: startDate, $lte: endDate },
+      user: { $nin: ['anonymous', 'guest', 'unknown', null] }
+    });
+    const step1UserSet = new Set(step1Users.map(u => u.toString()));
+    step2UserSet.forEach(u => step1UserSet.add(u));
+    const step1Count = assignedUserData
+      ? Array.from(step1UserSet).filter(u => assignedUserData.idSet.has(u.toString().toLowerCase())).length
+      : step1UserSet.size;
+
+    // --- Event Volume Metrics (Total Count of Actions) ---
+    const eventMatch = {
+      timestamp: { $gte: startDate, $lte: endDate },
+      user: { $nin: ['anonymous', 'guest', 'unknown', null] }
+    };
+    if (assignedUserData) {
+      eventMatch.user = { $in: Array.from(assignedUserData.idSet) };
     }
 
-    const aggregateResults = await Event.aggregate([
-      { $match: matchCond },
-      {
-        $group: {
-          _id: '$eventType',
-          uniqueUsers: { $addToSet: '$user' },
-          eventCount: { $sum: 1 }
-        }
-      }
+    const rawCounts = await Event.aggregate([
+      { $match: eventMatch },
+      { $group: { _id: '$eventType', count: { $sum: 1 } } }
     ]);
 
-    // Also include User & Order collections for exact Step 1 and Step 4 numbers
-    const Order = require('../models/Order');
-    const User = require('../models/User');
-
-    const orderUserSet = new Set();
-    let orderTotalCount = 0;
-    try {
-      let orderQuery = {};
-      if (days !== 'all' && days !== 'All Time') {
-        orderQuery.createdAt = { $gte: startDate };
-        if (endDate) {
-          orderQuery.createdAt.$lte = endDate;
-        }
-      }
-      const orders = await Order.find(orderQuery).select('user').lean();
-      orders.forEach(o => {
-        if (o.user) {
-          const uStr = typeof o.user === 'object' ? (o.user._id || o.user).toString() : o.user.toString();
-          orderUserSet.add(uStr);
-        }
-      });
-      orderTotalCount = orders.length;
-    } catch (_) {}
-
-    const allRegisteredUsersSet = new Set();
-    try {
-      let userQuery = {
-        isDeleted: { $ne: true },
-        role: { $nin: ['admin', 'sales'] },
-        $or: [
-          { kycStatus: 'verified' },
-          { isKycComplete: true }
-        ]
-      };
-      if (days !== 'all' && days !== 'All Time') {
-        userQuery.createdAt = { $gte: startDate };
-        if (endDate) {
-          userQuery.createdAt.$lte = endDate;
-        }
-      }
-      const regUsers = await User.find(userQuery).select('_id email phoneNumber').lean();
-      regUsers.forEach(u => {
-        if (u._id) allRegisteredUsersSet.add(u._id.toString());
-      });
-    } catch (_) {}
-
-    const stageData = funnelStages.map((stage, idx) => {
-      const userSet = new Set();
-      let totalEvents = 0;
-
-      aggregateResults.forEach(item => {
-        const typeLower = (item._id || '').toLowerCase();
-        if (stage.aliases.some(a => typeLower.includes(a))) {
-          item.uniqueUsers.forEach(u => {
-            if (u && u !== 'anonymous' && u !== 'guest' && u !== 'unknown') {
-              const uStr = u.toString().toLowerCase();
-              if (!assignedUserIds || assignedUserIds.has(uStr)) {
-                userSet.add(u.toString());
-              }
-            }
-          });
-          totalEvents += item.eventCount;
-        }
-      });
-
-      if (idx === 0) {
-        allRegisteredUsersSet.forEach(u => {
-          if (!assignedUserIds || assignedUserIds.has(u.toLowerCase())) {
-            userSet.add(u);
-          }
-        });
-        if (totalEvents < userSet.size) totalEvents = userSet.size;
-      }
-
-      if (idx === 3) {
-        orderUserSet.forEach(u => {
-          if (!assignedUserIds || assignedUserIds.has(u.toLowerCase())) {
-            userSet.add(u);
-          }
-        });
-        if (totalEvents < orderTotalCount) totalEvents = orderTotalCount;
-      }
-
-      // Ensure Step 1 is at least as large as any downstream step
-      return {
-        step: stage.step,
-        userCount: userSet.size,
-        eventCount: totalEvents
-      };
+    const countMap = {};
+    let totalEventVolume = 0;
+    rawCounts.forEach(c => {
+      countMap[c._id] = c.count;
+      totalEventVolume += c.count;
     });
 
-    // Ensure Step 1 userCount >= Step 2/3/4 userCounts
-    const maxUsers = Math.max(...stageData.map(s => s.userCount), 0);
-    if (stageData[0].userCount < maxUsers) {
-      stageData[0].userCount = maxUsers;
-      if (stageData[0].eventCount < maxUsers) stageData[0].eventCount = maxUsers;
+    const getStageEventCount = (aliases) => {
+      return aliases.reduce((sum, a) => sum + (countMap[a] || 0), 0);
+    };
+
+    const stageData = [
+      {
+        stepName: '1. App Visits & Browsing',
+        userCount: step1Count,
+        // Step 1 eventCount represents the total baseline activity (88.9k in your case)
+        eventCount: totalEventVolume || step1Count
+      },
+      {
+        stepName: '2. High Interest (Added to Cart)',
+        userCount: step2Count,
+        // Represents total add_to_cart volume (15.3k in your case)
+        eventCount: getStageEventCount(['add_to_cart', 'cart_add', 'cart_view']) || step2Count
+      },
+      {
+        stepName: '3. Initiated Checkout',
+        userCount: step3Count,
+        // Represents total checkout flow volume (481 in your case)
+        eventCount: getStageEventCount(['checkout_started', 'checkout_init', 'apply_coupon', 'payment_initiated', 'payment_failed', 'payment_fail']) || step3Count
+      },
+      {
+        stepName: '4. Successful Purchases',
+        userCount: step4Count,
+        // Represents total success volume (62 in your case)
+        eventCount: getStageEventCount(['payment_success', 'payment_completed', 'order_placed', 'order_created', 'order_completed']) || step4Count
+      }
+    ];
+
+    // Ensure event counts follow funnel logic visually
+    for (let i = stageData.length - 2; i >= 0; i--) {
+      if (stageData[i].eventCount < stageData[i + 1].eventCount) {
+        stageData[i].eventCount = stageData[i + 1].eventCount;
+      }
     }
 
-    const step1Users = stageData[0].userCount;
-
+    // Final formatting with conversion rates
     const formatted = stageData.map((s, idx) => {
-      const conversionRate = step1Users > 0
-        ? Math.min(100.0, Number(((s.userCount / step1Users) * 100).toFixed(1)))
+      const conversionRate = step1Count > 0
+        ? Math.min(100.0, Number(((s.userCount / step1Count) * 100).toFixed(1)))
         : 0.0;
+
       return {
-        stepName: s.step,
+        stepName: s.stepName,
         userCount: s.userCount,
         eventCount: s.eventCount,
         conversionRate
