@@ -24,6 +24,8 @@ router.post('/categories/upload/complete', protect, authorizeRoles('admin'), pro
 // Create a new category
 router.post('/categories', protect, authorizeRoles('admin'), upload.fields([
   { name: 'image', maxCount: 1 },
+  { name: 'icon', maxCount: 1 },
+  { name: 'iconImage', maxCount: 1 },
   { name: 'cataloguePdf', maxCount: 1 }
 ]), productController.createCategory);
 
@@ -33,6 +35,8 @@ router.post('/categories/:id/subcategories', protect, authorizeRoles('admin'), u
 // Update a category
 router.put('/categories/:id', protect, authorizeRoles('admin'), upload.fields([
   { name: 'image', maxCount: 1 },
+  { name: 'icon', maxCount: 1 },
+  { name: 'iconImage', maxCount: 1 },
   { name: 'cataloguePdf', maxCount: 1 }
 ]), productController.updateCategory);
 

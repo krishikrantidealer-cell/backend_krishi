@@ -268,7 +268,7 @@ exports.getDashboardAnalytics = async (req, res, next) => {
     const totalOrders = await Order.countDocuments();
     const periodOrders = await Order.countDocuments(dateQuery);
     const pendingOrders = await Order.countDocuments({ orderStatus: 'Processing' });
-    
+
     // Optimized Revenue calculations using Aggregation
     const totalRevenueResult = await Order.aggregate([
       { $match: { orderStatus: { $ne: 'Cancelled' } } },
@@ -302,11 +302,13 @@ exports.getDashboardAnalytics = async (req, res, next) => {
     const eventDateQuery = isTotal ? {} : { timestamp: { $gte: startDate } };
     const abandonedEventsStats = await Event.aggregate([
       { $match: { ...eventDateQuery, eventType: { $in: ['checkout_started', 'payment_success'] } } },
-      { $group: {
+      {
+        $group: {
           _id: "$sessionId",
           hasStarted: { $max: { $cond: [{ $eq: ["$eventType", "checkout_started"] }, 1, 0] } },
           hasCompleted: { $max: { $cond: [{ $eq: ["$eventType", "payment_success"] }, 1, 0] } }
-      } },
+        }
+      },
       { $match: { hasStarted: 1, hasCompleted: 0 } },
       { $count: "abandonedCount" }
     ]);
@@ -324,14 +326,14 @@ exports.getDashboardAnalytics = async (req, res, next) => {
         if (cachedCount !== null) {
           eventsCount = parseInt(cachedCount) || 0;
         }
-      } catch (_) {}
+      } catch (_) { }
     }
     if (eventsCount === undefined) {
       eventsCount = await Event.countDocuments(dateQuery);
       if (period === 'Today' && redisClient.isOpen) {
         try {
           await redisClient.set(`stats:events:count:daily:${todayStr}`, eventsCount, { EX: 259200 }); // 3 days
-        } catch (_) {}
+        } catch (_) { }
       }
     }
 
@@ -438,7 +440,7 @@ exports.createEstimate = async (req, res, next) => {
 exports.updateEstimate = async (req, res, next) => {
   try {
     const { id } = req.params;
-    
+
     const estimate = await Estimate.findById(id);
     if (!estimate) {
       return res.status(404).json({
@@ -500,49 +502,6 @@ exports.deleteEstimate = async (req, res, next) => {
     res.status(200).json({
       success: true,
       message: 'Estimate deleted successfully'
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-// ONE-TIME MIGRATION: populate bannerTitle on all Collections & Categories
-exports.populateBannerTitles = async (req, res, next) => {
-  try {
-    const Collection = require('../models/Collection');
-    const Category   = require('../models/Category');
-
-    const collections = await Collection.find({}).lean();
-    const categories  = await Category.find({}).lean();
-
-    let colUpdated = 0, catUpdated = 0;
-    const colLog = [], catLog = [];
-
-    for (const col of collections) {
-      if (col.bannerTitle && col.bannerTitle.trim()) {
-        colLog.push({ name: col.name, action: 'skipped', bannerTitle: col.bannerTitle });
-        continue;
-      }
-      await Collection.findByIdAndUpdate(col._id, { $set: { bannerTitle: col.name } });
-      colLog.push({ name: col.name, action: 'set', bannerTitle: col.name });
-      colUpdated++;
-    }
-
-    for (const cat of categories) {
-      if (cat.bannerTitle && cat.bannerTitle.trim()) {
-        catLog.push({ name: cat.name, action: 'skipped', bannerTitle: cat.bannerTitle });
-        continue;
-      }
-      await Category.findByIdAndUpdate(cat._id, { $set: { bannerTitle: cat.name } });
-      catLog.push({ name: cat.name, action: 'set', bannerTitle: cat.name });
-      catUpdated++;
-    }
-
-    res.status(200).json({
-      success: true,
-      message: `Migration complete. Collections updated: ${colUpdated}, Categories updated: ${catUpdated}`,
-      collections: colLog,
-      categories: catLog,
     });
   } catch (error) {
     next(error);

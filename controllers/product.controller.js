@@ -147,7 +147,7 @@ exports.getHomeDiscovery = async (req, res, next) => {
       .sort({ priority: -1, name: 1 })
       .lean();
 
-    const bannersDocs = await Banner.find({ isActive: true, type: { $in: ['home', 'category', 'category_card', 'custom_collections', 'best_offers'] } })
+    const bannersDocs = await Banner.find({ isActive: true, type: { $in: ['home', 'category', 'category_card', 'custom_collections', 'best_offers', 'strip'] } })
       .sort({ priority: 1 })
       .lean();
 
@@ -166,6 +166,7 @@ exports.getHomeDiscovery = async (req, res, next) => {
     let formattedCategoryBanners = [];
     let formattedCategoryCardBanners = [];
     let bestOffersBanners = [];
+    let stripBanners = [];
     bannersList.forEach(doc => {
       if (doc.homebanners && Array.isArray(doc.homebanners)) {
         doc.homebanners.forEach((url, index) => {
@@ -229,6 +230,8 @@ exports.getHomeDiscovery = async (req, res, next) => {
           formattedCategoryCardBanners.push(doc);
         } else if (doc.type === 'best_offers') {
           bestOffersBanners.push(doc);
+        } else if (doc.type === 'strip') {
+          stripBanners.push(doc);
         }
       }
     });
@@ -332,6 +335,7 @@ exports.getHomeDiscovery = async (req, res, next) => {
       categoryBanners: formattedCategoryBanners,
       categoryCardBanners: formattedCategoryCardBanners,
       bestOffersBanners,
+      stripBanners,
       categories,
       featuredProducts: featuredResult.products,
       collections: collectionsWithProducts
@@ -533,7 +537,7 @@ exports.deleteProduct = async (req, res, next) => {
 // Create a new category (Admin)
 exports.createCategory = async (req, res, next) => {
   try {
-    const { name, subCategories } = req.body;
+    const { name, subCategories, bannerTitle } = req.body;
     if (!name) {
       return res.status(400).json({ success: false, message: 'Category name is required' });
     }
@@ -558,6 +562,7 @@ exports.createCategory = async (req, res, next) => {
     );
 
     const imageFile = req.files && req.files['image'] ? req.files['image'][0] : null;
+    const iconFile = req.files && (req.files['icon'] || req.files['iconImage']) ? (req.files['icon'] || req.files['iconImage'])[0] : null;
     const pdfFile = req.files && req.files['cataloguePdf'] ? req.files['cataloguePdf'][0] : null;
 
     let bannerImage;
@@ -567,6 +572,17 @@ exports.createCategory = async (req, res, next) => {
       const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
       const destination = `categorycardbanners/${slug}_${timestamp}.webp`;
       bannerImage = await uploadToGCS(imageFile.buffer, destination, 'image/webp');
+    }
+
+    let iconImage;
+    if (iconFile) {
+      const { uploadToGCS } = require('../utils/gcs');
+      const timestamp = Date.now();
+      const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+      const destination = `categoryicons/${slug}_${timestamp}.webp`;
+      iconImage = await uploadToGCS(iconFile.buffer, destination, 'image/webp');
+    } else if (req.body.iconImage) {
+      iconImage = req.body.iconImage;
     }
 
     let cataloguePdf;
@@ -584,6 +600,8 @@ exports.createCategory = async (req, res, next) => {
       name: name.trim(),
       subCategories: formattedSubCategories,
       bannerImage,
+      bannerTitle: bannerTitle ? bannerTitle.trim() : undefined,
+      iconImage,
       cataloguePdf
     });
 
@@ -641,7 +659,12 @@ exports.createSubCategory = async (req, res, next) => {
       bannerImage = await uploadToGCS(req.file.buffer, destination, 'image/webp');
     }
 
-    category.subCategories.push({ name: name.trim(), bannerImage });
+    const { bannerTitle } = req.body;
+    category.subCategories.push({
+      name: name.trim(),
+      bannerImage,
+      bannerTitle: bannerTitle ? bannerTitle.trim() : undefined
+    });
     const oldCategory = JSON.parse(JSON.stringify(category));
     await category.save();
 
@@ -850,7 +873,7 @@ exports.completeChunkedUpload = async (req, res, next) => {
 exports.updateCategory = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { name } = req.body;
+    const { name, bannerTitle } = req.body;
     if (!name) {
       return res.status(400).json({ success: false, message: 'Category name is required' });
     }
@@ -870,9 +893,13 @@ exports.updateCategory = async (req, res, next) => {
     }
 
     const imageFile = req.files && req.files['image'] ? req.files['image'][0] : null;
+    const iconFile = req.files && (req.files['icon'] || req.files['iconImage']) ? (req.files['icon'] || req.files['iconImage'])[0] : null;
     const pdfFile = req.files && req.files['cataloguePdf'] ? req.files['cataloguePdf'][0] : null;
 
     category.name = name.trim();
+    if (bannerTitle !== undefined) {
+      category.bannerTitle = bannerTitle ? bannerTitle.trim() : undefined;
+    }
 
     // Check if we need to clear or upload a new banner image
     if (imageFile) {
@@ -883,6 +910,19 @@ exports.updateCategory = async (req, res, next) => {
       category.bannerImage = await uploadToGCS(imageFile.buffer, destination, 'image/webp');
     } else if (req.body.bannerImage === '') {
       category.bannerImage = undefined;
+    }
+
+    // Check if we need to clear or upload a new icon image
+    if (iconFile) {
+      const { uploadToGCS } = require('../utils/gcs');
+      const timestamp = Date.now();
+      const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+      const destination = `categoryicons/${slug}_${timestamp}.webp`;
+      category.iconImage = await uploadToGCS(iconFile.buffer, destination, 'image/webp');
+    } else if (req.body.iconImage === '') {
+      category.iconImage = undefined;
+    } else if (req.body.iconImage) {
+      category.iconImage = req.body.iconImage;
     }
 
     // Check if we need to clear or upload a new catalogue PDF
@@ -978,7 +1018,7 @@ exports.deleteCategory = async (req, res, next) => {
 exports.updateSubCategory = async (req, res, next) => {
   try {
     const { id, subId } = req.params;
-    const { name } = req.body;
+    const { name, bannerTitle } = req.body;
     if (!name) {
       return res.status(400).json({ success: false, message: 'Subcategory name is required' });
     }
@@ -1001,6 +1041,9 @@ exports.updateSubCategory = async (req, res, next) => {
     }
 
     category.subCategories[subIndex].name = name.trim();
+    if (bannerTitle !== undefined) {
+      category.subCategories[subIndex].bannerTitle = bannerTitle ? bannerTitle.trim() : undefined;
+    }
 
     if (req.file) {
       const { uploadToGCS } = require('../utils/gcs');

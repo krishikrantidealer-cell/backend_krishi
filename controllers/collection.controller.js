@@ -115,7 +115,7 @@ exports.getCollectionsWithProducts = async (req, res, next) => {
 // Create a new collection (Admin)
 exports.createCollection = async (req, res, next) => {
   try {
-    const { name, description, bannerImage, isActive, priority } = req.body;
+    const { name, description, bannerImage, bannerTitle, isActive, priority } = req.body;
 
     // Automatically generate slug from name
     const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
@@ -125,6 +125,7 @@ exports.createCollection = async (req, res, next) => {
       slug,
       description,
       bannerImage,
+      bannerTitle: bannerTitle ? bannerTitle.trim() : undefined,
       isActive: isActive !== undefined ? isActive : true,
       priority: priority !== undefined ? Number(priority) : 0
     });
@@ -152,7 +153,7 @@ exports.createCollection = async (req, res, next) => {
 // Update an existing collection (Admin)
 exports.updateCollection = async (req, res, next) => {
   try {
-    const { name, description, bannerImage, isActive, priority, subCollections } = req.body;
+    const { name, description, bannerImage, bannerTitle, isActive, priority, subCollections } = req.body;
 
     const collection = await Collection.findById(req.params.id);
     if (!collection) {
@@ -170,6 +171,7 @@ exports.updateCollection = async (req, res, next) => {
 
     if (description !== undefined) updateData.description = description;
     if (bannerImage !== undefined) updateData.bannerImage = bannerImage;
+    if (bannerTitle !== undefined) updateData.bannerTitle = bannerTitle ? bannerTitle.trim() : undefined;
     if (isActive !== undefined) updateData.isActive = isActive;
     if (priority !== undefined) updateData.priority = Number(priority);
     if (subCollections !== undefined) updateData.subCollections = subCollections;

@@ -9,6 +9,10 @@ const subCategorySchema = new mongoose.Schema({
   bannerImage: {
     type: String,
     trim: true
+  },
+  bannerTitle: {
+    type: String,
+    trim: true
   }
 });
 
@@ -20,6 +24,14 @@ const categorySchema = new mongoose.Schema({
     trim: true
   },
   bannerImage: {
+    type: String,
+    trim: true
+  },
+  bannerTitle: {
+    type: String,
+    trim: true
+  },
+  iconImage: {
     type: String,
     trim: true
   },

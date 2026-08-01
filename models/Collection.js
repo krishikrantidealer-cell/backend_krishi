@@ -22,6 +22,10 @@ const collectionSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  bannerTitle: {
+    type: String,
+    trim: true
+  },
   isActive: {
     type: Boolean,
     default: true
