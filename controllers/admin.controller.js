@@ -505,3 +505,46 @@ exports.deleteEstimate = async (req, res, next) => {
     next(error);
   }
 };
+
+// ONE-TIME MIGRATION: populate bannerTitle on all Collections & Categories
+exports.populateBannerTitles = async (req, res, next) => {
+  try {
+    const Collection = require('../models/Collection');
+    const Category   = require('../models/Category');
+
+    const collections = await Collection.find({}).lean();
+    const categories  = await Category.find({}).lean();
+
+    let colUpdated = 0, catUpdated = 0;
+    const colLog = [], catLog = [];
+
+    for (const col of collections) {
+      if (col.bannerTitle && col.bannerTitle.trim()) {
+        colLog.push({ name: col.name, action: 'skipped', bannerTitle: col.bannerTitle });
+        continue;
+      }
+      await Collection.findByIdAndUpdate(col._id, { $set: { bannerTitle: col.name } });
+      colLog.push({ name: col.name, action: 'set', bannerTitle: col.name });
+      colUpdated++;
+    }
+
+    for (const cat of categories) {
+      if (cat.bannerTitle && cat.bannerTitle.trim()) {
+        catLog.push({ name: cat.name, action: 'skipped', bannerTitle: cat.bannerTitle });
+        continue;
+      }
+      await Category.findByIdAndUpdate(cat._id, { $set: { bannerTitle: cat.name } });
+      catLog.push({ name: cat.name, action: 'set', bannerTitle: cat.name });
+      catUpdated++;
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `Migration complete. Collections updated: ${colUpdated}, Categories updated: ${catUpdated}`,
+      collections: colLog,
+      categories: catLog,
+    });
+  } catch (error) {
+    next(error);
+  }
+};

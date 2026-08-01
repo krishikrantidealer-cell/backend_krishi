@@ -18,4 +18,7 @@ router.post('/estimates', authorizeRoles('admin', 'sales'), adminController.crea
 router.put('/estimates/:id', authorizeRoles('admin', 'sales'), adminController.updateEstimate);
 router.delete('/estimates/:id', authorizeRoles('admin', 'sales'), adminController.deleteEstimate);
 
+// ONE-TIME MIGRATION — remove after use
+router.post('/migrate/populate-banner-titles', authorizeRoles('admin'), adminController.populateBannerTitles);
+
 module.exports = router;
