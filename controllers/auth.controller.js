@@ -139,10 +139,52 @@ class AuthController {
       let isNewUser = false;
       const isTestPhone = phoneNumber === '9999999999';
       if (!user) {
+        const deepLinkUrl = req.body.deepLinkUrl || req.body.deep_link_url || null;
+        let utmSource = req.body.utm_source || req.body.utmSource || null;
+        let utmMedium = req.body.utm_medium || req.body.utmMedium || null;
+        let utmCampaign = req.body.utm_campaign || req.body.utmCampaign || null;
+        let utmTerm = req.body.utm_term || req.body.utmTerm || null;
+        let utmContent = req.body.utm_content || req.body.utmContent || null;
+
+        const cleanUtmVal = (val) => {
+          if (!val) return null;
+          try {
+            const decoded = decodeURIComponent(val);
+            if (decoded.startsWith('{') && decoded.endsWith('}')) {
+              const parsed = JSON.parse(decoded);
+              if (parsed.app) return `Meta App ID: ${parsed.app}`;
+            }
+            return decoded.length > 80 ? `${decoded.substring(0, 75)}...` : decoded;
+          } catch (e) {
+            return val.length > 80 ? `${val.substring(0, 75)}...` : val;
+          }
+        };
+
+        const urlToParse = deepLinkUrl || req.body.source || '';
+        if (urlToParse && (urlToParse.includes('?') || urlToParse.includes('='))) {
+          try {
+            const searchStr = urlToParse.includes('?') ? urlToParse.split('?')[1] : urlToParse;
+            const params = new URLSearchParams(searchStr);
+            if (!utmSource) utmSource = params.get('utm_source');
+            if (!utmMedium) utmMedium = params.get('utm_medium');
+            if (!utmCampaign) utmCampaign = params.get('utm_campaign');
+            if (!utmTerm) utmTerm = params.get('utm_term');
+            if (!utmContent) utmContent = params.get('utm_content');
+          } catch (e) {}
+        }
+
+        if (utmContent) utmContent = cleanUtmVal(utmContent);
+
         user = await User.create({ 
           phoneNumber,
           isVerified: true,
-          source: req.body.source || 'App',
+          source: req.body.source || (utmSource ? `UTM: ${utmSource}` : 'App'),
+          deepLinkUrl,
+          utmSource,
+          utmMedium,
+          utmCampaign,
+          utmTerm,
+          utmContent,
           ...(isTestPhone && {
             isProfileComplete: true,
             isKycComplete: true,

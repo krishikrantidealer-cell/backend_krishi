@@ -301,17 +301,14 @@ exports.getEvents = async (req, res, next) => {
       }
     }
 
-    // Enforce assigned customer filtering for Sales Representatives
+    // Enforce assigned customer filtering for Sales Representatives (if assigned users exist)
     const assignedUserIds = await getSalesAssignedUserIds(req);
-    if (assignedUserIds) {
-      if (assignedUserIds.size === 0) {
-        return res.json({ success: true, events: [], nextCursor: null });
-      }
+    if (assignedUserIds && assignedUserIds.size > 0) {
       const assignedArray = Array.from(assignedUserIds);
       if (query.user && query.user.$in) {
-        query.user.$in = query.user.$in.filter(u => assignedUserIds.has(u.toString().toLowerCase()));
-        if (query.user.$in.length === 0) {
-          return res.json({ success: true, events: [], nextCursor: null });
+        const filtered = query.user.$in.filter(u => assignedUserIds.has(u.toString().toLowerCase()));
+        if (filtered.length > 0) {
+          query.user.$in = filtered;
         }
       } else if (!query.user) {
         query.user = { $in: assignedArray };

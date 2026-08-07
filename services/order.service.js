@@ -448,9 +448,10 @@ class OrderService {
     return order;
   }
 
-  async syncDelhiveryTracking(userId, orderId) {
+  async syncDelhiveryTracking(orderId, userId = null) {
     const axios = require('axios');
-    const order = await Order.findOne({ _id: orderId, user: userId });
+    const query = userId ? { _id: orderId, user: userId } : { _id: orderId };
+    const order = await Order.findOne(query);
     if (!order || !order.awbNumber) return order;
 
     const token = process.env.DELHIVERY_API_TOKEN;
@@ -463,66 +464,71 @@ class OrderService {
         headers: {
           'Authorization': `Token ${token}`,
           'Content-Type': 'application/json'
-        }
+        },
+        timeout: 5000
       });
 
       const packageData = response.data && response.data.ShipmentData && response.data.ShipmentData[0] && response.data.ShipmentData[0].Shipment;
       if (packageData && packageData.Status) {
         const rawStatus = packageData.Status.Status || '';
+        const previousStatus = order.orderStatus;
+        const previousCourierStatus = order.courierStatus;
         order.courierStatus = rawStatus;
 
-        const previousStatus = order.orderStatus;
         const statusLower = rawStatus.toLowerCase();
         
-        if (statusLower.includes('manifested') || statusLower.includes('dispatched')) {
+        if (statusLower.includes('manifested') || statusLower.includes('dispatched') || statusLower.includes('pending')) {
           order.orderStatus = 'Processing';
           if (!order.processingAt) order.processingAt = new Date();
-        } else if (statusLower.includes('picked up') || statusLower.includes('in transit') || statusLower.includes('arrived at hub')) {
+        } else if (statusLower.includes('picked up') || statusLower.includes('in transit') || statusLower.includes('arrived at hub') || statusLower.includes('in-transit') || statusLower.includes('reached')) {
           order.orderStatus = 'Shipped';
           if (!order.shippedAt) order.shippedAt = new Date();
         } else if (statusLower.includes('out for delivery')) {
           order.orderStatus = 'Out for Delivery';
           if (!order.outForDeliveryAt) order.outForDeliveryAt = new Date();
-        } else if (statusLower.includes('delivered') && !statusLower.includes('rto')) {
+        } else if ((statusLower.includes('delivered') || statusLower.includes('successful')) && !statusLower.includes('rto') && !statusLower.includes('undelivered')) {
           order.orderStatus = 'Delivered';
           if (!order.deliveredAt) order.deliveredAt = new Date();
-        } else if (statusLower.includes('rto')) {
+        } else if (statusLower.includes('rto') || statusLower.includes('returned') || statusLower.includes('undelivered')) {
           order.orderStatus = 'RTO';
           if (!order.rtoAt) order.rtoAt = new Date();
-        } else if (statusLower.includes('cancelled')) {
+        } else if (statusLower.includes('cancelled') || statusLower.includes('canceled')) {
           order.orderStatus = 'Cancelled';
           if (!order.cancelledAt) order.cancelledAt = new Date();
         }
 
-        // Trigger Notification + WS push if status has actually changed
-        if (previousStatus !== order.orderStatus) {
-          const notificationService = require('./notification.service');
-          notificationService.sendUtilityNotification(
-            userId,
-            `Order Status Update: ${order.orderStatus}`,
-            `Your order ${order.orderId} is now ${order.orderStatus}.`,
-            `/order_details/${order._id}`
-          );
+        // Trigger Notification + WS push if order status or courier status changed
+        if (previousStatus !== order.orderStatus || previousCourierStatus !== order.courierStatus) {
+          await order.save();
 
-          // Push real-time WebSocket update to the buyer (if their app is open)
-          try {
-            const { sendToUser } = require('./websocket.service');
-            sendToUser(userId.toString(), {
-              type: 'ORDER_STATUS_UPDATE',
-              orderId: order._id.toString(),
-              orderStatus: order.orderStatus,
-              courierStatus: order.courierStatus || null
-            });
-          } catch (wsErr) {
-            console.error('[WS] Failed to push ORDER_STATUS_UPDATE from Delhivery sync:', wsErr.message);
+          const targetUserId = order.user ? order.user.toString() : userId?.toString();
+          if (targetUserId) {
+            const notificationService = require('./notification.service');
+            notificationService.sendUtilityNotification(
+              targetUserId,
+              `Order Status Update: ${order.orderStatus}`,
+              `Your order ${order.orderId || ''} status is now ${order.orderStatus}.`,
+              `/order_details/${order._id}`
+            ).catch(err => console.error('[Notification] Failed to send status update:', err.message));
+
+            try {
+              const { sendToUser, broadcastToRoles } = require('./websocket.service');
+              sendToUser(targetUserId, {
+                type: 'ORDER_STATUS_UPDATE',
+                orderId: order._id.toString(),
+                orderStatus: order.orderStatus,
+                courierStatus: order.courierStatus || null
+              });
+              broadcastToRoles(['admin', 'sales'], { type: 'ORDERS_UPDATE' });
+            } catch (wsErr) {
+              console.error('[WS] Failed to push ORDER_STATUS_UPDATE from Delhivery sync:', wsErr.message);
+            }
           }
         }
-
-        await order.save();
       }
       return order;
     } catch (err) {
-      console.error("Delhivery API token sync failed, maintaining current state:", err.message);
+      console.error(`[Delhivery Sync] Failed to sync order ${orderId}:`, err.message);
       return order;
     }
   }

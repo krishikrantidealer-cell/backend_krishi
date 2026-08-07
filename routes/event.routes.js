@@ -19,7 +19,7 @@ router.post('/heartbeat', eventController.handleHeartbeat);
 router.get('/', protect, authorizeRoles('admin', 'sales'), eventController.getEvents);
 
 // Fetch real-time active users presence
-router.get('/realtime', protect, authorizeRoles('admin'), eventController.getActiveUsers);
+router.get('/realtime', protect, authorizeRoles('admin', 'sales'), eventController.getActiveUsers);
 
 // Fetch conversion funnel analytics
 router.get('/funnel', protect, authorizeRoles('admin'), eventController.getFunnelData);

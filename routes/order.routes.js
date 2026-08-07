@@ -15,6 +15,10 @@ router.post('/webhook/sheets', orderController.sheetsWebhook);
 // Public Webhook endpoint for Razorpay payment verification
 router.post('/webhook/razorpay', orderController.razorpayWebhook);
 
+// Public endpoint for Cloud Scheduler / Cron ping to auto-sync active orders
+router.post('/cron/sync', orderController.cronSyncOrders);
+router.get('/cron/sync', orderController.cronSyncOrders);
+
 // All subsequent order routes require authentication
 router.use(protect);
 
@@ -51,6 +55,9 @@ router.get('/admin/all', authorizeRoles('admin', 'sales'), orderController.getAl
 
 // Update order status (Admin only)
 router.put('/admin/:id/status', authorizeRoles('admin'), orderController.adminUpdateOrderStatus);
+
+// Admin: live sync single order tracking with Delhivery API
+router.post('/admin/:id/sync-delivery', authorizeRoles('admin', 'sales'), orderController.adminSyncDeliveryStatus);
 
 // Force sync all orders to Google Sheets (Admin only)
 router.post('/admin/sheets/sync', authorizeRoles('admin'), orderController.adminSyncSheets);

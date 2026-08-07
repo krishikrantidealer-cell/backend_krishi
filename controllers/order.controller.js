@@ -108,13 +108,16 @@ exports.getMyOrders = async (req, res, next) => {
   try {
     const orders = await orderService.getUserOrders(req.user._id);
 
-    // Non-blocking background sync for active orders to maintain list accuracy without API lag
+    // Await active order sync with 2s timeout for instant accurate status delivery
     if (orders && Array.isArray(orders)) {
-      orders
-        .filter(o => ['Processing', 'Shipped', 'Out for Delivery'].includes(o.orderStatus))
-        .forEach(o => {
-          orderService.syncDelhiveryTracking(req.user._id, o._id).catch(() => {});
-        });
+      const activeOrders = orders.filter(o => o.awbNumber && ['Processing', 'Shipped', 'Out for Delivery'].includes(o.orderStatus));
+      if (activeOrders.length > 0) {
+        await Promise.race([
+          Promise.allSettled(activeOrders.map(o => orderService.syncDelhiveryTracking(o._id, req.user._id))),
+          new Promise(resolve => setTimeout(resolve, 2000))
+        ]);
+        orders = await orderService.getOrdersByUser(req.user._id);
+      }
     }
 
     res.json({ success: true, orders });
@@ -125,7 +128,7 @@ exports.getMyOrders = async (req, res, next) => {
 
 exports.getOrderDetails = async (req, res, next) => {
   try {
-    await orderService.syncDelhiveryTracking(req.user._id, req.params.id);
+    await orderService.syncDelhiveryTracking(req.params.id, req.user._id);
 
     const order = await orderService.getOrderById(req.user._id, req.params.id);
     res.json({ success: true, order });
@@ -139,17 +142,20 @@ exports.delhiveryWebhook = async (req, res, next) => {
     // ── Security: verify that this request actually came from Delhivery ──────
     const webhookSecret = process.env.DELHIVERY_WEBHOOK_SECRET;
     if (webhookSecret && !webhookSecret.includes('YOUR_')) {
-      const authHeader = req.headers['authorization'] || req.headers['x-delhivery-token'] || '';
-      const receivedToken = authHeader.replace('Token ', '').trim();
+      const authHeader = req.headers['authorization'] || req.headers['x-delhivery-token'] || req.headers['x-api-key'] || '';
+      const receivedToken = authHeader.replace('Token ', '').replace('Bearer ', '').trim();
       if (receivedToken !== webhookSecret) {
         console.warn('[Webhook] Unauthorized Delhivery webhook attempt from:', req.ip);
         return res.status(401).json({ success: false, message: 'Unauthorized' });
       }
     }
 
-    const rawStatus = req.body.status || req.body.current_status || '';
-    const awb = req.body.awb || req.body.awb_number;
-    const orderId = req.body.order_id || req.body.orderId;
+    const body = req.body || {};
+    const shipment = body.Shipment || (Array.isArray(body) ? body[0]?.Shipment || body[0] : null) || body;
+
+    const rawStatus = shipment.Status?.Status || shipment.status || shipment.current_status || (typeof shipment.Status === 'string' ? shipment.Status : '') || '';
+    const awb = shipment.AWB || shipment.awb || shipment.awb_number || shipment.waybill;
+    const orderId = shipment.ReferenceNo || shipment.order_id || shipment.orderId || shipment.ref_id;
 
     if (!awb && !orderId) {
       return res.status(400).json({ success: false, message: "AWB or Order ID required in webhook payload" });
@@ -170,22 +176,22 @@ exports.delhiveryWebhook = async (req, res, next) => {
     order.courierStatus = rawStatus;
 
     const statusLower = rawStatus.toLowerCase();
-    if (statusLower.includes('manifested') || statusLower.includes('dispatched')) {
+    if (statusLower.includes('manifested') || statusLower.includes('dispatched') || statusLower.includes('pending')) {
       order.orderStatus = 'Processing';
       if (!order.processingAt) order.processingAt = new Date();
-    } else if (statusLower.includes('picked up') || statusLower.includes('in transit') || statusLower.includes('arrived at hub')) {
+    } else if (statusLower.includes('picked up') || statusLower.includes('in transit') || statusLower.includes('arrived at hub') || statusLower.includes('in-transit') || statusLower.includes('reached')) {
       order.orderStatus = 'Shipped';
       if (!order.shippedAt) order.shippedAt = new Date();
     } else if (statusLower.includes('out for delivery')) {
       order.orderStatus = 'Out for Delivery';
       if (!order.outForDeliveryAt) order.outForDeliveryAt = new Date();
-    } else if (statusLower.includes('delivered') && !statusLower.includes('rto')) {
+    } else if ((statusLower.includes('delivered') || statusLower.includes('successful')) && !statusLower.includes('rto') && !statusLower.includes('undelivered')) {
       order.orderStatus = 'Delivered';
       if (!order.deliveredAt) order.deliveredAt = new Date();
-    } else if (statusLower.includes('rto')) {
+    } else if (statusLower.includes('rto') || statusLower.includes('returned') || statusLower.includes('undelivered')) {
       order.orderStatus = 'RTO';
       if (!order.rtoAt) order.rtoAt = new Date();
-    } else if (statusLower.includes('cancelled')) {
+    } else if (statusLower.includes('cancelled') || statusLower.includes('canceled')) {
       order.orderStatus = 'Cancelled';
       if (!order.cancelledAt) order.cancelledAt = new Date();
     }
@@ -196,30 +202,33 @@ exports.delhiveryWebhook = async (req, res, next) => {
     const whatsappAutomationService = require('../services/whatsappAutomation.service');
     const User = require('../models/User');
 
-    User.findById(order.user).then(user => {
-      if (!user) return;
-      if (order.orderStatus === 'Shipped') whatsappAutomationService.notifyOrderShipped(user, order).catch(() => {});
-      else if (order.orderStatus === 'Delivered') whatsappAutomationService.notifyOrderDelivered(user, order).catch(() => {});
-    });
-
-    notificationService.sendUtilityNotification(
-      order.user,
-      `Order Update: ${order.orderStatus} 📦`,
-      `Your package tracking status is now: ${order.courierStatus || order.orderStatus}.`,
-      `/order_details/${order._id}`
-    ).catch(err => console.error("Error sending webhook notification in background:", err));
-
-    // Push real-time update to buyer's open WebSocket connection (if any)
-    try {
-      const { sendToUser } = require('../services/websocket.service');
-      sendToUser(order.user.toString(), {
-        type: 'ORDER_STATUS_UPDATE',
-        orderId: order._id.toString(),
-        orderStatus: order.orderStatus,
-        courierStatus: order.courierStatus || null
+    if (order.user) {
+      User.findById(order.user).then(user => {
+        if (!user) return;
+        if (order.orderStatus === 'Shipped') whatsappAutomationService.notifyOrderShipped(user, order).catch(() => {});
+        else if (order.orderStatus === 'Delivered') whatsappAutomationService.notifyOrderDelivered(user, order).catch(() => {});
       });
-    } catch (wsErr) {
-      console.error('[WS] Failed to push ORDER_STATUS_UPDATE to buyer:', wsErr.message);
+
+      notificationService.sendUtilityNotification(
+        order.user,
+        `Order Update: ${order.orderStatus} 📦`,
+        `Your package tracking status is now: ${order.courierStatus || order.orderStatus}.`,
+        `/order_details/${order._id}`
+      ).catch(err => console.error("Error sending webhook notification in background:", err));
+
+      // Push real-time update to buyer's open WebSocket connection + Admin Panel
+      try {
+        const { sendToUser, broadcastToRoles } = require('../services/websocket.service');
+        sendToUser(order.user.toString(), {
+          type: 'ORDER_STATUS_UPDATE',
+          orderId: order._id.toString(),
+          orderStatus: order.orderStatus,
+          courierStatus: order.courierStatus || null
+        });
+        broadcastToRoles(['admin', 'sales'], { type: 'ORDERS_UPDATE' });
+      } catch (wsErr) {
+        console.error('[WS] Failed to push ORDER_STATUS_UPDATE:', wsErr.message);
+      }
     }
 
     res.json({ success: true, message: "Webhook processed and status synced successfully", orderStatus: order.orderStatus });
@@ -235,10 +244,10 @@ exports.cancelOrder = async (req, res, next) => {
       return res.status(404).json({ success: false, message: "Order not found" });
     }
 
-    if (['Shipped', 'Out for Delivery', 'Delivered', 'RTO', 'Cancelled'].includes(order.orderStatus)) {
+    if (['Shipped', 'Out for Delivery', 'Delivered', 'RTO', 'Cancelled'].includes(order.orderStatus) || (order.awbNumber && order.awbNumber.trim() !== '')) {
       return res.status(400).json({
         success: false,
-        message: "Order has already been dispatched or cancelled. You may refuse delivery at your doorstep."
+        message: "Order has already been dispatched or assigned a tracking ID and cannot be cancelled."
       });
     }
 
@@ -246,24 +255,29 @@ exports.cancelOrder = async (req, res, next) => {
     order.cancelledAt = new Date();
     await order.save();
 
-    // Trigger utility notification
+    // Trigger WhatsApp & Push notifications
+    const whatsappAutomationService = require('../services/whatsappAutomation.service');
+    const User = require('../models/User');
+    User.findById(order.user).then(user => {
+      if (user) whatsappAutomationService.notifyOrderCancelled(user, order).catch(() => {});
+    });
+
     notificationService.sendUtilityNotification(
       order.user,
       "Order Cancelled ❌",
-      `Your order #${order._id.toString().slice(-6).toUpperCase()} has been cancelled successfully.`,
+      `Your order #${order.orderId || order._id.toString().slice(-6).toUpperCase()} has been cancelled successfully.`,
       `/order_details/${order._id}`
     ).catch(err => console.error("Error sending cancellation notification:", err));
 
     // Notify admins and agent of order cancellation
     try {
-      const User = require('../models/User');
       const buyer = await User.findById(req.user._id);
       if (buyer) {
         const nameStr = (buyer.firstName || buyer.lastName)
           ? `${buyer.firstName || ''} ${buyer.lastName || ''}`.trim()
           : buyer.shopName || buyer.phoneNumber;
         
-        const orderShortId = order._id.toString().slice(-6).toUpperCase();
+        const orderShortId = order.orderId || order._id.toString().slice(-6).toUpperCase();
         
         if (buyer.assignedAgent) {
           await notificationService.notifyAdminsAndAgent(
@@ -295,7 +309,7 @@ exports.cancelOrder = async (req, res, next) => {
         courierStatus: null
       });
     } catch (wsErr) {
-      console.error("[WS] Failed to push cancellation update to buyer:", wsErr.message);
+      console.error('[WS] Failed to push ORDER_STATUS_UPDATE:', wsErr.message);
     }
 
     res.json({ success: true, message: "Order cancelled successfully", order });
@@ -349,17 +363,40 @@ exports.adminUpdateOrderStatus = async (req, res, next) => {
     }
 
     const oldOrder = await Order.findById(id).lean();
+    if (!oldOrder) {
+      return res.status(404).json({ success: false, message: 'Order not found' });
+    }
+
+    if (status === 'Cancelled' && oldOrder.awbNumber && oldOrder.awbNumber.trim() !== '') {
+      return res.status(400).json({
+        success: false,
+        message: "Order already has an AWB tracking number assigned and cannot be cancelled."
+      });
+    }
+
     const order = await orderService.updateOrderStatus(id, status, awbNumber, courierName, trackingUrl);
 
-    // Trigger WhatsApp & Push
+    // Trigger WhatsApp & Push notifications
     const whatsappAutomationService = require('../services/whatsappAutomation.service');
     const User = require('../models/User');
 
-    User.findById(order.user).then(user => {
-      if (!user) return;
-      if (status === 'Shipped') whatsappAutomationService.notifyOrderShipped(user, order).catch(() => {});
-      else if (status === 'Delivered') whatsappAutomationService.notifyOrderDelivered(user, order).catch(() => {});
-    });
+    if (order.user) {
+      User.findById(order.user).then(user => {
+        if (!user) return;
+        if (status === 'Shipped') whatsappAutomationService.notifyOrderShipped(user, order).catch(() => {});
+        else if (status === 'Delivered') whatsappAutomationService.notifyOrderDelivered(user, order).catch(() => {});
+        else if (status === 'Cancelled') whatsappAutomationService.notifyOrderCancelled(user, order).catch(() => {});
+      });
+
+      if (status === 'Cancelled') {
+        notificationService.sendUtilityNotification(
+          order.user,
+          "Order Cancelled ❌",
+          `Your order #${order.orderId || order._id.toString().slice(-6).toUpperCase()} has been cancelled by support/admin.`,
+          `/order_details/${order._id}`
+        ).catch(err => console.error("Error sending cancellation notification:", err));
+      }
+    }
 
     // Audit Log: Order Status Updated
     auditService.logAction({
@@ -777,6 +814,26 @@ exports.adminCreateOrder = async (req, res, next) => {
     res.status(201).json({ success: true, message: 'Order created successfully', order });
   } catch (error) {
     console.error('adminCreateOrder error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.adminSyncDeliveryStatus = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const order = await orderService.syncDelhiveryTracking(id);
+    res.json({ success: true, message: 'Delivery tracking synced successfully', order });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.cronSyncOrders = async (req, res, next) => {
+  try {
+    const cronService = require('../services/cron.service');
+    await cronService.runOrderSync();
+    res.json({ success: true, message: 'Automated order sync completed' });
+  } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 };

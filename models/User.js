@@ -144,6 +144,31 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: null
   },
+  utmSource: {
+    type: String,
+    trim: true,
+    default: null
+  },
+  utmMedium: {
+    type: String,
+    trim: true,
+    default: null
+  },
+  utmCampaign: {
+    type: String,
+    trim: true,
+    default: null
+  },
+  utmTerm: {
+    type: String,
+    trim: true,
+    default: null
+  },
+  utmContent: {
+    type: String,
+    trim: true,
+    default: null
+  },
   shippingAddresses: [{
     name: { type: String, required: true, trim: true },
     villageArea: { type: String, required: true, trim: true },

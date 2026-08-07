@@ -3,14 +3,11 @@ const connectDB = require('./config/db');
 const { connectRedis } = require('./config/redis');
 const cronService = require('./services/cron.service');
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 8080;
 
 const startServer = async () => {
   try {
-    // 1. Connect to Database (Essential)
-    await connectDB();
-
-    // 2. Initialize App & Server early to satisfy Cloud Run health checks
+    // 1. Initialize App & Server early to satisfy Cloud Run health checks
     const app = require('./app');
     const http = require('http');
     const server = http.createServer(app);
@@ -18,13 +15,18 @@ const startServer = async () => {
 
     initWebSocket(server);
 
+    // Listen on PORT immediately so Cloud Run port probe succeeds instantly
     server.listen(PORT, () => {
-      console.log(`Server running in ${process.env.NODE_ENV} mode on port ${PORT}`);
-      
-      // 3. Run background tasks (Migrations & Redis) AFTER server starts listening
-      // This ensures Cloud Run health checks pass immediately.
+      console.log(`Server running in ${process.env.NODE_ENV || 'production'} mode on port ${PORT}`);
 
+      // 2. Connect to DB and run background tasks AFTER server starts listening
       (async () => {
+        try {
+          await connectDB();
+        } catch (dbErr) {
+          console.error('⚠️ MongoDB connection failed:', dbErr.message);
+        }
+
         try {
           await connectRedis();
         } catch (redisErr) {

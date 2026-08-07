@@ -170,6 +170,7 @@ class WhatsAppAutomationService {
   async notifyOrderConfirmation(user, order) { if (user.phoneNumber) return whatsappService.sendTemplateMessage(user.phoneNumber, 'order_confirmed_krishi', 'hi', [user.firstName || 'Dealer', order.orderId]); }
   async notifyOrderShipped(user, order) { if (user.phoneNumber) return whatsappService.sendTemplateMessage(user.phoneNumber, 'order_shipped_krishi', 'hi', [user.firstName || 'Dealer', order.orderId, order.trackingUrl || 'in the app']); }
   async notifyOrderDelivered(user, order) { if (user.phoneNumber) return whatsappService.sendTemplateMessage(user.phoneNumber, 'order_delivered_krishi', 'hi', [user.firstName || 'Dealer', order.orderId]); }
+  async notifyOrderCancelled(user, order) { if (user.phoneNumber) return whatsappService.sendTemplateMessage(user.phoneNumber, 'order_cancelled_krishi', 'hi', [user.firstName || 'Dealer', order.orderId || order._id.toString().slice(-6).toUpperCase()]).catch(err => console.error('[WA Cancel Err]:', err.message)); }
 }
 
 module.exports = new WhatsAppAutomationService();
