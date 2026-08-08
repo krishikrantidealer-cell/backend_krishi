@@ -20,22 +20,43 @@ const safeSendCommand = async (...args) => {
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: (req) => {
-    // If request is authenticated, allow a very high limit (2000 per 15 min).
-    // Otherwise, allow 200 per 15 min for unauthenticated IP browsing.
-    return req.userId ? 2000 : 200;
+    // If request is authenticated (staff, admin, dealer, or customer), allow 15,000 requests per 15 min.
+    // Otherwise, allow 5,000 requests per 15 min for unauthenticated browsing to support shared office/CGNAT IPs.
+    return req.userId ? 15000 : 5000;
   },
   keyGenerator: (req) => {
     // 1. Try to extract bearer token and parse user ID
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-      const token = req.headers.authorization.split(' ')[1];
-      const decoded = verifyAccessToken(token);
-      if (decoded && decoded.userId) {
-        req.userId = decoded.userId; // Save userId for use in max callback
-        return `user:${decoded.userId}`; // Rate limit by User ID!
+    const authHeader = req.headers.authorization || req.headers.Authorization;
+    if (authHeader && typeof authHeader === 'string') {
+      const parts = authHeader.trim().split(' ');
+      if (parts.length === 2 && /^bearer$/i.test(parts[0])) {
+        const token = parts[1];
+        const decoded = verifyAccessToken(token);
+        const uid = decoded?.userId || decoded?.id || decoded?._id;
+        if (uid) {
+          req.userId = uid; // Save userId for use in max callback
+          return `user:${uid}`; // Rate limit by User ID!
+        }
       }
     }
     // 2. Fallback to IP address if unauthenticated
-    return req.ip;
+    return req.ip || req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown_ip';
+  },
+  skip: (req) => {
+    // Skip rate limiting in development mode
+    if (process.env.NODE_ENV === 'development') return true;
+
+    // Skip high-frequency heartbeat, health, and cron endpoints
+    const path = req.path || req.originalUrl || '';
+    if (
+      path.includes('/health') ||
+      path.includes('/cron') ||
+      path.includes('/heartbeat') ||
+      path.includes('/webhook')
+    ) {
+      return true;
+    }
+    return false;
   },
   validate: false,
   standardHeaders: true,
@@ -51,10 +72,14 @@ const apiLimiter = rateLimit({
 
 const authLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 100, // Relaxed to 100 to support cellular CGNAT users while blocking botnets
+  max: 500, // Relaxed to 500 to support cellular CGNAT and active testing
   standardHeaders: true,
   legacyHeaders: false,
-  skip: (req) => req.body && req.body.phoneNumber === '9999999999',
+  skip: (req) => {
+    if (process.env.NODE_ENV === 'development') return true;
+    if (req.body && req.body.phoneNumber === '9999999999') return true;
+    return false;
+  },
   passOnStoreError: true,
   store: new RedisStore({
     sendCommand: safeSendCommand,
@@ -66,3 +91,4 @@ const authLimiter = rateLimit({
 });
 
 module.exports = { apiLimiter, authLimiter };
+
