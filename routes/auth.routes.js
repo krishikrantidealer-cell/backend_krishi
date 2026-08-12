@@ -2,7 +2,7 @@ const express = require('express');
 const { body } = require('express-validator');
 const authController = require('../controllers/auth.controller');
 const { protect } = require('../middlewares/auth.middleware');
-const { authLimiter } = require('../middlewares/rateLimiter');
+const { authLimiter, portalLoginLimiter } = require('../middlewares/rateLimiter');
 const validate = require('../middlewares/validate');
 
 const router = express.Router();
@@ -10,7 +10,7 @@ const router = express.Router();
 // Public routes with rate limiting
 router.post(
   '/admin/login',
-  authLimiter,
+  portalLoginLimiter,
   [
     body('email').isEmail().withMessage('Please provide a valid email address'),
     body('password').notEmpty().withMessage('Password is required')

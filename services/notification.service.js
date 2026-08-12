@@ -49,7 +49,7 @@ class NotificationService {
       // 2. Send Push Notification via Firebase
       const user = await User.findById(userId);
       if (!user || !user.fcmToken) {
-        console.log("FCM Token missing. Push notification skipped, but logged to DB.");
+        console.log(`FCM Token missing for user ${userId}. Push notification skipped, but logged to DB.`);
         return;
       }
 
@@ -67,14 +67,41 @@ class NotificationService {
         },
         data: {
           category: 'utility',
-          action_route: actionRoute || '/'
+          action_route: actionRoute || '/',
+          title: title,
+          body: body,
+          click_action: 'FLUTTER_NOTIFICATION_CLICK'
+        },
+        android: {
+          priority: 'high',
+          notification: {
+            channelId: 'krishikranti_high_importance_channel',
+            priority: 'max',
+            defaultSound: true,
+            sound: 'default'
+          }
+        },
+        apns: {
+          payload: {
+            aps: {
+              sound: 'default',
+              badge: 1,
+              contentAvailable: true
+            }
+          }
         }
       };
 
       const response = await admin.messaging().send(message);
       console.log(`Utility Notification sent successfully to user ${userId}:`, response);
     } catch (error) {
-      console.error('Error sending utility notification:', error);
+      console.error(`Error sending utility notification to user ${userId}:`, error.message);
+      if (error.code === 'messaging/registration-token-not-registered' ||
+          error.code === 'messaging/invalid-registration-token' ||
+          error.code === 'messaging/invalid-argument') {
+        console.warn(`[FCM] Removing stale/invalid FCM token for user ${userId}`);
+        await User.findByIdAndUpdate(userId, { fcmToken: null }).catch(() => {});
+      }
     }
   }
 
@@ -86,7 +113,7 @@ class NotificationService {
         title: title,
         body: body,
         category: 'marketing',
-        actionRoute: actionRoute || '/cart'
+        actionRoute: actionRoute || '/dashboard'
       });
       console.log(`Marketing Notification logged to database with ID: ${dbNotification._id}`);
 
@@ -101,7 +128,7 @@ class NotificationService {
       // 2. Send Push Notification via Firebase
       const user = await User.findById(userId);
       if (!user || !user.fcmToken) {
-        console.log("FCM Token missing. Push notification skipped, but logged to DB.");
+        console.log(`FCM Token missing for user ${userId}. Push notification skipped, but logged to DB.`);
         return;
       }
 
@@ -119,14 +146,43 @@ class NotificationService {
         },
         data: {
           category: 'marketing',
-          action_route: actionRoute || '/cart'
+          action_route: actionRoute || '/dashboard',
+          title: title,
+          body: body,
+          click_action: 'FLUTTER_NOTIFICATION_CLICK',
+          ...(imageUrl && { image: imageUrl })
+        },
+        android: {
+          priority: 'high',
+          notification: {
+            channelId: 'krishikranti_high_importance_channel',
+            priority: 'max',
+            defaultSound: true,
+            sound: 'default',
+            ...(imageUrl && { imageUrl: imageUrl })
+          }
+        },
+        apns: {
+          payload: {
+            aps: {
+              sound: 'default',
+              badge: 1,
+              contentAvailable: true
+            }
+          }
         }
       };
 
       const response = await admin.messaging().send(message);
       console.log(`Marketing Notification sent successfully to user ${userId}:`, response);
     } catch (error) {
-      console.error('Error sending marketing notification:', error);
+      console.error(`Error sending marketing notification to user ${userId}:`, error.message);
+      if (error.code === 'messaging/registration-token-not-registered' ||
+          error.code === 'messaging/invalid-registration-token' ||
+          error.code === 'messaging/invalid-argument') {
+        console.warn(`[FCM] Removing stale/invalid FCM token for user ${userId}`);
+        await User.findByIdAndUpdate(userId, { fcmToken: null }).catch(() => {});
+      }
     }
   }
 

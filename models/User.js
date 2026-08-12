@@ -108,9 +108,17 @@ const userSchema = new mongoose.Schema({
   lastKycReminderSentAt: {
     type: Date
   },
+  kycReminderCount: {
+    type: Number,
+    default: 0
+  },
   lastMarketingNotificationSentAt: {
     type: Date,
     index: true
+  },
+  lastMarketingSegment: {
+    type: String,
+    trim: true
   },
   lastWhatsappSentAt: {
     type: Date,

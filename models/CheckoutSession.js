@@ -69,6 +69,10 @@ const checkoutSessionSchema = new mongoose.Schema({
   lastReminderSentAt: {
     type: Date
   },
+  reminderCount: {
+    type: Number,
+    default: 0
+  },
   expiresAt: {
     type: Date,
     default: () => new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours expiry

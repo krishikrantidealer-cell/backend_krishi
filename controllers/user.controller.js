@@ -229,7 +229,10 @@ exports.getAllUsers = async (req, res, next) => {
       limit: req.query.limit
     };
     if (req.user.role === 'sales') {
-      filters.assignedAgent = req.user._id;
+      // Only scope to assignedAgent when querying leads/dealers, not when fetching list of sales agents
+      if (req.query.role !== 'sales') {
+        filters.assignedAgent = req.user._id;
+      }
     }
     const { users, totalCount, hasMore } = await userService.getAllUsers(filters);
     res.json({ success: true, users, totalCount, hasMore });

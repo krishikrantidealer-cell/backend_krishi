@@ -21,7 +21,10 @@ const lastRunDates = {
 // Redis helpers to read/write last run dates to survive container scaling & server restarts
 const getLastRunDate = async (jobKey) => {
   try {
-    return await redisClient.get(`cron:lastrun:${jobKey}`);
+    if (redisClient && redisClient.isOpen) {
+      return await redisClient.get(`cron:lastrun:${jobKey}`);
+    }
+    return lastRunDates[jobKey];
   } catch (err) {
     return lastRunDates[jobKey];
   }
@@ -30,7 +33,9 @@ const getLastRunDate = async (jobKey) => {
 const setLastRunDate = async (jobKey, datePart) => {
   lastRunDates[jobKey] = datePart;
   try {
-    await redisClient.set(`cron:lastrun:${jobKey}`, datePart, { EX: 86400 });
+    if (redisClient && redisClient.isOpen) {
+      await redisClient.set(`cron:lastrun:${jobKey}`, datePart, { EX: 86400 });
+    }
   } catch (err) {
     console.error(`[Redis Cron] Failed to set last run for ${jobKey}:`, err.message);
   }
@@ -78,8 +83,17 @@ const runAbandonedCartCheck = async () => {
       items: { $exists: true, $not: { $size: 0 } },
       updatedAt: { $lt: twoHoursAgo, $gt: twentyFourHoursAgo },
       $or: [
-        { lastReminderSentAt: { $exists: false } },
-        { lastReminderSentAt: { $lt: twentyFourHoursAgo } }
+        { reminderCount: { $exists: false } },
+        { reminderCount: { $lt: 2 } }
+      ],
+      $and: [
+        {
+          $or: [
+            { lastReminderSentAt: { $exists: false } },
+            { lastReminderSentAt: null },
+            { lastReminderSentAt: { $lt: twentyFourHoursAgo } }
+          ]
+        }
       ]
     }).populate('user');
 
@@ -91,7 +105,7 @@ const runAbandonedCartCheck = async () => {
     console.log(`[Cron] Found ${abandonedCarts.length} abandoned carts. Sending reminders...`);
     for (let cart of abandonedCarts) {
       try {
-        if (!cart.user) continue;
+        if (!cart.user || !cart.user.fcmToken) continue;
 
         // 1. Push Notification
         await notificationService.sendMarketingNotification(
@@ -105,6 +119,7 @@ const runAbandonedCartCheck = async () => {
         await whatsappService.notifyAbandonedCart(cart.user);
 
         cart.lastReminderSentAt = new Date();
+        cart.reminderCount = (cart.reminderCount || 0) + 1;
         await cart.save();
       } catch (err) {
         console.error(`[Cron] Failed to notify user for cart ${cart._id}:`, err.message);
@@ -121,13 +136,16 @@ const runAbandonedCheckoutCheck = async () => {
   try {
     console.log('[Cron] Checking for Abandoned Checkouts...');
     const thirtyMinsAgo = new Date(Date.now() - 30 * 60 * 1000);
-    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    const fortyEightHoursAgo = new Date(Date.now() - 48 * 60 * 60 * 1000);
 
     const abandonedSessions = await CheckoutSession.find({
       status: 'Pending',
       orderCreated: { $ne: true },
-      createdAt: { $lt: thirtyMinsAgo, $gt: twoHoursAgo },
-      lastReminderSentAt: { $exists: false }
+      createdAt: { $lt: thirtyMinsAgo, $gt: fortyEightHoursAgo },
+      $or: [
+        { reminderCount: { $exists: false } },
+        { reminderCount: { $lt: 2 } }
+      ]
     }).populate('user');
 
     if (abandonedSessions.length === 0) {
@@ -138,7 +156,7 @@ const runAbandonedCheckoutCheck = async () => {
     console.log(`[Cron] Found ${abandonedSessions.length} abandoned checkouts. Sending reminders...`);
     for (let session of abandonedSessions) {
       try {
-        if (!session.user) continue;
+        if (!session.user || !session.user.fcmToken) continue;
 
         // 1. Push Notification
         await notificationService.sendMarketingNotification(
@@ -152,6 +170,7 @@ const runAbandonedCheckoutCheck = async () => {
         await whatsappService.notifyAbandonedCheckout(session.user, session);
 
         session.lastReminderSentAt = new Date();
+        session.reminderCount = (session.reminderCount || 0) + 1;
         await session.save();
       } catch (err) {
         console.error(`[Cron] Failed to notify user for session ${session._id}:`, err.message);
@@ -172,11 +191,21 @@ const runKycUrgencyCheck = async () => {
 
     const usersToRemind = await User.find({
       phoneNumber: { $exists: true, $ne: null, $ne: "" },
+      fcmToken: { $exists: true, $nin: [null, ''] },
       kycStatus: 'pending',
       createdAt: { $lt: thirtyMinsAgo },
       $or: [
-        { lastKycReminderSentAt: { $exists: false } },
-        { lastKycReminderSentAt: { $lt: oneDayAgo } }
+        { kycReminderCount: { $exists: false } },
+        { kycReminderCount: { $lt: 5 } }
+      ],
+      $and: [
+        {
+          $or: [
+            { lastKycReminderSentAt: { $exists: false } },
+            { lastKycReminderSentAt: null },
+            { lastKycReminderSentAt: { $lt: oneDayAgo } }
+          ]
+        }
       ]
     });
 
@@ -192,10 +221,11 @@ const runKycUrgencyCheck = async () => {
           user._id,
           "⏳ अभी तक KYC पूरा नहीं किया?",
           "बस Shop Photo और License Upload करें और Wholesale Rates का फायदा उठाएँ।",
-          "/profile"
+          "/kyc"
         );
 
         user.lastKycReminderSentAt = new Date();
+        user.kycReminderCount = (user.kycReminderCount || 0) + 1;
         await user.save();
       } catch (err) {
         console.error(`[Cron] Failed to send KYC reminder to user ${user._id}:`, err.message);
@@ -207,58 +237,69 @@ const runKycUrgencyCheck = async () => {
   }
 };
 
-// 5. Scheduled Segment Notifications (Every 30 mins)
-const runScheduledSegmentNotifications = async () => {
+// 5. Scheduled Segment Notifications (Runs every 15-30 mins, checks time window for IST)
+const runScheduledSegmentNotifications = async (forcedJob = null) => {
   try {
     // Kolkata is UTC + 5:30. Calculate local Kolkata date/time mathematically
     const date = new Date();
     const kolkataMillis = date.getTime() + (5.5 * 60 * 60 * 1000);
     const kolkataDate = new Date(kolkataMillis);
-    
+
     const hours = kolkataDate.getUTCHours();
     const minutes = kolkataDate.getUTCMinutes();
-    const datePart = `${kolkataDate.getUTCFullYear()}-${kolkataDate.getUTCMonth() + 1}-${kolkataDate.getUTCDate()}`;
+    const currentMinutesOfDay = hours * 60 + minutes;
+    const datePart = `${kolkataDate.getUTCFullYear()}-${String(kolkataDate.getUTCMonth() + 1).padStart(2, '0')}-${String(kolkataDate.getUTCDate()).padStart(2, '0')}`;
 
-    console.log(`[Cron] Checking Scheduled Notifications (Kolkata Time: ${hours}:${minutes}, Date: ${datePart})`);
+    console.log(`[Cron] Checking Scheduled Notifications (Kolkata Time: ${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}, Date: ${datePart}, forcedJob: ${forcedJob || 'auto'})`);
 
-    // 9:00 AM - KYC reminders
-    const lastRun9AM = await getLastRunDate('job9AM');
-    if (hours >= 9 && lastRun9AM !== datePart) {
-      console.log(`[Cron] Triggering 9:00 AM KYC Reminder Job for date ${datePart}`);
-      await setLastRunDate('job9AM', datePart);
-      await pushNotificationSegmentService.trigger9AMJobs();
+    // 1. 9:00 AM (09:00 - 11:00 AM window = 540 to 660 mins) - KYC Reminders (Segment A, B, C)
+    if (forcedJob === '9AM' || forcedJob === 'ALL' || (!forcedJob && currentMinutesOfDay >= 540 && currentMinutesOfDay < 660)) {
+      const lastRun9AM = await getLastRunDate('job9AM');
+      if (forcedJob || lastRun9AM !== datePart) {
+        console.log(`[Cron] Triggering 9:00 AM KYC Reminder Job for date ${datePart}`);
+        await setLastRunDate('job9AM', datePart);
+        await pushNotificationSegmentService.trigger9AMJobs();
+      }
     }
 
-    // 11:30 AM - First order reminders
-    const lastRun1130AM = await getLastRunDate('job1130AM');
-    if ((hours > 11 || (hours === 11 && minutes >= 30)) && lastRun1130AM !== datePart) {
-      console.log(`[Cron] Triggering 11:30 AM First Order Job for date ${datePart}`);
-      await setLastRunDate('job1130AM', datePart);
-      await pushNotificationSegmentService.trigger1130AMJobs();
+    // 2. 11:30 AM (11:30 AM - 13:30 window = 690 to 810 mins) - First Order Reminders (Segment D)
+    if (forcedJob === '1130AM' || forcedJob === 'ALL' || (!forcedJob && currentMinutesOfDay >= 690 && currentMinutesOfDay < 810)) {
+      const lastRun1130AM = await getLastRunDate('job1130AM');
+      if (forcedJob || lastRun1130AM !== datePart) {
+        console.log(`[Cron] Triggering 11:30 AM First Order Job for date ${datePart}`);
+        await setLastRunDate('job1130AM', datePart);
+        await pushNotificationSegmentService.trigger1130AMJobs();
+      }
     }
 
-    // 2:00 PM - Cart & checkout recovery
-    const lastRun2PM = await getLastRunDate('job2PM');
-    if (hours >= 14 && lastRun2PM !== datePart) {
-      console.log(`[Cron] Triggering 2:00 PM Cart & Checkout Recovery Job for date ${datePart}`);
-      await setLastRunDate('job2PM', datePart);
-      await pushNotificationSegmentService.trigger2PMJobs();
+    // 3. 2:00 PM (14:00 - 16:00 window = 840 to 960 mins) - Cart & Checkout Recovery (Segment E, F)
+    if (forcedJob === '2PM' || forcedJob === 'ALL' || (!forcedJob && currentMinutesOfDay >= 840 && currentMinutesOfDay < 960)) {
+      const lastRun2PM = await getLastRunDate('job2PM');
+      if (forcedJob || lastRun2PM !== datePart) {
+        console.log(`[Cron] Triggering 2:00 PM Cart & Checkout Recovery Job for date ${datePart}`);
+        await setLastRunDate('job2PM', datePart);
+        await pushNotificationSegmentService.trigger2PMJobs();
+      }
     }
 
-    // 5:30 PM - New arrivals & offers
-    const lastRun530PM = await getLastRunDate('job530PM');
-    if ((hours > 17 || (hours === 17 && minutes >= 30)) && lastRun530PM !== datePart) {
-      console.log(`[Cron] Triggering 5:30 PM New Arrivals Job for date ${datePart}`);
-      await setLastRunDate('job530PM', datePart);
-      await pushNotificationSegmentService.trigger530PMJobs();
+    // 4. 5:30 PM (17:30 - 19:30 window = 1050 to 1170 mins) - New Arrivals & Offers (Segment H, I + Seasonal/Trust)
+    if (forcedJob === '530PM' || forcedJob === 'ALL' || (!forcedJob && currentMinutesOfDay >= 1050 && currentMinutesOfDay < 1170)) {
+      const lastRun530PM = await getLastRunDate('job530PM');
+      if (forcedJob || lastRun530PM !== datePart) {
+        console.log(`[Cron] Triggering 5:30 PM New Arrivals Job for date ${datePart}`);
+        await setLastRunDate('job530PM', datePart);
+        await pushNotificationSegmentService.trigger530PMJobs();
+      }
     }
 
-    // 8:00 PM - Urgency notifications
-    const lastRun8PM = await getLastRunDate('job8PM');
-    if (hours >= 20 && lastRun8PM !== datePart) {
-      console.log(`[Cron] Triggering 8:00 PM Urgency Job for date ${datePart}`);
-      await setLastRunDate('job8PM', datePart);
-      await pushNotificationSegmentService.trigger8PMJobs();
+    // 5. 8:00 PM (20:00 - 22:00 window = 1200 to 1320 mins) - Urgency & Win-back (Segment G, J + Urgency)
+    if (forcedJob === '8PM' || forcedJob === 'ALL' || (!forcedJob && currentMinutesOfDay >= 1200 && currentMinutesOfDay < 1320)) {
+      const lastRun8PM = await getLastRunDate('job8PM');
+      if (forcedJob || lastRun8PM !== datePart) {
+        console.log(`[Cron] Triggering 8:00 PM Urgency Job for date ${datePart}`);
+        await setLastRunDate('job8PM', datePart);
+        await pushNotificationSegmentService.trigger8PMJobs();
+      }
     }
 
   } catch (error) {
@@ -282,12 +323,12 @@ const runWhatsAppAutomation = async () => {
 };
 
 /**
- * Initialize Fallback Interval-Based Cron Jobs (for local development/non-serverless)
+ * Initialize Fallback Interval-Based Cron Jobs (for local development/persistent server)
  */
 exports.initCronJobs = () => {
-  console.log('--- Background Services Initialized (Orders & Carts) ---');
+  console.log('--- Background Services Initialized (Orders, Carts & Push Notifications) ---');
 
-  // Execute immediately on startup
+  // Execute on startup
   runOrderSync();
   runAbandonedCartCheck();
   runAbandonedCheckoutCheck();
@@ -300,7 +341,7 @@ exports.initCronJobs = () => {
   setInterval(runAbandonedCartCheck, 60 * 60 * 1000);
   setInterval(runAbandonedCheckoutCheck, 30 * 60 * 1000);
   setInterval(runKycUrgencyCheck, 30 * 60 * 1000);
-  setInterval(runScheduledSegmentNotifications, 30 * 60 * 1000);
+  setInterval(() => runScheduledSegmentNotifications(), 15 * 60 * 1000);
   setInterval(runWhatsAppAutomation, 60 * 60 * 1000);
 };
 
