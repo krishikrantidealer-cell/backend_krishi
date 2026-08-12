@@ -219,7 +219,7 @@ class PushNotificationSegmentService {
       case 'E': { // Cart Abandoned (2 reminders max)
         const abandonedCarts = await Cart.find({
           items: { $exists: true, $not: { $size: 0 } },
-          updatedAt: { $lt: oneHourAgo, $gt: sevenDaysAgo },
+          updatedAt: { $lt: thirtyMinsAgo, $gt: sevenDaysAgo },
           $or: [
             { reminderCount: { $exists: false } },
             { reminderCount: { $lt: 2 } }
@@ -470,12 +470,11 @@ class PushNotificationSegmentService {
     const resI = await this.sendToSegment('I');
 
     // If active buyers or VIP buyers were reached, they already got specific H/I content.
-    // For other dealers who have verified KYC and not received marketing today, send Seasonal/Trust
+    // For all other app users who have not received marketing today, send Seasonal / Trust / New Arrivals broadcast
     const randomFallbackType = Math.random() > 0.5 ? 'SEASONAL' : 'TRUST';
     const fallbackTemplate = this.getNotificationForSegment(randomFallbackType);
     const fallbackUsers = await User.find({
       fcmToken: { $exists: true, $nin: [null, ''] },
-      kycStatus: 'verified',
       $or: [
         { lastMarketingNotificationSentAt: { $exists: false } },
         { lastMarketingNotificationSentAt: null },
@@ -497,17 +496,16 @@ class PushNotificationSegmentService {
     return { H: resH.count, I: resI.count, fallbackType: randomFallbackType, fallbackCount };
   }
 
-  // 8:00 PM – Urgency & Win-back (Segment G, J + Urgency fallback)
+  // 8:00 PM – Urgency & Win-back (Segment G, J + Urgency broadcast)
   async trigger8PMJobs() {
     console.log('[SegmentService] --- Triggering 8:00 PM Urgency & Win-back Jobs ---');
     const resG = await this.sendToSegment('G');
     const resJ = await this.sendToSegment('J');
 
-    // For other prospect/unconverted dealers who have not received marketing today, send Urgency
+    // For all other app users who have not received marketing today, send Urgency broadcast
     const urgencyTemplate = this.getNotificationForSegment('URGENCY');
     const urgencyUsers = await User.find({
       fcmToken: { $exists: true, $nin: [null, ''] },
-      kycStatus: 'verified',
       $or: [
         { lastMarketingNotificationSentAt: { $exists: false } },
         { lastMarketingNotificationSentAt: null },

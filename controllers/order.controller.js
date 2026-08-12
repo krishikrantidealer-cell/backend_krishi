@@ -106,7 +106,7 @@ exports.createOrder = async (req, res, next) => {
 
 exports.getMyOrders = async (req, res, next) => {
   try {
-    const orders = await orderService.getUserOrders(req.user._id);
+    let orders = await orderService.getUserOrders(req.user._id);
 
     // Await active order sync with 2s timeout for instant accurate status delivery
     if (orders && Array.isArray(orders)) {
@@ -116,12 +116,13 @@ exports.getMyOrders = async (req, res, next) => {
           Promise.allSettled(activeOrders.map(o => orderService.syncDelhiveryTracking(o._id, req.user._id))),
           new Promise(resolve => setTimeout(resolve, 2000))
         ]);
-        orders = await orderService.getOrdersByUser(req.user._id);
+        orders = await orderService.getUserOrders(req.user._id);
       }
     }
 
     res.json({ success: true, orders });
   } catch (error) {
+    console.error('getMyOrders error:', error);
     res.status(500).json({ success: false, message: 'Failed to fetch orders' });
   }
 };

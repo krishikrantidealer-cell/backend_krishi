@@ -497,9 +497,17 @@ class OrderService {
           if (!order.cancelledAt) order.cancelledAt = new Date();
         }
 
-        // Trigger Notification + WS push if order status or courier status changed
+        // Trigger Notification + WS push + WhatsApp if order status or courier status changed
         if (previousStatus !== order.orderStatus || previousCourierStatus !== order.courierStatus) {
           await order.save();
+
+          // Sync updated order status to Google Sheets (fire-and-forget)
+          try {
+            const sheetsService = require('./sheets.service');
+            sheetsService.updateOrderRow(order).catch(err =>
+              console.error('[Sheets] Failed to update order row from Delhivery sync:', err.message)
+            );
+          } catch (_) {}
 
           const targetUserId = order.user ? order.user.toString() : userId?.toString();
           if (targetUserId) {
@@ -507,9 +515,21 @@ class OrderService {
             notificationService.sendUtilityNotification(
               targetUserId,
               `Order Status Update: ${order.orderStatus}`,
-              `Your order ${order.orderId || ''} status is now ${order.orderStatus}.`,
+              `Your order #${order.orderId || order._id.toString().slice(-6).toUpperCase()} is now ${order.orderStatus}.`,
               `/order_details/${order._id}`
             ).catch(err => console.error('[Notification] Failed to send status update:', err.message));
+
+            // Trigger WhatsApp milestone notifications
+            try {
+              const whatsappAutomationService = require('./whatsappAutomation.service');
+              const User = require('../models/User');
+              User.findById(targetUserId).then(user => {
+                if (!user) return;
+                if (order.orderStatus === 'Shipped') whatsappAutomationService.notifyOrderShipped(user, order).catch(() => {});
+                else if (order.orderStatus === 'Delivered') whatsappAutomationService.notifyOrderDelivered(user, order).catch(() => {});
+                else if (order.orderStatus === 'Cancelled') whatsappAutomationService.notifyOrderCancelled(user, order).catch(() => {});
+              }).catch(() => {});
+            } catch (_) {}
 
             try {
               const { sendToUser, broadcastToRoles } = require('./websocket.service');

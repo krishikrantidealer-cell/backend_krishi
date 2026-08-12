@@ -50,18 +50,19 @@ const runOrderSync = async () => {
   try {
     console.log('[Cron] Starting Automated Order Status Sync...');
     const activeOrders = await Order.find({
+      awbNumber: { $exists: true, $ne: '' },
       orderStatus: { $in: ['Processing', 'Shipped', 'Out for Delivery'] }
     });
 
     if (activeOrders.length === 0) {
-      console.log('[Cron] No active orders to sync.');
+      console.log('[Cron] No active orders with AWB tracking to sync.');
       return;
     }
 
     console.log(`[Cron] Syncing ${activeOrders.length} orders...`);
     for (let order of activeOrders) {
       try {
-        await orderService.syncDelhiveryTracking(order.user, order._id);
+        await orderService.syncDelhiveryTracking(order._id, order.user);
       } catch (err) {
         console.error(`[Cron] Failed to sync order ${order._id}:`, err.message);
       }
