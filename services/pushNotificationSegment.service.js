@@ -405,15 +405,16 @@ class PushNotificationSegmentService {
       try {
         if (isUtility) {
           await notificationService.sendUtilityNotification(user._id, template.title, template.body, targetRoute);
-          user.lastKycReminderSentAt = now;
-          user.kycReminderCount = (user.kycReminderCount || 0) + 1;
+          await User.findByIdAndUpdate(user._id, {
+            $set: { lastKycReminderSentAt: now },
+            $inc: { kycReminderCount: 1 }
+          });
         } else {
           await notificationService.sendMarketingNotification(user._id, template.title, template.body, targetRoute);
-          user.lastMarketingNotificationSentAt = now;
-          user.lastMarketingSegment = segment;
+          await User.findByIdAndUpdate(user._id, {
+            $set: { lastMarketingNotificationSentAt: now, lastMarketingSegment: segment }
+          });
         }
-
-        await user.save();
 
         if (segment === 'E' && user._cartId) {
           await Cart.findByIdAndUpdate(user._cartId, {
@@ -487,9 +488,9 @@ class PushNotificationSegmentService {
     const now = new Date();
     await this.processInBatches(fallbackUsers, 50, async (u) => {
       await notificationService.sendMarketingNotification(u._id, fallbackTemplate.title, fallbackTemplate.body, '/dashboard');
-      u.lastMarketingNotificationSentAt = now;
-      u.lastMarketingSegment = randomFallbackType;
-      await u.save();
+      await User.findByIdAndUpdate(u._id, {
+        $set: { lastMarketingNotificationSentAt: now, lastMarketingSegment: randomFallbackType }
+      });
       fallbackCount++;
     });
 
@@ -518,9 +519,9 @@ class PushNotificationSegmentService {
     const now = new Date();
     await this.processInBatches(urgencyUsers, 50, async (u) => {
       await notificationService.sendMarketingNotification(u._id, urgencyTemplate.title, urgencyTemplate.body, '/dashboard');
-      u.lastMarketingNotificationSentAt = now;
-      u.lastMarketingSegment = 'URGENCY';
-      await u.save();
+      await User.findByIdAndUpdate(u._id, {
+        $set: { lastMarketingNotificationSentAt: now, lastMarketingSegment: 'URGENCY' }
+      });
       urgencyCount++;
     });
 

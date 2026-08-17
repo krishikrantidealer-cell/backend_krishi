@@ -2,6 +2,9 @@ const admin = require('firebase-admin');
 const User = require('../models/User');
 const Notification = require('../models/Notification');
 
+const path = require('path');
+const fs = require('fs');
+
 try {
   if (!admin.apps.length) {
     let credential;
@@ -9,12 +12,12 @@ try {
       credential = admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT));
       console.log("Firebase Admin initialized via FIREBASE_SERVICE_ACCOUNT env var.");
     } else {
-      try {
-        const serviceAccount = require('../serviceAccountKey.json');
+      const localKeyPath = path.join(__dirname, '../serviceAccountKey.json');
+      if (fs.existsSync(localKeyPath)) {
+        const serviceAccount = JSON.parse(fs.readFileSync(localKeyPath, 'utf8'));
         credential = admin.credential.cert(serviceAccount);
-        console.log("Firebase Admin initialized via local serviceAccountKey.json.");
-      } catch (err) {
-        // Fallback to Application Default Credentials on GCP
+        console.log(`Firebase Admin initialized via local serviceAccountKey.json (Project: ${serviceAccount.project_id}).`);
+      } else {
         credential = admin.credential.applicationDefault();
         console.log("Firebase Admin initialized via Application Default Credentials.");
       }
