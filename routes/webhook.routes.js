@@ -1,8 +1,12 @@
 const express = require('express');
 const router = express.Router();
-const { handleWebhook } = require('../controllers/webhook.controller');
+const { verifyMetaWebhook, handleMetaLeadWebhook } = require('../controllers/metaWebhook.controller');
 
-// MyOperator WABA Webhook — Public endpoint (no auth required; MyOperator POSTs here)
-router.post('/myoperator/webhook', handleWebhook);
+// Meta Lead Ads Webhook (supports both /api/meta-lead and /api/webhooks/meta-lead)
+router.get('/meta-lead', verifyMetaWebhook);
+router.post('/meta-lead', handleMetaLeadWebhook);
+
+router.get('/webhooks/meta-lead', verifyMetaWebhook);
+router.post('/webhooks/meta-lead', handleMetaLeadWebhook);
 
 module.exports = router;
