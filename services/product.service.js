@@ -237,12 +237,12 @@ class ProductService {
     const mongoose = require('mongoose');
     const categories = await Category.find({}).lean();
 
-    // Dynamically fallback to matching category card banners from seeded Banners collection if missing
+    // Dynamically fallback to matching category card banners from Banners collection only if missing
     const missingBanners = categories.some(cat => !cat.bannerImage);
     if (missingBanners) {
       try {
-        const Banner = mongoose.models.Banner || mongoose.model('Banner');
-        const bannersDocs = await Banner.find({ isActive: true, type: 'category_card' }).lean();
+        const Banner = mongoose.models.Banner || mongoose.model("Banner");
+        const bannersDocs = await Banner.find({ isActive: true, type: "category_card" }).sort({ priority: 1 }).lean();
 
         const categoryCardBanners = [];
         bannersDocs.forEach(doc => {
@@ -261,42 +261,46 @@ class ProductService {
           }
         });
 
-        categories.forEach(cat => {
-          if (!cat.bannerImage) {
-            const cleanName = cat.name.trim().toLowerCase();
-            const cleanNameNoHyphen = cleanName.replaceAll('-', '').replaceAll(' ', '');
+        if (categoryCardBanners.length > 0) {
+          const clean = (str) => (str || "").toString().trim().toLowerCase().replace(/[-_\s]+/g, "");
 
-            // Try to match by target or title
-            let matchedBanner = categoryCardBanners.find(b => {
-              const titleLower = (b.title || '').toLowerCase();
-              const targetLower = (b.redirectTarget || '').toLowerCase();
-              return titleLower.includes(cleanName) ||
-                targetLower === cleanName ||
-                titleLower.includes(cleanNameNoHyphen);
-            });
+          categories.forEach((cat, index) => {
+            if (!cat.bannerImage) {
+              const catId = (cat._id || cat.id || "").toString().trim();
+              const catName = clean(cat.name);
+              const catSlug = clean(cat.slug);
 
-            if (!matchedBanner) {
-              // Try matching by image URL path keywords
-              matchedBanner = categoryCardBanners.find(b => {
-                const urlLower = (b.imageUrl || '').toLowerCase();
-                return urlLower.includes(`/${cleanName}.`) ||
-                  urlLower.includes(`/${cleanName}%`) ||
-                  urlLower.includes(`_${cleanName}`) ||
-                  urlLower.includes(cleanName) ||
-                  urlLower.includes(cleanNameNoHyphen);
+              let matchedBanner = categoryCardBanners.find(b => {
+                const targetRaw = (b.redirectTarget || "").toString().trim();
+                const targetClean = clean(targetRaw);
+                return (targetRaw && targetRaw === catId) ||
+                       (targetClean && (targetClean === catName || (catSlug && targetClean === catSlug)));
               });
-            }
 
-            if (matchedBanner) {
-              cat.bannerImage = matchedBanner.imageUrl;
+              if (!matchedBanner) {
+                matchedBanner = categoryCardBanners.find(b => {
+                  const titleClean = clean(b.title);
+                  return titleClean && (titleClean === catName || (catSlug && titleClean === catSlug) || titleClean.includes(catName) || catName.includes(titleClean));
+                });
+              }
+
+              if (!matchedBanner) {
+                matchedBanner = categoryCardBanners.find(b => {
+                  const urlClean = clean(b.imageUrl);
+                  return urlClean && (urlClean.includes(catName) || (catSlug && urlClean.includes(catSlug)));
+                });
+              }
+
+              if (matchedBanner && matchedBanner.imageUrl) {
+                cat.bannerImage = matchedBanner.imageUrl;
+              }
             }
-          }
-        });
+          });
+        }
       } catch (err) {
-        console.error('Error matching category banners:', err);
+        console.error("Error matching category banners:", err);
       }
     }
-
     try {
       await cacheService.set(cacheKey, categories, 86400); // Cache for 24 hours
     } catch (_) { }

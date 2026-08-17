@@ -147,7 +147,7 @@ exports.getHomeDiscovery = async (req, res, next) => {
       .sort({ priority: -1, name: 1 })
       .lean();
 
-    const bannersDocs = await Banner.find({ isActive: true, type: { $in: ['home', 'category', 'category_card', 'custom_collections', 'best_offers', 'strip'] } })
+    const bannersDocs = await Banner.find({ isActive: true, type: { $in: ['home', 'category', 'category_card', 'custom_collections', 'best_offers', 'strip', 'home_trust', 'category_trust'] } })
       .sort({ priority: 1 })
       .lean();
 
@@ -167,6 +167,8 @@ exports.getHomeDiscovery = async (req, res, next) => {
     let formattedCategoryCardBanners = [];
     let bestOffersBanners = [];
     let stripBanners = [];
+    let homeTrustBanner = null;
+    let categoryTrustBanner = null;
     bannersList.forEach(doc => {
       if (doc.homebanners && Array.isArray(doc.homebanners)) {
         doc.homebanners.forEach((url, index) => {
@@ -232,6 +234,10 @@ exports.getHomeDiscovery = async (req, res, next) => {
           bestOffersBanners.push(doc);
         } else if (doc.type === 'strip') {
           stripBanners.push(doc);
+        } else if (doc.type === 'home_trust') {
+          homeTrustBanner = doc;
+        } else if (doc.type === 'category_trust') {
+          categoryTrustBanner = doc;
         }
       }
     });
@@ -336,6 +342,8 @@ exports.getHomeDiscovery = async (req, res, next) => {
       categoryCardBanners: formattedCategoryCardBanners,
       bestOffersBanners,
       stripBanners,
+      homeTrustBanner,
+      categoryTrustBanner,
       categories,
       featuredProducts: featuredResult.products,
       collections: collectionsWithProducts
@@ -668,6 +676,26 @@ exports.createSubCategory = async (req, res, next) => {
     const oldCategory = JSON.parse(JSON.stringify(category));
     await category.save();
 
+    // Sync bannerImage to Banner collection if type is category_card
+    if (category.bannerImage) {
+      try {
+        const Banner = require("../models/Banner");
+        const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+        await Banner.updateMany(
+          {
+            type: "category_card",
+            $or: [
+              { redirectTarget: new RegExp(`^${name.trim()}$`, "i") },
+              { redirectTarget: new RegExp(`^${slug}$`, "i") },
+              { redirectTarget: id },
+              { title: new RegExp(`^${name.trim()}$`, "i") }
+            ]
+          },
+          { $set: { imageUrl: category.bannerImage } }
+        );
+      } catch (_) {}
+    }
+
     // Audit Log: Category Updated
     auditService.logAction({
       adminId: req.user._id,
@@ -941,6 +969,26 @@ exports.updateCategory = async (req, res, next) => {
     const oldCategory = JSON.parse(JSON.stringify(category));
     await category.save();
 
+    // Sync bannerImage to Banner collection if type is category_card
+    if (category.bannerImage) {
+      try {
+        const Banner = require("../models/Banner");
+        const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+        await Banner.updateMany(
+          {
+            type: "category_card",
+            $or: [
+              { redirectTarget: new RegExp(`^${name.trim()}$`, "i") },
+              { redirectTarget: new RegExp(`^${slug}$`, "i") },
+              { redirectTarget: id },
+              { title: new RegExp(`^${name.trim()}$`, "i") }
+            ]
+          },
+          { $set: { imageUrl: category.bannerImage } }
+        );
+      } catch (_) {}
+    }
+
     // Audit Log: Category Updated
     auditService.logAction({
       adminId: req.user._id,
@@ -1058,6 +1106,26 @@ exports.updateSubCategory = async (req, res, next) => {
     const oldCategory = JSON.parse(JSON.stringify(category));
     await category.save();
 
+    // Sync bannerImage to Banner collection if type is category_card
+    if (category.bannerImage) {
+      try {
+        const Banner = require("../models/Banner");
+        const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+        await Banner.updateMany(
+          {
+            type: "category_card",
+            $or: [
+              { redirectTarget: new RegExp(`^${name.trim()}$`, "i") },
+              { redirectTarget: new RegExp(`^${slug}$`, "i") },
+              { redirectTarget: id },
+              { title: new RegExp(`^${name.trim()}$`, "i") }
+            ]
+          },
+          { $set: { imageUrl: category.bannerImage } }
+        );
+      } catch (_) {}
+    }
+
     // Audit Log: Category Updated
     auditService.logAction({
       adminId: req.user._id,
@@ -1103,6 +1171,26 @@ exports.deleteSubCategory = async (req, res, next) => {
     category.subCategories.splice(subIndex, 1);
     const oldCategory = JSON.parse(JSON.stringify(category));
     await category.save();
+
+    // Sync bannerImage to Banner collection if type is category_card
+    if (category.bannerImage) {
+      try {
+        const Banner = require("../models/Banner");
+        const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+        await Banner.updateMany(
+          {
+            type: "category_card",
+            $or: [
+              { redirectTarget: new RegExp(`^${name.trim()}$`, "i") },
+              { redirectTarget: new RegExp(`^${slug}$`, "i") },
+              { redirectTarget: id },
+              { title: new RegExp(`^${name.trim()}$`, "i") }
+            ]
+          },
+          { $set: { imageUrl: category.bannerImage } }
+        );
+      } catch (_) {}
+    }
 
     // Audit Log: Category Updated
     auditService.logAction({

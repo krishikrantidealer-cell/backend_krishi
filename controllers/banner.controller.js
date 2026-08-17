@@ -1,3 +1,28 @@
+
+async function syncBannerToCategory(bannerDoc) {
+  if (bannerDoc.type === "category_card" && bannerDoc.imageUrl) {
+    try {
+      const Category = require("../models/Category");
+      const mongoose = require("mongoose");
+      const target = (bannerDoc.redirectTarget || bannerDoc.title || "").trim();
+      if (target) {
+        const orConditions = [
+          { name: new RegExp(`^${target}$`, "i") },
+          { slug: new RegExp(`^${target}$`, "i") }
+        ];
+        if (mongoose.Types.ObjectId.isValid(target)) {
+          orConditions.push({ _id: target });
+        }
+        await Category.updateMany(
+          { $or: orConditions },
+          { $set: { bannerImage: bannerDoc.imageUrl } }
+        );
+      }
+    } catch (_) {}
+  }
+}
+
+const cacheService = require('../utils/cache');
 const Banner = require('../models/Banner');
 const { uploadToGCS, deleteFromGCS } = require('../utils/gcs');
 
@@ -84,6 +109,8 @@ exports.createBanner = async (req, res, next) => {
     });
 
     await banner.save();
+    await syncBannerToCategory(banner);
+    try { await cacheService.del('categories:hierarchy'); await cacheService.delByPattern('products:*'); } catch (_) {}
 
     res.status(201).json({
       success: true,
@@ -127,6 +154,8 @@ exports.updateBanner = async (req, res, next) => {
     if (redirectTarget !== undefined) banner.redirectTarget = redirectTarget;
 
     await banner.save();
+    await syncBannerToCategory(banner);
+    try { await cacheService.del('categories:hierarchy'); await cacheService.delByPattern('products:*'); } catch (_) {}
 
     res.json({
       success: true,
@@ -153,6 +182,8 @@ exports.toggleBannerActive = async (req, res, next) => {
 
     banner.isActive = !banner.isActive;
     await banner.save();
+    await syncBannerToCategory(banner);
+    try { await cacheService.del('categories:hierarchy'); await cacheService.delByPattern('products:*'); } catch (_) {}
 
     res.json({
       success: true,
@@ -183,6 +214,7 @@ exports.deleteBanner = async (req, res, next) => {
     }
 
     await Banner.findByIdAndDelete(req.params.id);
+    try { await cacheService.del('categories:hierarchy'); await cacheService.delByPattern('products:*'); } catch (_) {}
 
     res.json({
       success: true,
