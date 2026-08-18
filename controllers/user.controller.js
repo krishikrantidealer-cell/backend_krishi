@@ -1,4 +1,5 @@
 const userService = require('../services/user.service');
+const User = require('../models/User');
 const { processAndUploadKycDocument } = require('../utils/gcs');
 const Notification = require('../models/Notification');
 const auditService = require('../services/audit.service');
