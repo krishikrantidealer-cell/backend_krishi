@@ -17,6 +17,9 @@ const orderItemSchema = new mongoose.Schema({
   vendor: {
     type: String
   },
+  technicalName: {
+    type: String
+  },
   image: {
     type: String
   },
@@ -32,6 +35,19 @@ const orderItemSchema = new mongoose.Schema({
   variant: {
     type: String,
     default: 'Standard'
+  },
+  packVolume: {
+    type: Number
+  },
+  basePackingUnit: {
+    type: String
+  },
+  basePacking: {
+    type: String
+  },
+  isCustomBasePack: {
+    type: Boolean,
+    default: false
   }
 });
 
