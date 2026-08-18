@@ -113,6 +113,9 @@ class OrderService {
       throw new Error('Your cart is empty');
     }
 
+    const cartService = require('./cart.service');
+    cartService.calculateTotal(cart);
+
     // 2. Take a snapshot of the cart items (with safety checks)
     const orderItems = cart.items
       .filter(item => item.product) // Skip items where product was deleted
@@ -243,6 +246,9 @@ class OrderService {
     if (!cart || cart.items.length === 0) {
       throw new Error('Your cart is empty');
     }
+
+    const cartService = require('./cart.service');
+    cartService.calculateTotal(cart);
 
     // 2. Calculate final price with Coupon
     let finalAmount = cart.totalAmount;

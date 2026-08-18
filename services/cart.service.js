@@ -29,6 +29,13 @@ async function runLocked(userId, fn) {
   return resultPromise;
 }
 
+function parseRateValue(val) {
+  if (val == null) return null;
+  const clean = val.toString().replace(/[^0-9.]/g, '');
+  const parsed = parseFloat(clean);
+  return isNaN(parsed) ? null : parsed;
+}
+
 function getCorrectPrice(variant, totalVolume) {
   if (variant.priceTiers && variant.priceTiers.length > 0 && variant.rates) {
     const tiersWithMin = [];
@@ -61,14 +68,21 @@ function getCorrectPrice(variant, totalVolume) {
     for (const tier of tiersWithMin) {
       if (totalVolume >= tier.min) {
         const rateVal = variant.rates.get ? variant.rates.get(tier.id) : variant.rates[tier.id];
-        if (rateVal) {
-          const numMatch = rateVal.match(/^([0-9.]+)/);
-          if (numMatch) {
-            return parseFloat(numMatch[1]);
-          }
+        const parsedRate = parseRateValue(rateVal);
+        if (parsedRate !== null && parsedRate > 0) {
+          return parsedRate;
         }
       }
     }
+  }
+
+  // Legacy fallback if dynamic priceTiers are not set
+  if (totalVolume >= 50.0 && variant.price50_plus > 0) {
+    return variant.price50_plus;
+  } else if (totalVolume >= 30.0 && variant.price30_50 > 0) {
+    return variant.price30_50;
+  } else if (totalVolume >= 10.0 && variant.price10_30 > 0) {
+    return variant.price10_30;
   }
 
   return variant.price;
@@ -287,92 +301,26 @@ class CartService {
 
   async syncCart(userId, itemsList) {
     return runLocked(userId, async () => {
-      // --- Fast Path: Pure quantity updates with no coupon applied ---
-      // Check upfront if ALL updates are simple qty changes (no deletions, no new items)
-      // If so, use a single atomic findOneAndUpdate to halve the number of DB round trips.
-      const cart = await Cart.findOne({ user: userId }).lean();
+      let cart = await Cart.findOne({ user: userId });
+      if (!cart) {
+        cart = new Cart({ user: userId, items: [], totalAmount: 0 });
+      }
 
-      const hasNoCoupon = !cart?.appliedCoupon;
-      const allSimpleUpdates = cart && itemsList.every(({ variantId, quantity }) => {
-        const qty = parseInt(quantity);
-        if (qty <= 0) return false; // deletion — needs full path
-        return cart.items.some(item => item.variantId.toString() === variantId);
-      });
+      for (const itemUpdate of itemsList) {
+        const { variantId, quantity } = itemUpdate;
+        const targetQuantity = parseInt(quantity);
 
-      if (hasNoCoupon && allSimpleUpdates) {
-        // Build atomic $set operations for each quantity update
-        const bulkOps = [];
-        let newTotal = 0;
-
-        // Calculate new total using stored prices
-        const updatedQtyMap = {};
-        for (const { variantId, quantity } of itemsList) {
-          updatedQtyMap[variantId] = parseInt(quantity);
-        }
-
-        for (const item of cart.items) {
-          const vId = item.variantId.toString();
-          const qty = updatedQtyMap[vId] ?? item.quantity;
-          newTotal += item.price * qty;
-        }
-
-        // Build positional update for each variant
-        const update = { $set: { totalAmount: newTotal, finalAmount: newTotal } };
-        for (const { variantId, quantity } of itemsList) {
-          const idx = cart.items.findIndex(i => i.variantId.toString() === variantId);
-          if (idx !== -1) {
-            update.$set[`items.${idx}.quantity`] = parseInt(quantity);
-          }
-        }
-
-        const updatedCart = await Cart.findOneAndUpdate(
-          { user: userId },
-          update,
-          { new: true }
+        const existingItemIndex = cart.items.findIndex(
+          item => item.variantId && item.variantId.toString() === variantId
         );
-
-        return updatedCart;
-      }
-
-      // --- Full Path: New items, deletions, or coupon recalculation ---
-      let fullCart = await Cart.findOne({ user: userId });
-      if (!fullCart) {
-        fullCart = new Cart({ user: userId, items: [], totalAmount: 0 });
-      }
-
-      let hasNewItem = false;
-
-      // First pass: identify if any new items need to be added
-      for (const itemUpdate of itemsList) {
-        const { variantId, quantity } = itemUpdate;
-        const targetQuantity = parseInt(quantity);
-        if (targetQuantity > 0) {
-          const existingItemIndex = fullCart.items.findIndex(item => item.variantId.toString() === variantId);
-          if (existingItemIndex === -1) {
-            hasNewItem = true;
-            break;
-          }
-        }
-      }
-
-      // Only populate if we need product data for a new item
-      if (hasNewItem) {
-        await fullCart.populate('items.product', 'title brandName technicalName vendor images variants');
-      }
-
-      for (const itemUpdate of itemsList) {
-        const { variantId, quantity } = itemUpdate;
-        const targetQuantity = parseInt(quantity);
-
-        const existingItemIndex = fullCart.items.findIndex(item => item.variantId.toString() === variantId);
 
         if (targetQuantity <= 0) {
           if (existingItemIndex > -1) {
-            fullCart.items.splice(existingItemIndex, 1);
+            cart.items.splice(existingItemIndex, 1);
           }
         } else {
           if (existingItemIndex > -1) {
-            fullCart.items[existingItemIndex].quantity = targetQuantity;
+            cart.items[existingItemIndex].quantity = targetQuantity;
           } else {
             const product = await Product.findOne({ 'variants._id': variantId });
             if (!product) continue;
@@ -380,7 +328,7 @@ class CartService {
             const variant = product.variants.id(variantId);
             if (!variant) continue;
 
-            fullCart.items.push({
+            cart.items.push({
               product: product._id,
               variantId: variantId,
               quantity: targetQuantity,
@@ -390,15 +338,13 @@ class CartService {
         }
       }
 
-      // Re-populate only if new items were added (needed for calculateTotal to read variants)
-      if (hasNewItem) {
-        await fullCart.populate('items.product', 'title brandName technicalName vendor images variants');
-      }
+      // Always populate product variants so calculateTotal can compute dynamic tier prices accurately
+      await cart.populate('items.product', 'title brandName technicalName vendor images variants');
 
-      this.calculateTotal(fullCart);
-      await this.recalculateCoupon(fullCart, userId);
-      await fullCart.save();
-      return fullCart;
+      this.calculateTotal(cart);
+      await this.recalculateCoupon(cart, userId);
+      await cart.save();
+      return cart;
     });
   }
 }

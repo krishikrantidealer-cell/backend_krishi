@@ -140,7 +140,11 @@ class PushNotificationSegmentService {
     const fortyEightHoursAgo = new Date(now.getTime() - 48 * 60 * 60 * 1000);
     const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+
     const validFcmTokenQuery = {
+      isDeleted: { $ne: true },
       fcmToken: { $exists: true, $nin: [null, ''] }
     };
 
@@ -148,23 +152,24 @@ class PushNotificationSegmentService {
       case 'A': // Installed → KYC Not Started (Daily, 3–5 days cap)
         return await User.find({
           ...validFcmTokenQuery,
-          kycStatus: 'pending',
+          role: 'user',
+          kycStatus: { $in: ['pending', 'not_started'] },
           isKycComplete: { $ne: true },
           $and: [
             { $or: [{ shopImage: { $exists: false } }, { shopImage: null }, { shopImage: '' }] },
             { $or: [{ licenceImage: { $exists: false } }, { licenceImage: null }, { licenceImage: '' }] },
-            { $or: [{ gstNumber: { $exists: false } }, { gstNumber: null }, { gstNumber: '' }] }
-          ],
-          $or: [
-            { kycReminderCount: { $exists: false } },
-            { kycReminderCount: { $lt: 5 } }
-          ],
-          $and: [
+            { $or: [{ gstNumber: { $exists: false } }, { gstNumber: null }, { gstNumber: '' }] },
+            {
+              $or: [
+                { kycReminderCount: { $exists: false } },
+                { kycReminderCount: { $lt: 5 } }
+              ]
+            },
             {
               $or: [
                 { lastKycReminderSentAt: { $exists: false } },
                 { lastKycReminderSentAt: null },
-                { lastKycReminderSentAt: { $lt: oneDayAgo } }
+                { lastKycReminderSentAt: { $lt: startOfToday } }
               ]
             }
           ]
@@ -173,19 +178,22 @@ class PushNotificationSegmentService {
       case 'B': // KYC Started → Docs Pending (Daily)
         return await User.find({
           ...validFcmTokenQuery,
+          role: 'user',
           kycStatus: { $in: ['pending', 'rejected'] },
           isKycComplete: { $ne: true },
-          $or: [
-            { shopImage: { $nin: [null, ''] } },
-            { licenceImage: { $nin: [null, ''] } },
-            { gstNumber: { $nin: [null, ''] } }
-          ],
           $and: [
+            {
+              $or: [
+                { shopImage: { $nin: [null, ''] } },
+                { licenceImage: { $nin: [null, ''] } },
+                { gstNumber: { $nin: [null, ''] } }
+              ]
+            },
             {
               $or: [
                 { lastKycReminderSentAt: { $exists: false } },
                 { lastKycReminderSentAt: null },
-                { lastKycReminderSentAt: { $lt: oneDayAgo } }
+                { lastKycReminderSentAt: { $lt: startOfToday } }
               ]
             }
           ]
@@ -194,11 +202,12 @@ class PushNotificationSegmentService {
       case 'C': // KYC Under Review (Once/day)
         return await User.find({
           ...validFcmTokenQuery,
+          role: 'user',
           kycStatus: { $in: ['submitted', 'processing'] },
           $or: [
             { lastKycReminderSentAt: { $exists: false } },
             { lastKycReminderSentAt: null },
-            { lastKycReminderSentAt: { $lt: oneDayAgo } }
+            { lastKycReminderSentAt: { $lt: startOfToday } }
           ]
         });
 
@@ -211,7 +220,7 @@ class PushNotificationSegmentService {
           $or: [
             { lastMarketingNotificationSentAt: { $exists: false } },
             { lastMarketingNotificationSentAt: null },
-            { lastMarketingNotificationSentAt: { $lt: oneDayAgo } }
+            { lastMarketingNotificationSentAt: { $lt: startOfToday } }
           ]
         });
       }
