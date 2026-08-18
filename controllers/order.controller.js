@@ -629,6 +629,17 @@ exports.adminCreateOrder = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'paymentId (transaction reference) is required' });
     }
 
+    // Auto-assign buyer to sales agent if creator is sales and buyer has no agent
+    if (req.user.role === 'sales') {
+      const User = require('../models/User');
+      const buyer = await User.findById(userId);
+      if (buyer && !buyer.assignedAgent) {
+        buyer.assignedAgent = req.user._id;
+        buyer.assignedAt = new Date();
+        await buyer.save().catch(e => console.error('[Order] Auto-assign buyer error:', e.message));
+      }
+    }
+
     // Prevent duplicate orders for the same payment reference
     // We only check if the paymentId is not a generic one like 'CASH' or 'UPI'
     const genericIds = ['CASH', 'UPI', 'BANK TRANSFER', 'OFFLINE'];

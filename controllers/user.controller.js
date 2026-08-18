@@ -625,11 +625,14 @@ exports.createDealer = async (req, res, next) => {
     }
 
     // Determine assigned agent
+    const mongoose = require('mongoose');
     let targetAgentId = null;
     if (req.user.role === 'sales') {
       targetAgentId = req.user._id;
-    } else if (assignedAgent && String(assignedAgent).trim() !== '' && assignedAgent !== '-') {
-      targetAgentId = assignedAgent;
+    } else if (assignedAgent && String(assignedAgent).trim() !== '' && String(assignedAgent) !== '-' && String(assignedAgent) !== 'null' && String(assignedAgent) !== 'undefined') {
+      if (mongoose.Types.ObjectId.isValid(assignedAgent)) {
+        targetAgentId = new mongoose.Types.ObjectId(assignedAgent);
+      }
     }
 
     // Check if user already exists
@@ -740,10 +743,12 @@ exports.createDealer = async (req, res, next) => {
         }
       } catch (wsErr) {}
 
+      const populatedUser = await User.findById(existingUser._id).populate('assignedAgent', 'firstName lastName phoneNumber email');
+
       return res.status(200).json({
         success: true,
         message: 'Existing lead upgraded to verified dealer successfully',
-        user: existingUser
+        user: populatedUser || existingUser
       });
     }
 
@@ -823,10 +828,12 @@ exports.createDealer = async (req, res, next) => {
       }
     } catch (wsErr) {}
 
+    const populatedDealer = await User.findById(newDealer._id).populate('assignedAgent', 'firstName lastName phoneNumber email');
+
     res.status(201).json({
       success: true,
       message: 'Dealer created successfully',
-      user: newDealer
+      user: populatedDealer || newDealer
     });
   } catch (error) {
     next(error);
