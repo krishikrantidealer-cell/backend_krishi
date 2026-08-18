@@ -587,6 +587,205 @@ exports.adminSubmitKyc = async (req, res, next) => {
   }
 };
 
+exports.createDealer = async (req, res, next) => {
+  try {
+    let {
+      phoneNumber,
+      firstName,
+      lastName,
+      shopName,
+      gstNumber,
+      email,
+      address,
+      assignedAgent,
+      notes
+    } = req.body;
+
+    // Clean phone number
+    let cleanPhone = String(phoneNumber || '').replace(/[^\d]/g, '');
+    if (cleanPhone.startsWith('91') && cleanPhone.length === 12) {
+      cleanPhone = cleanPhone.substring(2);
+    } else if (cleanPhone.startsWith('0') && cleanPhone.length === 11) {
+      cleanPhone = cleanPhone.substring(1);
+    }
+
+    if (!cleanPhone || cleanPhone.length < 10) {
+      return res.status(400).json({ success: false, message: 'Valid 10-digit phone number is required' });
+    }
+
+    // Determine assigned agent
+    let targetAgentId = null;
+    if (req.user.role === 'sales') {
+      targetAgentId = req.user._id;
+    } else if (assignedAgent && String(assignedAgent).trim() !== '' && assignedAgent !== '-') {
+      targetAgentId = assignedAgent;
+    }
+
+    // Check if user already exists
+    let existingUser = await User.findOne({ phoneNumber: cleanPhone });
+
+    if (existingUser) {
+      if (existingUser.kycStatus === 'verified') {
+        return res.status(400).json({
+          success: false,
+          message: `A verified dealer with phone ${cleanPhone} already exists (${existingUser.shopName || existingUser.firstName}).`
+        });
+      }
+
+      // Upgrade existing lead/prospect to verified dealer
+      existingUser.firstName = firstName || existingUser.firstName;
+      existingUser.lastName = lastName !== undefined ? lastName : existingUser.lastName;
+      existingUser.shopName = shopName || existingUser.shopName;
+      if (gstNumber) existingUser.gstNumber = gstNumber;
+      if (email && !existingUser.email) existingUser.email = email;
+      if (address) {
+        existingUser.address = {
+          ...existingUser.address,
+          ...address
+        };
+      }
+      existingUser.role = 'user';
+      existingUser.userType = 'retailer';
+      existingUser.kycStatus = 'verified';
+      existingUser.isKycComplete = true;
+      existingUser.isVerified = true;
+      existingUser.status = 'verified';
+      existingUser.kycApprovedAt = new Date();
+      if (targetAgentId) {
+        existingUser.assignedAgent = targetAgentId;
+        existingUser.assignedAt = new Date();
+      }
+
+      const creatorName = `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || req.user.email || 'Admin';
+      const creationNote = notes || `Upgraded to Verified Dealer directly from KD Panel by ${creatorName}`;
+      existingUser.notes = existingUser.notes ? `${existingUser.notes}\n\n${creationNote}` : creationNote;
+      existingUser.notesHistory = existingUser.notesHistory || [];
+      existingUser.notesHistory.push({
+        title: 'Upgraded to Dealer in KD Panel',
+        note: creationNote,
+        adminId: req.user._id,
+        adminName: creatorName,
+        createdAt: new Date(),
+        type: 'general',
+        priority: 'high',
+        status: 'verified'
+      });
+
+      await existingUser.save();
+
+      // Audit Log
+      try {
+        auditService.logAction({
+          adminId: req.user._id,
+          adminEmail: req.user.email,
+          action: 'LEAD_UPGRADED_TO_DEALER',
+          targetId: existingUser._id,
+          targetModel: 'User',
+          details: `Lead ${cleanPhone} upgraded to verified dealer by ${creatorName}`,
+        }, req);
+      } catch (e) {}
+
+      // WebSockets
+      try {
+        const { broadcastToRoles, sendToUser } = require('../services/websocket.service');
+        broadcastToRoles(['admin', 'sales'], { type: 'DEALERS_UPDATE' });
+        broadcastToRoles(['admin', 'sales'], { type: 'LEADS_UPDATE' });
+        if (targetAgentId) {
+          sendToUser(targetAgentId.toString(), { type: 'DEALERS_UPDATE' });
+        }
+      } catch (wsErr) {}
+
+      return res.status(200).json({
+        success: true,
+        message: 'Existing lead upgraded to verified dealer successfully',
+        user: existingUser
+      });
+    }
+
+    // New User creation
+    const creatorName = `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || req.user.email || 'Admin';
+    const creationNote = notes || `Created as Verified Dealer directly from KD Panel by ${creatorName}`;
+
+    const newDealer = await User.create({
+      phoneNumber: cleanPhone,
+      email: email && email.trim() !== '' ? email.trim() : undefined,
+      firstName: firstName.trim(),
+      lastName: (lastName || '').trim(),
+      shopName: shopName.trim(),
+      gstNumber: gstNumber ? gstNumber.trim() : undefined,
+      address: {
+        villageArea: address?.villageArea || '',
+        addressLine2: address?.addressLine2 || '',
+        address2: address?.address2 || '',
+        cityTehsil: address?.cityTehsil || '',
+        state: address?.state || '',
+        pincode: address?.pincode || ''
+      },
+      addressType: 'Shop',
+      role: 'user',
+      userType: 'retailer',
+      kycStatus: 'verified',
+      isKycComplete: true,
+      isVerified: true,
+      isProfileComplete: true,
+      source: 'KD Panel',
+      status: 'verified',
+      monthlyTarget: 500000,
+      preferredLanguage: 'en',
+      isBlocked: false,
+      isDeleted: false,
+      whatsappSequence: 0,
+      shippingAddresses: [],
+      assignedAgent: targetAgentId || null,
+      assignedAt: targetAgentId ? new Date() : null,
+      kycApprovedAt: new Date(),
+      notes: creationNote,
+      notesHistory: [
+        {
+          title: 'Dealer Created in KD Panel',
+          note: creationNote,
+          adminId: req.user._id,
+          adminName: creatorName,
+          createdAt: new Date(),
+          type: 'general',
+          priority: 'high',
+          status: 'verified'
+        }
+      ]
+    });
+
+    // Audit Log
+    try {
+      auditService.logAction({
+        adminId: req.user._id,
+        adminEmail: req.user.email,
+        action: 'DEALER_CREATED',
+        targetId: newDealer._id,
+        targetModel: 'User',
+        details: `Created verified dealer ${cleanPhone} (${newDealer.shopName}) by ${creatorName}`,
+      }, req);
+    } catch (e) {}
+
+    // Broadcast WebSockets
+    try {
+      const { broadcastToRoles, sendToUser } = require('../services/websocket.service');
+      broadcastToRoles(['admin', 'sales'], { type: 'DEALERS_UPDATE' });
+      broadcastToRoles(['admin', 'sales'], { type: 'LEADS_UPDATE' });
+      if (targetAgentId) {
+        sendToUser(targetAgentId.toString(), { type: 'DEALERS_UPDATE' });
+      }
+    } catch (wsErr) {}
+
+    res.status(201).json({
+      success: true,
+      message: 'Dealer created successfully',
+      user: newDealer
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 exports.adminUpdateUser = async (req, res, next) => {
   try {
     const { userId } = req.params;

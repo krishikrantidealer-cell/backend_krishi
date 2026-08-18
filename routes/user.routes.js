@@ -110,6 +110,19 @@ router.get('/', authorizeRoles('admin', 'sales'), userController.getAllUsers);
 // Daily Lead & KYC Stats (Admin and Sales)
 router.get('/daily-lead-stats', authorizeRoles('admin', 'sales'), userController.getDailyLeadStats);
 
+// Create Dealer (Admin and Sales)
+router.post(
+  '/dealer',
+  authorizeRoles('admin', 'sales'),
+  [
+    body('phoneNumber').trim().notEmpty().withMessage('Phone number is required'),
+    body('firstName').trim().notEmpty().withMessage('First name is required'),
+    body('shopName').trim().notEmpty().withMessage('Shop / Business name is required')
+  ],
+  validate,
+  userController.createDealer
+);
+
 // Bulk Create Users (Admin and Sales)
 router.post('/bulk', authorizeRoles('admin', 'sales'), userController.adminBulkCreateUsers);
 
