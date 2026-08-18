@@ -114,6 +114,10 @@ router.get('/daily-lead-stats', authorizeRoles('admin', 'sales'), userController
 router.post(
   '/dealer',
   authorizeRoles('admin', 'sales'),
+  upload.fields([
+    { name: 'licenceImage', maxCount: 1 },
+    { name: 'shopImage', maxCount: 1 }
+  ]),
   [
     body('phoneNumber').trim().notEmpty().withMessage('Phone number is required'),
     body('firstName').trim().notEmpty().withMessage('First name is required'),

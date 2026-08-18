@@ -601,6 +601,16 @@ exports.createDealer = async (req, res, next) => {
       notes
     } = req.body;
 
+    // Support multipart stringified address
+    let parsedAddress = address;
+    if (typeof address === 'string') {
+      try {
+        parsedAddress = JSON.parse(address);
+      } catch (e) {
+        parsedAddress = {};
+      }
+    }
+
     // Clean phone number
     let cleanPhone = String(phoneNumber || '').replace(/[^\d]/g, '');
     if (cleanPhone.startsWith('91') && cleanPhone.length === 12) {
@@ -624,6 +634,38 @@ exports.createDealer = async (req, res, next) => {
     // Check if user already exists
     let existingUser = await User.findOne({ phoneNumber: cleanPhone });
 
+    // Handle KYC image uploads if any
+    const licenceFile = req.files && req.files['licenceImage'] ? req.files['licenceImage'][0] : null;
+    const shopFile = req.files && req.files['shopImage'] ? req.files['shopImage'][0] : null;
+
+    let licenceImageUrl = existingUser?.licenceImage;
+    let shopImageUrl = existingUser?.shopImage;
+    const uploadPromises = [];
+
+    if (licenceFile) {
+      uploadPromises.push(
+        processAndUploadKycDocument(
+          licenceFile.buffer,
+          licenceFile.originalname,
+          existingUser ? existingUser._id.toString() : cleanPhone
+        ).then(url => { licenceImageUrl = url; })
+      );
+    }
+
+    if (shopFile) {
+      uploadPromises.push(
+        processAndUploadKycDocument(
+          shopFile.buffer,
+          shopFile.originalname,
+          existingUser ? existingUser._id.toString() : cleanPhone
+        ).then(url => { shopImageUrl = url; })
+      );
+    }
+
+    if (uploadPromises.length > 0) {
+      await Promise.all(uploadPromises);
+    }
+
     if (existingUser) {
       if (existingUser.kycStatus === 'verified') {
         return res.status(400).json({
@@ -638,10 +680,12 @@ exports.createDealer = async (req, res, next) => {
       existingUser.shopName = shopName || existingUser.shopName;
       if (gstNumber) existingUser.gstNumber = gstNumber;
       if (email && !existingUser.email) existingUser.email = email;
-      if (address) {
+      if (licenceImageUrl) existingUser.licenceImage = licenceImageUrl;
+      if (shopImageUrl) existingUser.shopImage = shopImageUrl;
+      if (parsedAddress) {
         existingUser.address = {
           ...existingUser.address,
-          ...address
+          ...parsedAddress
         };
       }
       existingUser.role = 'user';
@@ -713,13 +757,15 @@ exports.createDealer = async (req, res, next) => {
       lastName: (lastName || '').trim(),
       shopName: shopName.trim(),
       gstNumber: gstNumber ? gstNumber.trim() : undefined,
+      licenceImage: licenceImageUrl,
+      shopImage: shopImageUrl,
       address: {
-        villageArea: address?.villageArea || '',
-        addressLine2: address?.addressLine2 || '',
-        address2: address?.address2 || '',
-        cityTehsil: address?.cityTehsil || '',
-        state: address?.state || '',
-        pincode: address?.pincode || ''
+        villageArea: parsedAddress?.villageArea || '',
+        addressLine2: parsedAddress?.addressLine2 || '',
+        address2: parsedAddress?.address2 || '',
+        cityTehsil: parsedAddress?.cityTehsil || '',
+        state: parsedAddress?.state || '',
+        pincode: parsedAddress?.pincode || ''
       },
       addressType: 'Shop',
       role: 'user',
