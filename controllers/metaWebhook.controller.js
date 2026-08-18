@@ -117,47 +117,120 @@ exports.handleMetaLeadWebhook = async (req, res) => {
 /**
  * Extracts normalized form fields from Meta field_data array
  */
+/**
+ * Extracts normalized form fields from Meta field_data array
+ */
 async function processLeadFields(fieldData) {
   let fullName = '';
+  let firstNameVal = '';
+  let lastNameVal = '';
   let phoneNumber = '';
   let shopName = '';
+  let businessType = '';
   let state = '';
   let city = '';
   let pincode = '';
+  let isHindiForm = false;
+  const allFormAnswers = [];
 
   for (const field of fieldData) {
-    const key = (field.name || '').toLowerCase();
+    const rawKey = field.name || '';
+    const key = rawKey.toLowerCase().replace(/[\s_-]+/g, '_');
     const val = (field.values && field.values[0]) ? String(field.values[0]).trim() : '';
 
     if (!val) continue;
 
-    if (key.includes('full_name') || key === 'name' || key.includes('name')) {
-      if (!fullName) fullName = val;
+    allFormAnswers.push(`${rawKey}: ${val}`);
+
+    // Check if Hindi text is present in key or value
+    if (/[\u0900-\u097F]/.test(rawKey) || /[\u0900-\u097F]/.test(val)) {
+      isHindiForm = true;
     }
-    if (key.includes('phone') || key.includes('mobile') || key.includes('contact')) {
+
+    // Direct Value Matching for Business Type (e.g., "रिटेलर / दुकानदार", "होलसेलर", "डिस्ट्रीब्यूटर")
+    if (
+      val.includes('रिटेलर') || val.includes('दुकानदार') ||
+      val.includes('होलसेलर') || val.includes('डिस्ट्रीब्यूटर') ||
+      val.toLowerCase().includes('retailer') || val.toLowerCase().includes('wholesaler') || val.toLowerCase().includes('distributor')
+    ) {
+      businessType = val;
+    }
+
+    // Full name or first/last name matching (English & Hindi)
+    if (
+      key.includes('full_name') || key === 'fullname' ||
+      rawKey.includes('पूरा नाम') || rawKey.includes('नाम') ||
+      key.includes('name') && !key.includes('business') && !key.includes('shop')
+    ) {
+      fullName = val;
+    } else if (key.includes('first_name') || key === 'firstname' || rawKey.includes('पहला नाम')) {
+      firstNameVal = val;
+    } else if (key.includes('last_name') || key === 'lastname' || rawKey.includes('उपनाम')) {
+      lastNameVal = val;
+    }
+
+    // Phone / Mobile matching (English & Hindi)
+    if (
+      key.includes('phone') || key.includes('mobile') || key.includes('contact') || key.includes('whatsapp') ||
+      rawKey.includes('फ़ोन') || rawKey.includes('फोन') || rawKey.includes('मोबाइल') || rawKey.includes('नंबर')
+    ) {
       phoneNumber = val;
     }
-    if (key.includes('shop') || key.includes('store') || key.includes('business_name')) {
+
+    // Business type question (e.g., "आप किस प्रकार का कृषि व्यवसाय करते हैं?", "type_of_business", etc.)
+    if (
+      key.includes('type_of_business') || key.includes('business_type') || key.includes('what_type') ||
+      key.includes('business_category') || key.includes('vyavasay') ||
+      rawKey.includes('व्यवसाय') || rawKey.includes('प्रकार') || rawKey.includes('कृषि व्यवसाय')
+    ) {
+      if (!businessType) businessType = val;
+    }
+
+    // Shop / Store / Business name
+    if (
+      key.includes('shop_name') || key.includes('store_name') || key.includes('business_name') ||
+      key.includes('company_name') || key.includes('firm_name') || rawKey.includes('दुकान का नाम') || rawKey.includes('कंपनी')
+    ) {
       shopName = val;
     }
-    if (key.includes('state') || key.includes('pradesh')) {
+
+    // Address fields
+    if (key.includes('state') || key.includes('pradesh') || rawKey.includes('राज्य')) {
       state = val;
     }
-    if (key.includes('city') || key.includes('district') || key.includes('tehsil') || key.includes('town')) {
+    if (key.includes('city') || key.includes('district') || key.includes('tehsil') || key.includes('town') || rawKey.includes('शहर') || rawKey.includes('जिला') || rawKey.includes('तहसील')) {
       city = val;
     }
-    if (key.includes('pin') || key.includes('zip') || key.includes('postal')) {
+    if (key.includes('pin') || key.includes('zip') || key.includes('postal') || rawKey.includes('पिनकोड')) {
       pincode = val;
     }
   }
+
+  // If fullName wasn't explicit, combine first and last
+  if (!fullName && (firstNameVal || lastNameVal)) {
+    fullName = `${firstNameVal} ${lastNameVal}`.trim();
+  }
+
+  // If shopName not provided, use businessType (e.g. "रिटेलर / दुकानदार")
+  if (!shopName && businessType) {
+    shopName = businessType;
+  }
+
+  // Format notes from all questions in the form
+  const customNotes = allFormAnswers.length > 0
+    ? `📋 Meta Lead Form Submission:\n${allFormAnswers.map(a => `• ${a}`).join('\n')}`
+    : '';
 
   await createOrUpdateProspectUser({
     phoneNumber,
     fullName,
     shopName,
+    businessType,
     state,
     city,
-    pincode
+    pincode,
+    notes: customNotes,
+    preferredLanguage: isHindiForm ? 'hi' : 'en'
   });
 }
 
@@ -174,6 +247,8 @@ async function createOrUpdateProspectUser(data) {
   const { firstName, lastName } = splitFullName(data.fullName);
 
   let user = await User.findOne({ phoneNumber: cleanPhone });
+
+  const defaultNote = data.notes || (data.businessType ? `Business Type: ${data.businessType}` : 'Source: Meta Lead Form');
 
   if (!user) {
     user = await User.create({
@@ -197,16 +272,26 @@ async function createOrUpdateProspectUser(data) {
       source: 'Meta Lead Form',
       status: 'prospect',
       monthlyTarget: 500000,
-      preferredLanguage: 'en',
+      preferredLanguage: data.preferredLanguage || 'hi',
       isBlocked: false,
       isDeleted: false,
       whatsappSequence: 0,
       shippingAddresses: [],
-      notesHistory: [],
-      notes: ''
+      notesHistory: [
+        {
+          title: 'Lead Generated via Meta Ads',
+          note: defaultNote,
+          author: 'Meta Ads',
+          createdAt: new Date(),
+          type: 'general',
+          priority: 'medium',
+          status: 'prospect'
+        }
+      ],
+      notes: defaultNote
     });
 
-    console.log(`[Meta Lead Form] New prospect lead created: ${cleanPhone} (${user.shopName}, ${user.address?.cityTehsil})`);
+    console.log(`[Meta Lead Form] New prospect lead created: ${cleanPhone} (${user.shopName || user.firstName}, ${user.address?.cityTehsil || 'India'})`);
   } else {
     // If user already existed (e.g. from an earlier login or other lead source), update missing profile data
     let modified = false;
@@ -224,6 +309,21 @@ async function createOrUpdateProspectUser(data) {
       if (data.state && !user.address.state) user.address.state = data.state;
       if (data.city && !user.address.cityTehsil) user.address.cityTehsil = data.city;
       if (data.pincode && !user.address.pincode) user.address.pincode = data.pincode;
+      modified = true;
+    }
+
+    if (defaultNote) {
+      user.notes = user.notes ? `${user.notes}\n\n${defaultNote}` : defaultNote;
+      user.notesHistory = user.notesHistory || [];
+      user.notesHistory.push({
+        title: 'Meta Lead Form Re-submission',
+        note: defaultNote,
+        author: 'Meta Ads',
+        createdAt: new Date(),
+        type: 'general',
+        priority: 'medium',
+        status: user.status || 'prospect'
+      });
       modified = true;
     }
 
