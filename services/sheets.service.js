@@ -4,47 +4,59 @@ const Product = require('../models/Product');
 
 // ─── CONFIG ──────────────────────────────────────────────────────────────────
 const SHEET_ID = process.env.GOOGLE_SHEETS_ID;
-const SHEET_NAME = 'Orders'; // The tab name inside your Google Sheet
+// Optional custom tab name; if not specified, it dynamically uses the first tab in the spreadsheet.
+const CUSTOM_TAB_NAME = process.env.GOOGLE_SHEETS_TAB_NAME;
 
-// Column headers — must match the append/update order below
-const HEADERS = [
+// Target 27 Column Headers schema
+const DEFAULT_HEADERS = [
+  'Timestamp',
+  'Email Address',
+  'EBS Sales Person',
+  'New/Replacement Order',
+  "Customer's Full Name",
+  'Mobile Number 1',
+  'Mobile Number 2',
+  'Address 1 (House no & Local Area ) For Example -  HIG 3/554, Arvind Vihar,Housing Board Colony, Bagmugaliya,',
+  'Address 2 (City & State)  For Example -   Bhopal, Madhya Pradesh',
+  'Pin Code',
+  'Email Address',
+  'Product Name & Quantity ',
+  'Total Amount ',
+  'Booking Amount',
+  'Payment Mode (Cash/COD)',
+  'COD Amount ',
+  'Preferred Courier Partner ',
+  'Payment Details(If Prepaid) - For Example - Transaction ID',
   'Order ID',
-  'Placed At',
-  'Customer Name',
-  'Phone',
-  'Shop Name',
-  'Sales Agent',
-  'Items Summary',
-  'Quantity',
-  'Price (₹)',
-  'Total Amount (₹)',
-  'Discount (₹)',
-  'Razorpay Payment ID',
-  'Advance Paid (₹)',
-  'Remaining (₹)',
-  'Payment Method',
-  'Payment Status',
-  'Order Status',
-  'AWB Number',
-  'Courier',
-  'Address',
-  'Last Synced At',
+  'Tracking ID',
+  'Courier Name',
+  'Tracking Link',
+  'Language',
+  'Trigger',
+  'Cost Price',
+  'Courier Charges',
+  'RTO Charges',
 ];
 
 // ─── AUTH ─────────────────────────────────────────────────────────────────────
-// Uses Application Default Credentials (ADC) — automatically works on Cloud Run
-// via the attached Compute Service Account. No JSON key file needed.
+const path = require('path');
+const fs = require('fs');
+
 let _sheetsClient = null;
 
 function _getClient() {
   if (_sheetsClient) return _sheetsClient;
 
-  const auth = new google.auth.GoogleAuth({
-    // On Cloud Run, ADC picks up the service account automatically.
-    // Locally, run: gcloud auth application-default login
+  const keyFilePath = path.join(__dirname, '../serviceAccountKey.json');
+  const authOptions = {
     scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-  });
+  };
 
+  if (fs.existsSync(keyFilePath)) {
+    authOptions.keyFile = keyFilePath;
+  }
+
+  const auth = new google.auth.GoogleAuth(authOptions);
   _sheetsClient = google.sheets({ version: 'v4', auth });
   return _sheetsClient;
 }
@@ -52,108 +64,77 @@ function _getClient() {
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 
 /**
- * Ensures the 'Orders' sheet exists, has correct headers,
- * and sets up data validation dropdown for Order Status (Column P).
+ * Converts a 0-based column index to spreadsheet column letters (0->A, 18->S, 26->AA).
  */
-async function _ensureSheetAndValidation(sheets) {
+function _colIndexToLetter(index) {
+  let letter = '';
+  let temp = index;
+  while (temp >= 0) {
+    letter = String.fromCharCode((temp % 26) + 65) + letter;
+    temp = Math.floor(temp / 26) - 1;
+  }
+  return letter;
+}
+
+/**
+ * Retrieves the spreadsheet metadata and the active tab name + headers.
+ * NEVER clears or overwrites existing data or headers.
+ */
+async function _ensureSheetAndGetInfo(sheets) {
   const spreadsheet = await sheets.spreadsheets.get({
     spreadsheetId: SHEET_ID,
   });
 
-  let sheet = spreadsheet.data.sheets.find(s => s.properties.title === SHEET_NAME);
-  let sheetId;
-
-  if (!sheet) {
-    console.log(`[Sheets] Sheet "${SHEET_NAME}" does not exist. Creating...`);
-    const addSheetRes = await sheets.spreadsheets.batchUpdate({
-      spreadsheetId: SHEET_ID,
-      requestBody: {
-        requests: [
-          {
-            addSheet: {
-              properties: {
-                title: SHEET_NAME,
-              },
-            },
-          },
-        ],
-      },
-    });
-    sheetId = addSheetRes.data.replies[0].addSheet.properties.sheetId;
-  } else {
-    sheetId = sheet.properties.sheetId;
+  const allSheets = spreadsheet.data.sheets || [];
+  if (allSheets.length === 0) {
+    throw new Error('No sheets found in spreadsheet');
   }
 
-  // Ensure headers
+  // Find target sheet tab or default to first tab
+  let targetSheet = null;
+  if (CUSTOM_TAB_NAME) {
+    targetSheet = allSheets.find(s => s.properties.title === CUSTOM_TAB_NAME);
+  }
+  if (!targetSheet) {
+    targetSheet = allSheets[0];
+  }
+
+  const sheetTitle = targetSheet.properties.title;
+  const sheetId = targetSheet.properties.sheetId;
+
+  // Read existing headers from Row 1
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
-    range: `${SHEET_NAME}!1:1`,
+    range: `'${sheetTitle}'!1:1`,
   });
 
-  const existingHeaders = (res.data.values && res.data.values[0]) || [];
-  const headersMatch =
-    existingHeaders.length === HEADERS.length &&
-    HEADERS.every((h, i) => existingHeaders[i] === h);
+  let existingHeaders = (res.data.values && res.data.values[0]) || [];
 
-  if (!headersMatch) {
+  // If sheet is completely blank, write default headers once
+  if (existingHeaders.length === 0) {
+    console.log(`[Sheets] Sheet "${sheetTitle}" is blank. Initializing headers...`);
     await sheets.spreadsheets.values.update({
       spreadsheetId: SHEET_ID,
-      range: `${SHEET_NAME}!A1`,
-      valueInputOption: 'RAW',
-      requestBody: { values: [HEADERS] },
+      range: `'${sheetTitle}'!A1`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: { values: [DEFAULT_HEADERS] },
     });
-    console.log('[Sheets] Header row updated.');
+    existingHeaders = DEFAULT_HEADERS;
   }
 
-  // Apply dropdown validation for Column P (index 15)
-  await sheets.spreadsheets.batchUpdate({
-    spreadsheetId: SHEET_ID,
-    requestBody: {
-      requests: [
-        {
-          setDataValidation: {
-            range: {
-              sheetId: sheetId,
-              startRowIndex: 1, // Skip header row
-              startColumnIndex: 16, // Column Q (was P, shifted by 'Sales Agent' column)
-              endColumnIndex: 17,
-            },
-            rule: {
-              condition: {
-                type: 'ONE_OF_LIST',
-                values: [
-                  { userEnteredValue: 'Processing' },
-                  { userEnteredValue: 'Shipped' },
-                  { userEnteredValue: 'Out for Delivery' },
-                  { userEnteredValue: 'Delivered' },
-                  { userEnteredValue: 'Cancelled' },
-                  { userEnteredValue: 'RTO' },
-                ],
-              },
-              showCustomUi: true,
-              strict: true,
-            },
-          },
-        },
-      ],
-    },
-  });
-
-  return sheetId;
+  return { sheetTitle, sheetId, headers: existingHeaders };
 }
 
 /**
- * Fetches the user document from DB.
- * order.user is always just an ObjectId after Order.create() / findById(),
- * so we must query separately to get firstName, phoneNumber, shopName.
+ * Fetches the user document from DB to populate customer & assigned agent info.
  */
 async function _fetchUser(order) {
   const userId = order.user && order.user._id ? order.user._id : order.user;
   if (!userId) return null;
   try {
     return await User.findById(userId)
-      .select('firstName lastName phoneNumber shopName assignedAgent')
-      .populate('assignedAgent', 'firstName lastName phoneNumber')
+      .select('firstName lastName phoneNumber alternatePhone email shopName assignedAgent preferredLanguage')
+      .populate('assignedAgent', 'firstName lastName phoneNumber email')
       .lean();
   } catch {
     return null;
@@ -161,9 +142,7 @@ async function _fetchUser(order) {
 }
 
 /**
- * Enriches order items with variantSize and basePacking by looking up
- * the Product's variants array and matching on variantId.
- * Order items in MongoDB only store ObjectId refs — not the size text.
+ * Enriches order items with variantSize and basePacking.
  */
 async function _enrichItemsWithVariantSize(items) {
   if (!items || items.length === 0) return items;
@@ -196,97 +175,131 @@ async function _enrichItemsWithVariantSize(items) {
   });
 }
 
-
-function _buildRow(order, user) {
+/**
+ * Dynamically builds a row matching the exact header order of the target sheet.
+ */
+function _buildRowForHeaders(headers, order, user) {
   const firstName = user ? (user.firstName || '') : '';
   const lastName = user ? (user.lastName || '') : '';
-  const customerName = `${firstName} ${lastName}`.trim() || 'Unknown';
-  const phone = user ? (user.phoneNumber || '') : '';
-  const shopName = user ? (user.shopName || '') : '';
+  const customerName = `${firstName} ${lastName}`.trim() || user?.shopName || 'Customer';
+  const phone1 = user?.phoneNumber || order.shippingAddress?.phoneNumber || '';
+  const phone2 = order.shippingAddress?.alternatePhone || user?.alternatePhone || '';
+  const email = user?.email || '';
 
   // Extract Sales Agent Name
   let agentName = '-';
   if (user && user.assignedAgent) {
     const agent = user.assignedAgent;
     if (typeof agent === 'object') {
-      agentName = `${agent.firstName || ''} ${agent.lastName || ''}`.trim();
-      if (!agentName) agentName = agent.phoneNumber || agent.email || 'Agent';
+      agentName = `${agent.firstName || ''} ${agent.lastName || ''}`.trim() || agent.phoneNumber || agent.email || 'Agent';
     }
   }
 
-  // Items Summary — one product per line with pack size
-  // Quantity     — matching quantities, one per line
-  // Price        — matching unit prices, one per line
+  // Address components
+  const addr = order.shippingAddress || {};
+  const addr1 = addr.villageArea || addr.addressLine1 || addr.street || '';
+  const addr2 = [addr.cityTehsil || addr.city, addr.state].filter(Boolean).join(', ');
+  const pincode = addr.pincode || '';
+
+  // Items Summary
   const items = order.items || [];
   const freeItems = order.freeItems || [];
 
   const itemsSummaryList = items.map(i => {
     const packSize = i.variantSize || i.basePacking || '';
-    return packSize ? `${i.title} (${packSize})` : i.title;
+    return packSize ? `${i.title} (${packSize}) - Qty: ${i.quantity}` : `${i.title} - Qty: ${i.quantity}`;
   });
 
-  const quantitySummaryList = items.map(i => `${i.quantity}`);
-  const priceSummaryList = items.map(i => `₹${(i.price * i.quantity).toFixed(2)}`);
-
-  // Append free items if any
   for (const fItem of freeItems) {
-    itemsSummaryList.push(`${fItem.name} (Free Gift)`);
-    quantitySummaryList.push(`${fItem.quantity}`);
-    priceSummaryList.push(`₹0.00 (Free)`);
+    itemsSummaryList.push(`${fItem.name} (Free Gift) - Qty: ${fItem.quantity}`);
   }
+  const productSummary = itemsSummaryList.join('\n');
 
-  const itemsSummary = itemsSummaryList.join('\n');
-  const quantitySummary = quantitySummaryList.join('\n');
-  const priceSummary = priceSummaryList.join('\n');
+  // Dates & Payment
+  const timestamp = order.placedAt
+    ? new Date(order.placedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+    : new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
 
-  const addr = order.shippingAddress || {};
+  const totalAmount = order.totalAmount || 0;
+  const bookingAmount = order.advanceAmount || 0;
+  const remainingAmount = order.remainingAmount ?? (order.paymentMethod === 'Online' ? 0 : totalAmount);
+  const paymentMode = order.paymentMethod || 'COD';
+  const razorpayId = order.razorpayPaymentId || '';
 
-  // Build complete address string
-  const fullAddress = [
-    addr.villageArea,
-    addr.cityTehsil,
-    addr.state,
-    addr.pincode,
-  ].filter(Boolean).join(', ');
+  // Courier & Tracking
+  const courier = order.courierName || 'Delhivery';
+  const trackingId = order.awbNumber || '';
+  const trackingLink = order.trackingUrl || (trackingId ? `https://www.delhivery.com/track/package/${trackingId}` : '');
+  const orderType = order.orderType || 'New';
+  const language = user?.preferredLanguage || 'Hindi';
+  const trigger = order.orderStatus || 'Processing';
+  const courierCharges = order.shippingCharges || 0;
 
-  return [
-    order.orderId || '',
-    order.placedAt ? new Date(order.placedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) : '',
-    customerName,
-    phone,
-    shopName,
-    agentName,
-    itemsSummary,
-    quantitySummary,
-    priceSummary,
-    order.totalAmount || 0,
-    order.discountAmount || 0,
-    order.razorpayPaymentId || '',
-    order.advanceAmount || 0,
-    order.remainingAmount || 0,
-    order.paymentMethod || '',
-    order.paymentStatus || '',
-    order.orderStatus || '',
-    order.awbNumber || '',
-    order.courierName || '',
-    fullAddress,
-    new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
-  ];
+  // Build row strictly matching each header in the target sheet
+  return headers.map((rawHeader, idx) => {
+    const h = (rawHeader || '').toString().trim().toLowerCase();
+
+    if (h.includes('timestamp') || h.includes('placed at') || h === 'date') return timestamp;
+    if (h.includes('ebs sales') || h.includes('sales agent') || h.includes('sales person')) return agentName;
+    if (h.includes('new/replacement') || h.includes('order type')) return orderType;
+    if (h.includes("customer's full name") || h.includes('customer name') || h === 'name') return customerName;
+    if (h.includes('mobile number 1') || h === 'mobile 1' || h === 'phone' || h === 'mobile') return phone1;
+    if (h.includes('mobile number 2') || h === 'mobile 2' || h.includes('alternate')) return phone2;
+    if (h.includes('address 1') || h.includes('house no')) return addr1;
+    if (h.includes('address 2') || h.includes('city & state') || h === 'city') return addr2;
+    if (h.includes('pin code') || h.includes('pincode') || h === 'pin') return pincode;
+    if (h.includes('product name & quantity') || h.includes('items summary') || h === 'products' || h === 'items') return productSummary;
+    if (h.includes('total amount') || h === 'total') return totalAmount;
+    if (h.includes('booking amount') || h.includes('advance')) return bookingAmount;
+    if (h.includes('payment mode') || h.includes('payment method')) return paymentMode;
+    if (h.includes('cod amount') || h.includes('remaining')) return remainingAmount;
+    if (h.includes('preferred courier') || h.includes('courier partner')) return courier;
+    if (h.includes('payment details') || h.includes('transaction id') || h.includes('razorpay')) return razorpayId;
+    if (h.includes('order id')) return order.orderId || '';
+    if (h.includes('tracking id') || h.includes('awb')) return trackingId;
+    if (h.includes('courier name')) return courier;
+    if (h.includes('tracking link') || h.includes('tracking url')) return trackingLink;
+    if (h.includes('language')) return language;
+    if (h.includes('trigger') || h.includes('order status') || h === 'status') return trigger;
+    if (h.includes('cost price')) return '';
+    if (h.includes('courier charges') || h.includes('shipping')) return courierCharges;
+    if (h.includes('rto charges')) return '';
+    if (h.includes('email')) return email;
+    if (h.includes('last synced')) return new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+
+    // Fallback: match by DEFAULT_HEADERS position if header text is identical or position matches
+    return '';
+  });
 }
 
 /**
- * Finds the row number (1-indexed) for a given Order ID.
- * Returns null if not found.
+ * Finds the row number (1-indexed) for a given Order ID in the sheet.
+ * Dynamically finds which column holds 'Order ID' before scanning.
  */
-async function _findRowByOrderId(sheets, orderId) {
+async function _findRowByOrderId(sheets, sheetTitle, headers, orderId) {
+  if (!orderId) return null;
+
+  // Determine column index for 'Order ID'
+  let orderIdColIndex = headers.findIndex(h => /order\s*id/i.test(h));
+  if (orderIdColIndex === -1) {
+    orderIdColIndex = 0; // Default fallback to first column
+  }
+
+  const colLetter = _colIndexToLetter(orderIdColIndex);
+
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
-    range: `${SHEET_NAME}!A:A`, // Scan only column A (Order ID)
+    range: `'${sheetTitle}'!${colLetter}:${colLetter}`,
   });
 
   const rows = res.data.values || [];
+  const targetId = orderId.toString().trim().toLowerCase();
+
   for (let i = 0; i < rows.length; i++) {
-    if (rows[i][0] === orderId) return i + 1; // 1-indexed
+    const val = rows[i] && rows[i][0] ? rows[i][0].toString().trim().toLowerCase() : '';
+    if (val === targetId) {
+      return i + 1; // 1-indexed row number
+    }
   }
   return null;
 }
@@ -295,7 +308,7 @@ async function _findRowByOrderId(sheets, orderId) {
 
 /**
  * Called when a new order is placed.
- * Appends a new row to the sheet.
+ * Safely appends a new row to the sheet without altering existing rows.
  */
 exports.appendOrder = async (order) => {
   if (!SHEET_ID) {
@@ -305,23 +318,25 @@ exports.appendOrder = async (order) => {
 
   try {
     const sheets = _getClient();
-    await _ensureSheetAndValidation(sheets);
+    const { sheetTitle, headers } = await _ensureSheetAndGetInfo(sheets);
 
-    // Fetch user separately — order.user is just an ObjectId after Order.create()
     const user = await _fetchUser(order);
-    // Enrich items with variantSize/basePacking from Product variants
     const enrichedItems = await _enrichItemsWithVariantSize(order.items || []);
-    const row = _buildRow({ ...order.toObject ? order.toObject() : order, items: enrichedItems }, user);
+    const row = _buildRowForHeaders(
+      headers,
+      { ...(order.toObject ? order.toObject() : order), items: enrichedItems },
+      user
+    );
 
     await sheets.spreadsheets.values.append({
       spreadsheetId: SHEET_ID,
-      range: `${SHEET_NAME}!A1`,
+      range: `'${sheetTitle}'!A1`,
       valueInputOption: 'USER_ENTERED',
       insertDataOption: 'INSERT_ROWS',
       requestBody: { values: [row] },
     });
 
-    console.log(`[Sheets] ✅ Order ${order.orderId} appended to sheet.`);
+    console.log(`[Sheets] ✅ Order ${order.orderId} appended to sheet tab "${sheetTitle}".`);
   } catch (err) {
     // Never throw — sheets failure must never block order placement
     console.error(`[Sheets] ❌ Failed to append order ${order.orderId}:`, err.message);
@@ -329,9 +344,9 @@ exports.appendOrder = async (order) => {
 };
 
 /**
- * Called when an order status is updated.
- * Finds the existing row by Order ID and overwrites it with fresh data.
- * Falls back to appending if the row is not found (e.g., sheet was cleared).
+ * Called when an order status or details are updated.
+ * Finds the existing row by Order ID and updates that row in-place.
+ * If not found, appends it as a new row (never alters other rows).
  */
 exports.updateOrderRow = async (order) => {
   if (!SHEET_ID) {
@@ -341,35 +356,37 @@ exports.updateOrderRow = async (order) => {
 
   try {
     const sheets = _getClient();
-    await _ensureSheetAndValidation(sheets);
+    const { sheetTitle, headers } = await _ensureSheetAndGetInfo(sheets);
 
-    // Fetch user separately — order.user is just an ObjectId after findById()
     const user = await _fetchUser(order);
-    // Enrich items with variantSize/basePacking from Product variants
     const enrichedItems = await _enrichItemsWithVariantSize(order.items || []);
-    const row = _buildRow({ ...order.toObject ? order.toObject() : order, items: enrichedItems }, user);
+    const row = _buildRowForHeaders(
+      headers,
+      { ...(order.toObject ? order.toObject() : order), items: enrichedItems },
+      user
+    );
 
-    const rowNumber = await _findRowByOrderId(sheets, order.orderId);
+    const rowNumber = await _findRowByOrderId(sheets, sheetTitle, headers, order.orderId);
 
     if (rowNumber) {
-      // Update the existing row in-place
+      const endColLetter = _colIndexToLetter(Math.max(headers.length - 1, row.length - 1));
       await sheets.spreadsheets.values.update({
         spreadsheetId: SHEET_ID,
-        range: `${SHEET_NAME}!A${rowNumber}`,
+        range: `'${sheetTitle}'!A${rowNumber}:${endColLetter}${rowNumber}`,
         valueInputOption: 'USER_ENTERED',
         requestBody: { values: [row] },
       });
-      console.log(`[Sheets] ✅ Order ${order.orderId} updated at row ${rowNumber}.`);
+      console.log(`[Sheets] ✅ Order ${order.orderId} updated at row ${rowNumber} in "${sheetTitle}".`);
     } else {
-      // Row missing (sheet may have been cleared) — append instead
+      // Row not found — append to the end safely
       await sheets.spreadsheets.values.append({
         spreadsheetId: SHEET_ID,
-        range: `${SHEET_NAME}!A1`,
+        range: `'${sheetTitle}'!A1`,
         valueInputOption: 'USER_ENTERED',
         insertDataOption: 'INSERT_ROWS',
         requestBody: { values: [row] },
       });
-      console.log(`[Sheets] ✅ Order ${order.orderId} not found — appended as new row.`);
+      console.log(`[Sheets] ✅ Order ${order.orderId} not found in "${sheetTitle}" — appended as new row.`);
     }
   } catch (err) {
     console.error(`[Sheets] ❌ Failed to update order ${order.orderId}:`, err.message);
@@ -377,8 +394,9 @@ exports.updateOrderRow = async (order) => {
 };
 
 /**
- * Syncs all orders in the database to the Google Sheet.
- * This overwrites the existing sheet data.
+ * Syncs orders from database to Google Sheets non-destructively.
+ * Updates matching order rows in place, or appends new orders to the bottom.
+ * NEVER clears or deletes existing rows.
  */
 exports.syncAllOrdersToSheet = async () => {
   if (!SHEET_ID) {
@@ -389,29 +407,49 @@ exports.syncAllOrdersToSheet = async () => {
   try {
     const Order = require('../models/Order');
     const sheets = _getClient();
-    await _ensureSheetAndValidation(sheets);
+    const { sheetTitle, headers } = await _ensureSheetAndGetInfo(sheets);
 
     console.log('[Sheets] Fetching all orders from database...');
     const orders = await Order.find({})
       .populate({
         path: 'user',
-        select: 'firstName lastName phoneNumber shopName assignedAgent',
+        select: 'firstName lastName phoneNumber alternatePhone email shopName assignedAgent preferredLanguage',
         populate: {
           path: 'assignedAgent',
-          select: 'firstName lastName phoneNumber'
-        }
+          select: 'firstName lastName phoneNumber email',
+        },
       })
       .sort({ placedAt: 1 })
       .exec();
 
-    console.log(`[Sheets] Found ${orders.length} orders. Enriching items...`);
+    console.log(`[Sheets] Found ${orders.length} orders. Processing sync safely...`);
 
+    // Fetch all existing Order IDs from the sheet to match row numbers
+    let orderIdColIndex = headers.findIndex(h => /order\s*id/i.test(h));
+    if (orderIdColIndex === -1) orderIdColIndex = 0;
+    const colLetter = _colIndexToLetter(orderIdColIndex);
+
+    const sheetIdRes = await sheets.spreadsheets.values.get({
+      spreadsheetId: SHEET_ID,
+      range: `'${sheetTitle}'!${colLetter}:${colLetter}`,
+    });
+
+    const existingRows = sheetIdRes.data.values || [];
+    const orderRowMap = new Map(); // orderId -> 1-based row number
+
+    for (let r = 0; r < existingRows.length; r++) {
+      const val = existingRows[r] && existingRows[r][0] ? existingRows[r][0].toString().trim().toLowerCase() : '';
+      if (val) {
+        orderRowMap.set(val, r + 1);
+      }
+    }
+
+    // Cache products for variant packaging enrichment
     const productIds = [];
     orders.forEach(o => {
-      const items = o.items || [];
-      items.forEach(i => {
-        const productId = (i.product?._id || i.product)?.toString();
-        if (productId) productIds.push(productId);
+      (o.items || []).forEach(i => {
+        const pId = (i.product?._id || i.product)?.toString();
+        if (pId) productIds.push(pId);
       });
     });
     const uniqueProductIds = [...new Set(productIds)];
@@ -424,7 +462,9 @@ exports.syncAllOrdersToSheet = async () => {
       productMap[p._id.toString()] = p;
     }
 
-    const rows = [];
+    const rowsToAppend = [];
+    let updatedCount = 0;
+
     for (const order of orders) {
       const enrichedItems = (order.items || []).map(item => {
         const productId = (item.product?._id || item.product)?.toString();
@@ -442,39 +482,45 @@ exports.syncAllOrdersToSheet = async () => {
         };
       });
 
-      const user = order.user;
-
-      const row = _buildRow(
-        {
-          ...(order.toObject ? order.toObject() : order),
-          items: enrichedItems,
-        },
-        user
+      const row = _buildRowForHeaders(
+        headers,
+        { ...(order.toObject ? order.toObject() : order), items: enrichedItems },
+        order.user
       );
-      rows.push(row);
+
+      const targetId = (order.orderId || '').toString().trim().toLowerCase();
+      const existingRowNumber = targetId ? orderRowMap.get(targetId) : null;
+
+      if (existingRowNumber) {
+        // Update existing row
+        const endColLetter = _colIndexToLetter(Math.max(headers.length - 1, row.length - 1));
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: SHEET_ID,
+          range: `'${sheetTitle}'!A${existingRowNumber}:${endColLetter}${existingRowNumber}`,
+          valueInputOption: 'USER_ENTERED',
+          requestBody: { values: [row] },
+        });
+        updatedCount++;
+      } else {
+        rowsToAppend.push(row);
+      }
     }
 
-    console.log('[Sheets] Overwriting sheet with all orders...');
-    await sheets.spreadsheets.values.clear({
-      spreadsheetId: SHEET_ID,
-      range: `${SHEET_NAME}!A2:Z`,
-    });
-
-    if (rows.length > 0) {
-      await sheets.spreadsheets.values.update({
+    // Append any orders not already in the sheet
+    if (rowsToAppend.length > 0) {
+      await sheets.spreadsheets.values.append({
         spreadsheetId: SHEET_ID,
-        range: `${SHEET_NAME}!A2`,
+        range: `'${sheetTitle}'!A1`,
         valueInputOption: 'USER_ENTERED',
-        requestBody: { values: rows },
+        insertDataOption: 'INSERT_ROWS',
+        requestBody: { values: rowsToAppend },
       });
     }
 
-    console.log(`[Sheets] ✅ Sync completed. ${rows.length} orders synced.`);
-    return { success: true, count: rows.length };
+    console.log(`[Sheets] ✅ Sync completed. Updated: ${updatedCount}, Appended: ${rowsToAppend.length}`);
+    return { success: true, count: updatedCount + rowsToAppend.length };
   } catch (err) {
     console.error('[Sheets] ❌ Failed to sync all orders:', err.message);
     throw err;
   }
 };
-
-
