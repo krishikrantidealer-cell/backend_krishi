@@ -699,12 +699,20 @@ exports.createDealer = async (req, res, next) => {
       existingUser.isVerified = true;
       existingUser.status = 'verified';
       existingUser.kycApprovedAt = new Date();
+      existingUser.isPanelCreated = true;
+      existingUser.createdVia = existingUser.createdVia && existingUser.createdVia !== 'app' ? existingUser.createdVia : 'lead_conversion';
+      if (!existingUser.source || existingUser.source === 'App') {
+        existingUser.source = 'KD Panel';
+      }
       if (targetAgentId) {
         existingUser.assignedAgent = targetAgentId;
         existingUser.assignedAt = new Date();
       }
 
       const creatorName = `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || req.user.email || 'Admin';
+      existingUser.createdByAdminId = existingUser.createdByAdminId || req.user._id;
+      existingUser.createdByAdminName = existingUser.createdByAdminName || creatorName;
+      existingUser.createdByRole = existingUser.createdByRole || req.user.role;
       const creationNote = notes || `Upgraded to Verified Dealer directly from KD Panel by ${creatorName}`;
       existingUser.notes = existingUser.notes ? `${existingUser.notes}\n\n${creationNote}` : creationNote;
       existingUser.notesHistory = existingUser.notesHistory || [];
@@ -781,6 +789,11 @@ exports.createDealer = async (req, res, next) => {
       isVerified: true,
       isProfileComplete: true,
       source: 'KD Panel',
+      isPanelCreated: true,
+      createdVia: 'panel',
+      createdByAdminId: req.user._id,
+      createdByAdminName: creatorName,
+      createdByRole: req.user.role,
       status: 'verified',
       monthlyTarget: 500000,
       preferredLanguage: 'en',

@@ -248,6 +248,27 @@ const userSchema = new mongoose.Schema({
   },
   deletedByAdminName: {
     type: String
+  },
+  isPanelCreated: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
+  createdVia: {
+    type: String,
+    enum: ['panel', 'app', 'bulk_upload', 'lead_conversion', 'other'],
+    default: 'app',
+    index: true
+  },
+  createdByAdminId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  createdByAdminName: {
+    type: String
+  },
+  createdByRole: {
+    type: String
   }
 }, {
   timestamps: true

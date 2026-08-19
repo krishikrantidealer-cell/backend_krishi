@@ -640,22 +640,7 @@ exports.adminCreateOrder = async (req, res, next) => {
       }
     }
 
-    // Prevent duplicate orders for the same payment reference
-    // We only check if the paymentId is not a generic one like 'CASH' or 'UPI'
-    const genericIds = ['CASH', 'UPI', 'BANK TRANSFER', 'OFFLINE'];
-    if (!genericIds.includes(paymentId.trim().toUpperCase())) {
-      const existingOrder = await Order.findOne({
-        user: userId,
-        razorpayPaymentId: paymentId.trim()
-      });
-      if (existingOrder) {
-        return res.status(200).json({
-          success: true,
-          message: 'Order already exists for this payment reference',
-          order: existingOrder
-        });
-      }
-    }
+
 
     // -----------------------------------------------------------------------
     // Sales coupon: validate and apply price override to the matching variant
