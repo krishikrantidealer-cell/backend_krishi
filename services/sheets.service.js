@@ -133,7 +133,7 @@ async function _fetchUser(order) {
   if (!userId) return null;
   try {
     return await User.findById(userId)
-      .select('firstName lastName phoneNumber alternatePhone email shopName assignedAgent preferredLanguage')
+      .select('firstName lastName phoneNumber alternatePhone email shopName assignedAgent preferredLanguage isPanelCreated source createdVia')
       .populate('assignedAgent', 'firstName lastName phoneNumber email')
       .lean();
   } catch {
@@ -230,7 +230,22 @@ function _buildRowForHeaders(headers, order, user) {
   const courier = order.courierName || 'Delhivery';
   const trackingId = order.awbNumber || '';
   const trackingLink = order.trackingUrl || (trackingId ? `https://www.delhivery.com/track/package/${trackingId}` : '');
-  const orderType = order.orderType || 'New';
+
+  // Check if dealer is panel-created / tagged as panel
+  const isPanelDealer = Boolean(
+    user?.isPanelCreated === true ||
+    (typeof user?.source === 'string' && user.source.toLowerCase().includes('panel')) ||
+    (typeof user?.createdVia === 'string' && user.createdVia.toLowerCase() === 'panel') ||
+    order.user?.isPanelCreated === true ||
+    (typeof order.user?.source === 'string' && order.user.source.toLowerCase().includes('panel')) ||
+    (typeof order.user?.createdVia === 'string' && order.user.createdVia.toLowerCase() === 'panel')
+  );
+
+  let orderType = order.orderType || (isPanelDealer ? 'Old' : 'New');
+  if (isPanelDealer && (!order.orderType || order.orderType.toLowerCase() === 'new')) {
+    orderType = 'Old';
+  }
+
   const language = user?.preferredLanguage || 'Hindi';
   const trigger = order.orderStatus || 'Processing';
   const courierCharges = order.shippingCharges || 0;
@@ -413,7 +428,7 @@ exports.syncAllOrdersToSheet = async () => {
     const orders = await Order.find({})
       .populate({
         path: 'user',
-        select: 'firstName lastName phoneNumber alternatePhone email shopName assignedAgent preferredLanguage',
+        select: 'firstName lastName phoneNumber alternatePhone email shopName assignedAgent preferredLanguage isPanelCreated source createdVia',
         populate: {
           path: 'assignedAgent',
           select: 'firstName lastName phoneNumber email',
