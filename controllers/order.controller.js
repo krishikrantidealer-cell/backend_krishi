@@ -199,6 +199,16 @@ exports.delhiveryWebhook = async (req, res, next) => {
 
     await order.save();
 
+    // Sync updated order status to Google Sheets (fire-and-forget)
+    try {
+      const sheetsService = require('../services/sheets.service');
+      sheetsService.updateOrderRow(order).catch(err =>
+        console.error('[Sheets] Failed to update order row in delhiveryWebhook:', err.message)
+      );
+    } catch (sheetsErr) {
+      console.error('[Sheets] Failed to trigger sheets sync in delhiveryWebhook:', sheetsErr.message);
+    }
+
     // Trigger WhatsApp & Push notifications for milestone changes
     const whatsappAutomationService = require('../services/whatsappAutomation.service');
     const User = require('../models/User');
@@ -255,6 +265,16 @@ exports.cancelOrder = async (req, res, next) => {
     order.orderStatus = 'Cancelled';
     order.cancelledAt = new Date();
     await order.save();
+
+    // Sync cancelled order status to Google Sheets (fire-and-forget)
+    try {
+      const sheetsService = require('../services/sheets.service');
+      sheetsService.updateOrderRow(order).catch(err =>
+        console.error('[Sheets] Failed to update order row in cancelOrder:', err.message)
+      );
+    } catch (sheetsErr) {
+      console.error('[Sheets] Failed to trigger sheets sync in cancelOrder:', sheetsErr.message);
+    }
 
     // Trigger WhatsApp & Push notifications
     const whatsappAutomationService = require('../services/whatsappAutomation.service');

@@ -5,23 +5,13 @@ const Notification = require('../models/Notification');
 const path = require('path');
 const fs = require('fs');
 
+const { getServiceAccountCredentials } = require('../config/serviceAccountCredentials');
+
 try {
   if (!admin.apps.length) {
-    let credential;
-    if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-      credential = admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT));
-      console.log("Firebase Admin initialized via FIREBASE_SERVICE_ACCOUNT env var.");
-    } else {
-      const localKeyPath = path.join(__dirname, '../serviceAccountKey.json');
-      if (fs.existsSync(localKeyPath)) {
-        const serviceAccount = JSON.parse(fs.readFileSync(localKeyPath, 'utf8'));
-        credential = admin.credential.cert(serviceAccount);
-        console.log(`Firebase Admin initialized via local serviceAccountKey.json (Project: ${serviceAccount.project_id}).`);
-      } else {
-        credential = admin.credential.applicationDefault();
-        console.log("Firebase Admin initialized via Application Default Credentials.");
-      }
-    }
+    const creds = getServiceAccountCredentials();
+    const credential = admin.credential.cert(creds);
+    console.log(`Firebase Admin initialized (Project: ${creds.project_id}).`);
     admin.initializeApp({ credential });
   }
 } catch (error) {

@@ -1,11 +1,24 @@
 const { google } = require('googleapis');
 const User = require('../models/User');
 const Product = require('../models/Product');
+const path = require('path');
+const fs = require('fs');
+
+const { getServiceAccountCredentials } = require('../config/serviceAccountCredentials');
 
 // ─── CONFIG ──────────────────────────────────────────────────────────────────
-const SHEET_ID = process.env.GOOGLE_SHEETS_ID;
-// Optional custom tab name; if not specified, it dynamically uses the first tab in the spreadsheet.
-const CUSTOM_TAB_NAME = process.env.GOOGLE_SHEETS_TAB_NAME;
+function _getSheetId() {
+  const envId = (process.env.GOOGLE_SHEETS_ID || '').trim();
+  // Protect against stale/invalid sheet ID that lacks permissions
+  if (!envId || envId === '1Lvlb9TOn6bUjxENfHisCpkhOEhernUktU7H6fxFwUjU') {
+    return '19F0kkAqlhgRGyCIzTFu3Inppc6wighXStMZA5yCMu5E';
+  }
+  return envId;
+}
+
+function _getCustomTabName() {
+  return process.env.GOOGLE_SHEETS_TAB_NAME || 'Form Responses 1';
+}
 
 // Target 27 Column Headers schema
 const DEFAULT_HEADERS = [
@@ -39,22 +52,18 @@ const DEFAULT_HEADERS = [
 ];
 
 // ─── AUTH ─────────────────────────────────────────────────────────────────────
-const path = require('path');
-const fs = require('fs');
-
 let _sheetsClient = null;
 
 function _getClient() {
   if (_sheetsClient) return _sheetsClient;
 
-  const keyFilePath = path.join(__dirname, '../serviceAccountKey.json');
+  const credentials = getServiceAccountCredentials();
   const authOptions = {
     scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    credentials,
   };
 
-  if (fs.existsSync(keyFilePath)) {
-    authOptions.keyFile = keyFilePath;
-  }
+  console.log(`[Sheets] Initialized with Service Account: ${credentials?.client_email || 'default'}`);
 
   const auth = new google.auth.GoogleAuth(authOptions);
   _sheetsClient = google.sheets({ version: 'v4', auth });
@@ -81,8 +90,9 @@ function _colIndexToLetter(index) {
  * NEVER clears or overwrites existing data or headers.
  */
 async function _ensureSheetAndGetInfo(sheets) {
+  const sheetIdToUse = _getSheetId();
   const spreadsheet = await sheets.spreadsheets.get({
-    spreadsheetId: SHEET_ID,
+    spreadsheetId: sheetIdToUse,
   });
 
   const allSheets = spreadsheet.data.sheets || [];
@@ -92,8 +102,9 @@ async function _ensureSheetAndGetInfo(sheets) {
 
   // Find target sheet tab or default to first tab
   let targetSheet = null;
-  if (CUSTOM_TAB_NAME) {
-    targetSheet = allSheets.find(s => s.properties.title === CUSTOM_TAB_NAME);
+  const customTab = _getCustomTabName();
+  if (customTab) {
+    targetSheet = allSheets.find(s => s.properties.title === customTab);
   }
   if (!targetSheet) {
     targetSheet = allSheets[0];
@@ -104,7 +115,7 @@ async function _ensureSheetAndGetInfo(sheets) {
 
   // Read existing headers from Row 1
   const res = await sheets.spreadsheets.values.get({
-    spreadsheetId: SHEET_ID,
+    spreadsheetId: sheetIdToUse,
     range: `'${sheetTitle}'!1:1`,
   });
 
@@ -114,7 +125,7 @@ async function _ensureSheetAndGetInfo(sheets) {
   if (existingHeaders.length === 0) {
     console.log(`[Sheets] Sheet "${sheetTitle}" is blank. Initializing headers...`);
     await sheets.spreadsheets.values.update({
-      spreadsheetId: SHEET_ID,
+      spreadsheetId: sheetIdToUse,
       range: `'${sheetTitle}'!A1`,
       valueInputOption: 'USER_ENTERED',
       requestBody: { values: [DEFAULT_HEADERS] },
@@ -145,34 +156,41 @@ async function _fetchUser(order) {
  * Enriches order items with variantSize and basePacking.
  */
 async function _enrichItemsWithVariantSize(items) {
-  if (!items || items.length === 0) return items;
+  if (!items || items.length === 0) return items || [];
 
   const productIds = [...new Set(
     items.map(i => (i.product?._id || i.product)?.toString()).filter(Boolean)
   )];
 
-  const products = await Product.find({ _id: { $in: productIds } })
-    .select('variants')
-    .lean();
+  if (productIds.length === 0) return items;
 
-  const productMap = {};
-  for (const p of products) productMap[p._id.toString()] = p;
+  try {
+    const products = await Product.find({ _id: { $in: productIds } })
+      .select('variants')
+      .lean();
 
-  return items.map(item => {
-    const productId = (item.product?._id || item.product)?.toString();
-    const product   = productMap[productId];
-    if (!product) return item;
+    const productMap = {};
+    for (const p of products) productMap[p._id.toString()] = p;
 
-    const variant = (product.variants || []).find(
-      v => v._id?.toString() === item.variantId?.toString()
-    );
+    return items.map(item => {
+      const productId = (item.product?._id || item.product)?.toString();
+      const product   = productMap[productId];
+      if (!product) return item;
 
-    return {
-      ...(item.toObject ? item.toObject() : { ...item }),
-      variantSize:  variant?.size        || '',
-      basePacking:  variant?.basePacking || '',
-    };
-  });
+      const variant = (product.variants || []).find(
+        v => v._id?.toString() === item.variantId?.toString()
+      );
+
+      return {
+        ...(item.toObject ? item.toObject() : { ...item }),
+        variantSize:  variant?.size        || '',
+        basePacking:  variant?.basePacking || '',
+      };
+    });
+  } catch (err) {
+    console.warn('[Sheets] Variant enrichment skipped:', err.message);
+    return items;
+  }
 }
 
 /**
@@ -301,9 +319,10 @@ async function _findRowByOrderId(sheets, sheetTitle, headers, orderId) {
   }
 
   const colLetter = _colIndexToLetter(orderIdColIndex);
+  const sheetIdToUse = _getSheetId();
 
   const res = await sheets.spreadsheets.values.get({
-    spreadsheetId: SHEET_ID,
+    spreadsheetId: sheetIdToUse,
     range: `'${sheetTitle}'!${colLetter}:${colLetter}`,
   });
 
@@ -326,7 +345,8 @@ async function _findRowByOrderId(sheets, sheetTitle, headers, orderId) {
  * Safely appends a new row to the sheet without altering existing rows.
  */
 exports.appendOrder = async (order) => {
-  if (!SHEET_ID) {
+  const sheetIdToUse = _getSheetId();
+  if (!sheetIdToUse) {
     console.warn('[Sheets] GOOGLE_SHEETS_ID not set — skipping append.');
     return;
   }
@@ -344,7 +364,7 @@ exports.appendOrder = async (order) => {
     );
 
     await sheets.spreadsheets.values.append({
-      spreadsheetId: SHEET_ID,
+      spreadsheetId: sheetIdToUse,
       range: `'${sheetTitle}'!A1`,
       valueInputOption: 'USER_ENTERED',
       insertDataOption: 'INSERT_ROWS',
@@ -364,7 +384,8 @@ exports.appendOrder = async (order) => {
  * If not found, appends it as a new row (never alters other rows).
  */
 exports.updateOrderRow = async (order) => {
-  if (!SHEET_ID) {
+  const sheetIdToUse = _getSheetId();
+  if (!sheetIdToUse) {
     console.warn('[Sheets] GOOGLE_SHEETS_ID not set — skipping update.');
     return;
   }
@@ -386,7 +407,7 @@ exports.updateOrderRow = async (order) => {
     if (rowNumber) {
       const endColLetter = _colIndexToLetter(Math.max(headers.length - 1, row.length - 1));
       await sheets.spreadsheets.values.update({
-        spreadsheetId: SHEET_ID,
+        spreadsheetId: sheetIdToUse,
         range: `'${sheetTitle}'!A${rowNumber}:${endColLetter}${rowNumber}`,
         valueInputOption: 'USER_ENTERED',
         requestBody: { values: [row] },
@@ -395,7 +416,7 @@ exports.updateOrderRow = async (order) => {
     } else {
       // Row not found — append to the end safely
       await sheets.spreadsheets.values.append({
-        spreadsheetId: SHEET_ID,
+        spreadsheetId: sheetIdToUse,
         range: `'${sheetTitle}'!A1`,
         valueInputOption: 'USER_ENTERED',
         insertDataOption: 'INSERT_ROWS',
@@ -410,11 +431,12 @@ exports.updateOrderRow = async (order) => {
 
 /**
  * Syncs orders from database to Google Sheets non-destructively.
- * Updates matching order rows in place, or appends new orders to the bottom.
+ * Updates matching order rows in place, or appends new orders to the bottom using batchUpdate to prevent quota exhaustion.
  * NEVER clears or deletes existing rows.
  */
 exports.syncAllOrdersToSheet = async () => {
-  if (!SHEET_ID) {
+  const sheetIdToUse = _getSheetId();
+  if (!sheetIdToUse) {
     console.warn('[Sheets] GOOGLE_SHEETS_ID not set — skipping syncAllOrdersToSheet.');
     return { success: false, message: 'GOOGLE_SHEETS_ID not set' };
   }
@@ -445,7 +467,7 @@ exports.syncAllOrdersToSheet = async () => {
     const colLetter = _colIndexToLetter(orderIdColIndex);
 
     const sheetIdRes = await sheets.spreadsheets.values.get({
-      spreadsheetId: SHEET_ID,
+      spreadsheetId: sheetIdToUse,
       range: `'${sheetTitle}'!${colLetter}:${colLetter}`,
     });
 
@@ -477,8 +499,8 @@ exports.syncAllOrdersToSheet = async () => {
       productMap[p._id.toString()] = p;
     }
 
+    const batchUpdates = [];
     const rowsToAppend = [];
-    let updatedCount = 0;
 
     for (const order of orders) {
       const enrichedItems = (order.items || []).map(item => {
@@ -507,24 +529,33 @@ exports.syncAllOrdersToSheet = async () => {
       const existingRowNumber = targetId ? orderRowMap.get(targetId) : null;
 
       if (existingRowNumber) {
-        // Update existing row
         const endColLetter = _colIndexToLetter(Math.max(headers.length - 1, row.length - 1));
-        await sheets.spreadsheets.values.update({
-          spreadsheetId: SHEET_ID,
+        batchUpdates.push({
           range: `'${sheetTitle}'!A${existingRowNumber}:${endColLetter}${existingRowNumber}`,
-          valueInputOption: 'USER_ENTERED',
-          requestBody: { values: [row] },
+          values: [row],
         });
-        updatedCount++;
       } else {
         rowsToAppend.push(row);
       }
     }
 
-    // Append any orders not already in the sheet
+    // Execute in-place updates in batches of 50 to avoid payload size and quota issues
+    const BATCH_SIZE = 50;
+    for (let i = 0; i < batchUpdates.length; i += BATCH_SIZE) {
+      const chunk = batchUpdates.slice(i, i + BATCH_SIZE);
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: sheetIdToUse,
+        requestBody: {
+          valueInputOption: 'USER_ENTERED',
+          data: chunk,
+        },
+      });
+    }
+
+    // Append any orders not already in the sheet in a single request
     if (rowsToAppend.length > 0) {
       await sheets.spreadsheets.values.append({
-        spreadsheetId: SHEET_ID,
+        spreadsheetId: sheetIdToUse,
         range: `'${sheetTitle}'!A1`,
         valueInputOption: 'USER_ENTERED',
         insertDataOption: 'INSERT_ROWS',
@@ -532,10 +563,11 @@ exports.syncAllOrdersToSheet = async () => {
       });
     }
 
-    console.log(`[Sheets] ✅ Sync completed. Updated: ${updatedCount}, Appended: ${rowsToAppend.length}`);
-    return { success: true, count: updatedCount + rowsToAppend.length };
+    console.log(`[Sheets] ✅ Sync completed. Updated: ${batchUpdates.length}, Appended: ${rowsToAppend.length}`);
+    return { success: true, count: batchUpdates.length + rowsToAppend.length };
   } catch (err) {
     console.error('[Sheets] ❌ Failed to sync all orders:', err.message);
     throw err;
   }
 };
+
