@@ -253,8 +253,8 @@ const runScheduledSegmentNotifications = async (forcedJob = null) => {
 
     console.log(`[Cron] Checking Scheduled Notifications (Kolkata Time: ${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}, Date: ${datePart}, forcedJob: ${forcedJob || 'auto'})`);
 
-    // 1. 9:00 AM (09:00 - 11:00 AM window = 540 to 660 mins) - KYC Reminders (Segment A, B, C)
-    if (forcedJob === '9AM' || forcedJob === 'ALL' || (!forcedJob && currentMinutesOfDay >= 540 && currentMinutesOfDay < 660)) {
+    // 1. 9:00 AM (09:00 - 11:29 IST = 540 to 689 mins) - KYC Reminders (Segment A, B, C)
+    if (forcedJob === '9AM' || forcedJob === 'ALL' || (!forcedJob && currentMinutesOfDay >= 540 && currentMinutesOfDay < 690)) {
       const lastRun9AM = await getLastRunDate('job9AM');
       if (forcedJob || lastRun9AM !== datePart) {
         console.log(`[Cron] Triggering 9:00 AM KYC Reminder Job for date ${datePart}`);
@@ -263,8 +263,8 @@ const runScheduledSegmentNotifications = async (forcedJob = null) => {
       }
     }
 
-    // 2. 11:30 AM (11:30 AM - 13:30 window = 690 to 810 mins) - First Order Reminders (Segment D)
-    if (forcedJob === '1130AM' || forcedJob === 'ALL' || (!forcedJob && currentMinutesOfDay >= 690 && currentMinutesOfDay < 810)) {
+    // 2. 11:30 AM (11:30 - 13:59 IST = 690 to 839 mins) - First Order Reminders (Segment D)
+    if (forcedJob === '1130AM' || forcedJob === 'ALL' || (!forcedJob && currentMinutesOfDay >= 690 && currentMinutesOfDay < 840)) {
       const lastRun1130AM = await getLastRunDate('job1130AM');
       if (forcedJob || lastRun1130AM !== datePart) {
         console.log(`[Cron] Triggering 11:30 AM First Order Job for date ${datePart}`);
@@ -273,8 +273,8 @@ const runScheduledSegmentNotifications = async (forcedJob = null) => {
       }
     }
 
-    // 3. 2:00 PM (14:00 - 16:00 window = 840 to 960 mins) - Cart & Checkout Recovery (Segment E, F)
-    if (forcedJob === '2PM' || forcedJob === 'ALL' || (!forcedJob && currentMinutesOfDay >= 840 && currentMinutesOfDay < 960)) {
+    // 3. 2:00 PM (14:00 - 17:29 IST = 840 to 1049 mins) - Cart & Checkout Recovery (Segment E, F)
+    if (forcedJob === '2PM' || forcedJob === 'ALL' || (!forcedJob && currentMinutesOfDay >= 840 && currentMinutesOfDay < 1050)) {
       const lastRun2PM = await getLastRunDate('job2PM');
       if (forcedJob || lastRun2PM !== datePart) {
         console.log(`[Cron] Triggering 2:00 PM Cart & Checkout Recovery Job for date ${datePart}`);
@@ -283,8 +283,8 @@ const runScheduledSegmentNotifications = async (forcedJob = null) => {
       }
     }
 
-    // 4. 5:30 PM (17:30 - 19:30 window = 1050 to 1170 mins) - New Arrivals & Offers (Segment H, I + Seasonal/Trust)
-    if (forcedJob === '530PM' || forcedJob === 'ALL' || (!forcedJob && currentMinutesOfDay >= 1050 && currentMinutesOfDay < 1170)) {
+    // 4. 5:30 PM (17:30 - 19:59 IST = 1050 to 1199 mins) - New Arrivals & Offers (Segment H, I + Seasonal/Trust)
+    if (forcedJob === '530PM' || forcedJob === 'ALL' || (!forcedJob && currentMinutesOfDay >= 1050 && currentMinutesOfDay < 1200)) {
       const lastRun530PM = await getLastRunDate('job530PM');
       if (forcedJob || lastRun530PM !== datePart) {
         console.log(`[Cron] Triggering 5:30 PM New Arrivals Job for date ${datePart}`);
@@ -293,8 +293,8 @@ const runScheduledSegmentNotifications = async (forcedJob = null) => {
       }
     }
 
-    // 5. 8:00 PM (20:00 - 22:00 window = 1200 to 1320 mins) - Urgency & Win-back (Segment G, J + Urgency)
-    if (forcedJob === '8PM' || forcedJob === 'ALL' || (!forcedJob && currentMinutesOfDay >= 1200 && currentMinutesOfDay < 1320)) {
+    // 5. 8:00 PM (20:00 - 23:59 IST = 1200 to 1439 mins) - Urgency & Win-back (Segment G, J + Urgency)
+    if (forcedJob === '8PM' || forcedJob === 'ALL' || (!forcedJob && currentMinutesOfDay >= 1200 && currentMinutesOfDay < 1440)) {
       const lastRun8PM = await getLastRunDate('job8PM');
       if (forcedJob || lastRun8PM !== datePart) {
         console.log(`[Cron] Triggering 8:00 PM Urgency Job for date ${datePart}`);

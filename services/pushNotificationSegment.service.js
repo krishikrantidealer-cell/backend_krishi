@@ -1,11 +1,23 @@
-const User = require('../models/User');
-const Order = require('../models/Order');
-const Cart = require('../models/Cart');
-const CheckoutSession = require('../models/CheckoutSession');
-const notificationService = require('./notification.service');
+const User = require("../models/User");
+const Order = require("../models/Order");
+const Cart = require("../models/Cart");
+const CheckoutSession = require("../models/CheckoutSession");
+const notificationService = require("./notification.service");
+
+// Calculate Midnight IST (UTC + 5:30)
+const getStartOfTodayIST = () => {
+  const now = new Date();
+  const kolkataMillis = now.getTime() + (5.5 * 60 * 60 * 1000);
+  const kolkataDate = new Date(kolkataMillis);
+  const year = kolkataDate.getUTCFullYear();
+  const month = kolkataDate.getUTCMonth();
+  const date = kolkataDate.getUTCDate();
+  // Midnight in IST converted back to UTC
+  return new Date(Date.UTC(year, month, date, 0, 0, 0) - (5.5 * 60 * 60 * 1000));
+};
 
 const SEGMENT_NOTIFICATIONS = {
-  // Segment A: Installed → KYC Not Started (Goal: Complete KYC | Frequency: Daily 3–5 days)
+  // Segment A: Installed App -> KYC Not Started (Goal: Complete KYC | Frequency: Daily, 3-5 days cap)
   A: [
     { title: "🔓 Dealer Price Unlock करें!", body: "बस Shop Photo और License Upload करें। KYC पूरा होते ही Wholesale Rates दिखाई देंगे।" },
     { title: "🏪 आपकी दुकान तैयार है?", body: "अब सिर्फ KYC Complete करें और Bulk Purchase शुरू करें।" },
@@ -14,7 +26,7 @@ const SEGMENT_NOTIFICATIONS = {
     { title: "📦 Bulk खरीदारी अब आसान है!", body: "KYC Complete करें और हजारों Products Dealer Rate पर खरीदें." }
   ],
 
-  // Segment B: KYC Started → Docs Pending (Goal: Complete KYC | Frequency: Daily)
+  // Segment B: KYC Started -> Documents Pending (Goal: Complete KYC | Frequency: Daily)
   B: [
     { title: "📄 आपका KYC अधूरा है।", body: "बस बाकी Documents Upload करें और Approval प्राप्त करें।" },
     { title: "⏳ आपका Approval आपका इंतजार कर रहा है।", body: "Remaining Documents Upload करें।" },
@@ -27,7 +39,7 @@ const SEGMENT_NOTIFICATIONS = {
     { title: "🔍 आपका Verification चल रहा है।", body: "थोड़ा इंतजार करें। जल्द ही Dealer Prices Unlock हो जाएंगी।" }
   ],
 
-  // Segment D: KYC Approved → No Order (Goal: First Purchase | Frequency: Daily)
+  // Segment D: KYC Approved -> No Order (Goal: First Purchase | Frequency: Daily)
   D: [
     { title: "🎉 आपका KYC Approved हो गया!", body: "अब Dealer Price पर अपना पहला Order Place करें।" },
     { title: "📦 Stock भरने का सही समय!", body: "Wholesale Price Unlock हो चुकी है। आज ही पहला Order करें।" },
@@ -36,14 +48,14 @@ const SEGMENT_NOTIFICATIONS = {
     { title: "🎯 Dealer बनने का अगला कदम...", body: "पहला Order करें और Business बढ़ाएँ।" }
   ],
 
-  // Segment E: Cart Abandoned (Goal: Recover Cart | Frequency: 2 reminders)
+  // Segment E: Cart Abandonment (Goal: Recover Cart | Frequency: 2 reminders)
   E: [
     { title: "🛒 आपका Cart आपका इंतजार कर रहा है।", body: "Order Complete करें और Fast Delivery पाएँ।" },
     { title: "⏰ Cart में Products अभी भी मौजूद हैं।", body: "Checkout पूरा करें।" },
     { title: "🚚 जल्दी करें!", body: "आपका Bulk Order अभी भी Pending है." }
   ],
 
-  // Segment F: Checkout / Payment Pending (Goal: Complete Payment | Frequency: 2 reminders)
+  // Segment F: Payment / Checkout Pending (Goal: Complete Payment | Frequency: 2 reminders)
   F: [
     { title: "💳 आपका Payment Pending है।", body: "Order Complete करें और Dispatch शुरू करवाएँ।" },
     { title: "📦 आपका Order तैयार है।", body: "बस Payment Complete करें।" },
@@ -72,7 +84,7 @@ const SEGMENT_NOTIFICATIONS = {
     { title: "🚛 बड़ा Stock... बड़ा फायदा...", body: "₹50,000+ Order करें और Exclusive Discounts पाएँ।" }
   ],
 
-  // Segment J: Inactive 30+ Days (Goal: Win-back | Frequency: Weekly)
+  // Segment J: Inactive Dealers 30+ Days (Goal: Win-back | Frequency: Weekly)
   J: [
     { title: "👋 काफी समय हो गया...", body: "फिर से Wholesale Price पर खरीदारी शुरू करें।" },
     { title: "📦 आपका Dealer Account अभी भी Active है।", body: "आज ही Bulk Order करें।" },
@@ -123,7 +135,7 @@ class PushNotificationSegmentService {
   async processInBatches(items, batchSize, iteratorFn) {
     for (let i = 0; i < items.length; i += batchSize) {
       const chunk = items.slice(i, i + batchSize);
-      await Promise.all(chunk.map(item => iteratorFn(item).catch(err => console.error('[Segment Batch Error]:', err.message))));
+      await Promise.all(chunk.map(item => iteratorFn(item).catch(err => console.error("[Segment Batch Error]:", err.message))));
     }
   }
 
@@ -133,32 +145,31 @@ class PushNotificationSegmentService {
   async getEligibleUsersForSegment(segment) {
     const now = new Date();
     const thirtyMinsAgo = new Date(now.getTime() - 30 * 60 * 1000);
-    const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
-    const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-    const threeDaysAgo = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
+    const threeHoursAgo = new Date(now.getTime() - 3 * 60 * 60 * 1000);
+    const twoDaysAgo = new Date(now.getTime() - 48 * 60 * 60 * 1000);
+    const sixDaysAgo = new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000);
     const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
     const fortyEightHoursAgo = new Date(now.getTime() - 48 * 60 * 60 * 1000);
     const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
+    const startOfToday = getStartOfTodayIST();
 
     const validFcmTokenQuery = {
       isDeleted: { $ne: true },
-      fcmToken: { $exists: true, $nin: [null, ''] }
+      fcmToken: { $exists: true, $nin: [null, ""] }
     };
 
     switch (segment) {
-      case 'A': // Installed → KYC Not Started (Daily, 3–5 days cap)
+      case "A": // Installed -> KYC Not Started (Daily, 3–5 days cap)
         return await User.find({
           ...validFcmTokenQuery,
-          role: 'user',
-          kycStatus: { $in: ['pending', 'not_started'] },
+          role: "user",
+          kycStatus: { $in: ["pending", "not_started"] },
           isKycComplete: { $ne: true },
           $and: [
-            { $or: [{ shopImage: { $exists: false } }, { shopImage: null }, { shopImage: '' }] },
-            { $or: [{ licenceImage: { $exists: false } }, { licenceImage: null }, { licenceImage: '' }] },
-            { $or: [{ gstNumber: { $exists: false } }, { gstNumber: null }, { gstNumber: '' }] },
+            { $or: [{ shopImage: { $exists: false } }, { shopImage: null }, { shopImage: "" }] },
+            { $or: [{ licenceImage: { $exists: false } }, { licenceImage: null }, { licenceImage: "" }] },
+            { $or: [{ gstNumber: { $exists: false } }, { gstNumber: null }, { gstNumber: "" }] },
             {
               $or: [
                 { kycReminderCount: { $exists: false } },
@@ -175,18 +186,18 @@ class PushNotificationSegmentService {
           ]
         });
 
-      case 'B': // KYC Started → Docs Pending (Daily)
+      case "B": // KYC Started -> Documents Pending (Daily)
         return await User.find({
           ...validFcmTokenQuery,
-          role: 'user',
-          kycStatus: { $in: ['pending', 'rejected'] },
+          role: "user",
+          kycStatus: { $in: ["pending", "rejected"] },
           isKycComplete: { $ne: true },
           $and: [
             {
               $or: [
-                { shopImage: { $nin: [null, ''] } },
-                { licenceImage: { $nin: [null, ''] } },
-                { gstNumber: { $nin: [null, ''] } }
+                { shopImage: { $nin: [null, ""] } },
+                { licenceImage: { $nin: [null, ""] } },
+                { gstNumber: { $nin: [null, ""] } }
               ]
             },
             {
@@ -199,11 +210,11 @@ class PushNotificationSegmentService {
           ]
         });
 
-      case 'C': // KYC Under Review (Once/day)
+      case "C": // KYC Under Review (Once/day)
         return await User.find({
           ...validFcmTokenQuery,
-          role: 'user',
-          kycStatus: { $in: ['submitted', 'processing'] },
+          role: "user",
+          kycStatus: { $in: ["submitted", "processing"] },
           $or: [
             { lastKycReminderSentAt: { $exists: false } },
             { lastKycReminderSentAt: null },
@@ -211,21 +222,21 @@ class PushNotificationSegmentService {
           ]
         });
 
-      case 'D': { // KYC Approved → No Order (Daily)
-        const usersWithOrders = await Order.distinct('user', { orderStatus: { $ne: 'Cancelled' } });
+      case "D": { // KYC Approved -> No Order (Daily at 11:30 AM)
+        const usersWithOrders = await Order.distinct("user", { orderStatus: { $ne: "Cancelled" } });
         return await User.find({
           ...validFcmTokenQuery,
           _id: { $nin: usersWithOrders },
-          kycStatus: 'verified',
+          kycStatus: "verified",
           $or: [
-            { lastMarketingNotificationSentAt: { $exists: false } },
-            { lastMarketingNotificationSentAt: null },
-            { lastMarketingNotificationSentAt: { $lt: startOfToday } }
+            { lastFirstOrderSentAt: { $exists: false } },
+            { lastFirstOrderSentAt: null },
+            { lastFirstOrderSentAt: { $lt: startOfToday } }
           ]
         });
       }
 
-      case 'E': { // Cart Abandoned (2 reminders max)
+      case "E": { // Cart Abandoned (2 reminders max)
         const abandonedCarts = await Cart.find({
           items: { $exists: true, $not: { $size: 0 } },
           updatedAt: { $lt: thirtyMinsAgo, $gt: sevenDaysAgo },
@@ -238,11 +249,11 @@ class PushNotificationSegmentService {
               $or: [
                 { lastReminderSentAt: { $exists: false } },
                 { lastReminderSentAt: null },
-                { lastReminderSentAt: { $lt: oneDayAgo } }
+                { lastReminderSentAt: { $lt: threeHoursAgo } }
               ]
             }
           ]
-        }).populate('user');
+        }).populate("user");
 
         const userMap = new Map();
         for (const cart of abandonedCarts) {
@@ -254,31 +265,54 @@ class PushNotificationSegmentService {
         return Array.from(userMap.values());
       }
 
-      case 'F': { // Checkout / Payment Pending (2 reminders max)
+      case "F": { // Checkout / Payment Pending (2 reminders max)
         const pendingOrders = await Order.find({
-          paymentStatus: 'Pending',
-          orderStatus: { $nin: ['Cancelled', 'Delivered'] },
-          createdAt: { $lt: thirtyMinsAgo, $gt: fortyEightHoursAgo }
-        }).populate('user');
+          paymentStatus: "Pending",
+          orderStatus: { $nin: ["Cancelled", "Delivered"] },
+          createdAt: { $lt: thirtyMinsAgo, $gt: fortyEightHoursAgo },
+          $or: [
+            { reminderCount: { $exists: false } },
+            { reminderCount: { $lt: 2 } }
+          ],
+          $and: [
+            {
+              $or: [
+                { lastReminderSentAt: { $exists: false } },
+                { lastReminderSentAt: null },
+                { lastReminderSentAt: { $lt: threeHoursAgo } }
+              ]
+            }
+          ]
+        }).populate("user");
 
         const pendingSessions = await CheckoutSession.find({
-          status: 'Pending',
+          status: "Pending",
           orderCreated: { $ne: true },
           createdAt: { $lt: thirtyMinsAgo, $gt: fortyEightHoursAgo },
           $or: [
             { reminderCount: { $exists: false } },
             { reminderCount: { $lt: 2 } }
+          ],
+          $and: [
+            {
+              $or: [
+                { lastReminderSentAt: { $exists: false } },
+                { lastReminderSentAt: null },
+                { lastReminderSentAt: { $lt: threeHoursAgo } }
+              ]
+            }
           ]
-        }).populate('user');
+        }).populate("user");
 
         const userMap = new Map();
         for (const o of pendingOrders) {
-          if (o.user && o.user.fcmToken && (!o.user.lastMarketingNotificationSentAt || o.user.lastMarketingNotificationSentAt < oneDayAgo)) {
+          if (o.user && o.user.fcmToken) {
+            o.user._orderId = o._id;
             userMap.set(o.user._id.toString(), o.user);
           }
         }
         for (const s of pendingSessions) {
-          if (s.user && s.user.fcmToken && !userMap.has(s.user._id.toString()) && (!s.user.lastMarketingNotificationSentAt || s.user.lastMarketingNotificationSentAt < oneDayAgo)) {
+          if (s.user && s.user.fcmToken && !userMap.has(s.user._id.toString())) {
             s.user._sessionId = s._id;
             userMap.set(s.user._id.toString(), s.user);
           }
@@ -286,9 +320,9 @@ class PushNotificationSegmentService {
         return Array.from(userMap.values());
       }
 
-      case 'G': { // Ordered Once (Repeat purchase after 7–15 days)
+      case "G": { // Ordered Once (Repeat purchase after 7–15 days)
         const onceUserStats = await Order.aggregate([
-          { $match: { orderStatus: { $ne: 'Cancelled' } } },
+          { $match: { orderStatus: { $ne: "Cancelled" } } },
           { $group: { _id: "$user", count: { $sum: 1 }, lastOrderDate: { $max: "$createdAt" } } },
           { $match: { count: 1, lastOrderDate: { $lte: sevenDaysAgo } } }
         ]);
@@ -298,16 +332,16 @@ class PushNotificationSegmentService {
           ...validFcmTokenQuery,
           _id: { $in: onceUserIds },
           $or: [
-            { lastMarketingNotificationSentAt: { $exists: false } },
-            { lastMarketingNotificationSentAt: null },
-            { lastMarketingNotificationSentAt: { $lt: sevenDaysAgo } }
+            { lastRepeatReminderSentAt: { $exists: false } },
+            { lastRepeatReminderSentAt: null },
+            { lastRepeatReminderSentAt: { $lt: sevenDaysAgo } }
           ]
         });
       }
 
-      case 'H': { // Active Buyers (2–3 / week)
+      case "H": { // Active Buyers (2–3 / week)
         const multiUserStats = await Order.aggregate([
-          { $match: { orderStatus: { $ne: 'Cancelled' } } },
+          { $match: { orderStatus: { $ne: "Cancelled" } } },
           { $group: { _id: "$user", count: { $sum: 1 } } },
           { $match: { count: { $gt: 1 } } }
         ]);
@@ -317,16 +351,16 @@ class PushNotificationSegmentService {
           ...validFcmTokenQuery,
           _id: { $in: multiUserIds },
           $or: [
-            { lastMarketingNotificationSentAt: { $exists: false } },
-            { lastMarketingNotificationSentAt: null },
-            { lastMarketingNotificationSentAt: { $lt: threeDaysAgo } }
+            { lastActiveBuyerSentAt: { $exists: false } },
+            { lastActiveBuyerSentAt: null },
+            { lastActiveBuyerSentAt: { $lt: twoDaysAgo } }
           ]
         });
       }
 
-      case 'I': { // High Value Dealers (Weekly)
+      case "I": { // High Value Dealers (Weekly)
         const highValueStats = await Order.aggregate([
-          { $match: { orderStatus: { $ne: 'Cancelled' } } },
+          { $match: { orderStatus: { $ne: "Cancelled" } } },
           { $group: { _id: "$user", totalSpent: { $sum: "$totalAmount" }, maxSingleOrder: { $max: "$totalAmount" } } },
           { $match: { $or: [{ totalSpent: { $gte: 50000 } }, { maxSingleOrder: { $gte: 50000 } }] } }
         ]);
@@ -336,41 +370,41 @@ class PushNotificationSegmentService {
           ...validFcmTokenQuery,
           _id: { $in: highValueIds },
           $or: [
-            { lastMarketingNotificationSentAt: { $exists: false } },
-            { lastMarketingNotificationSentAt: null },
-            { lastMarketingNotificationSentAt: { $lt: sevenDaysAgo } }
+            { lastVipSentAt: { $exists: false } },
+            { lastVipSentAt: null },
+            { lastVipSentAt: { $lt: sixDaysAgo } }
           ]
         });
       }
 
-      case 'J': { // Inactive 30+ Days (Weekly)
-        const recentActiveUsers = await Order.distinct('user', {
-          orderStatus: { $ne: 'Cancelled' },
+      case "J": { // Inactive 30+ Days (Weekly)
+        const recentActiveUsers = await Order.distinct("user", {
+          orderStatus: { $ne: "Cancelled" },
           createdAt: { $gte: thirtyDaysAgo }
         });
 
         return await User.find({
           ...validFcmTokenQuery,
           _id: { $nin: recentActiveUsers },
-          kycStatus: 'verified',
+          kycStatus: "verified",
           createdAt: { $lte: thirtyDaysAgo },
           $or: [
-            { lastMarketingNotificationSentAt: { $exists: false } },
-            { lastMarketingNotificationSentAt: null },
-            { lastMarketingNotificationSentAt: { $lt: sevenDaysAgo } }
+            { lastWinBackSentAt: { $exists: false } },
+            { lastWinBackSentAt: null },
+            { lastWinBackSentAt: { $lt: sixDaysAgo } }
           ]
         });
       }
 
-      case 'SEASONAL':
-      case 'TRUST':
-      case 'URGENCY': {
+      case "SEASONAL":
+      case "TRUST":
+      case "URGENCY": {
         return await User.find({
           ...validFcmTokenQuery,
           $or: [
             { lastMarketingNotificationSentAt: { $exists: false } },
             { lastMarketingNotificationSentAt: null },
-            { lastMarketingNotificationSentAt: { $lt: oneDayAgo } }
+            { lastMarketingNotificationSentAt: { $lt: startOfToday } }
           ]
         });
       }
@@ -384,28 +418,28 @@ class PushNotificationSegmentService {
    * Dispatches notifications to all eligible users in a given segment
    */
   async sendToSegment(segment, customTemplate = null) {
-    console.log(`[SegmentService] Processing Segment ${segment}...`);
+    console.log("[SegmentService] Processing Segment " + segment + "...");
     const template = customTemplate || this.getNotificationForSegment(segment);
     if (!template) {
-      console.warn(`[SegmentService] No template found for segment ${segment}`);
+      console.warn("[SegmentService] No template found for segment " + segment);
       return { count: 0, segment };
     }
 
     const users = await this.getEligibleUsersForSegment(segment);
-    console.log(`[SegmentService] Segment ${segment}: Found ${users.length} eligible users with active FCM tokens.`);
+    console.log("[SegmentService] Segment " + segment + ": Found " + users.length + " eligible users with active FCM tokens.");
 
     if (users.length === 0) {
       return { count: 0, segment };
     }
 
     const now = new Date();
-    const isUtility = ['A', 'B', 'C'].includes(segment);
-    let targetRoute = '/dashboard';
+    const isUtility = ["A", "B", "C"].includes(segment);
+    let targetRoute = "/dashboard";
 
-    if (['A', 'B', 'C'].includes(segment)) {
-      targetRoute = '/kyc';
-    } else if (['E', 'F'].includes(segment)) {
-      targetRoute = '/cart';
+    if (["A", "B", "C"].includes(segment)) {
+      targetRoute = "/kyc";
+    } else if (["E", "F"].includes(segment)) {
+      targetRoute = "/cart";
     }
 
     let dispatchedCount = 0;
@@ -420,85 +454,121 @@ class PushNotificationSegmentService {
           });
         } else {
           await notificationService.sendMarketingNotification(user._id, template.title, template.body, targetRoute);
-          await User.findByIdAndUpdate(user._id, {
-            $set: { lastMarketingNotificationSentAt: now, lastMarketingSegment: segment }
-          });
+          
+          const updateFields = {
+            lastMarketingNotificationSentAt: now,
+            lastMarketingSegment: segment
+          };
+
+          if (segment === "D") updateFields.lastFirstOrderSentAt = now;
+          if (segment === "H") {
+            updateFields.lastActiveBuyerSentAt = now;
+            updateFields.last530PMSentAt = now;
+          }
+          if (segment === "I") {
+            updateFields.lastVipSentAt = now;
+            updateFields.last530PMSentAt = now;
+          }
+          if (segment === "G") {
+            updateFields.lastRepeatReminderSentAt = now;
+            updateFields.last8PMSentAt = now;
+          }
+          if (segment === "J") {
+            updateFields.lastWinBackSentAt = now;
+            updateFields.last8PMSentAt = now;
+          }
+
+          await User.findByIdAndUpdate(user._id, { $set: updateFields });
         }
 
-        if (segment === 'E' && user._cartId) {
+        if (segment === "E" && user._cartId) {
           await Cart.findByIdAndUpdate(user._cartId, {
             $set: { lastReminderSentAt: now },
             $inc: { reminderCount: 1 }
           });
         }
 
-        if (segment === 'F' && user._sessionId) {
-          await CheckoutSession.findByIdAndUpdate(user._sessionId, {
-            $set: { lastReminderSentAt: now },
-            $inc: { reminderCount: 1 }
-          });
+        if (segment === "F") {
+          if (user._sessionId) {
+            await CheckoutSession.findByIdAndUpdate(user._sessionId, {
+              $set: { lastReminderSentAt: now },
+              $inc: { reminderCount: 1 }
+            });
+          }
+          if (user._orderId) {
+            await Order.findByIdAndUpdate(user._orderId, {
+              $set: { lastReminderSentAt: now },
+              $inc: { reminderCount: 1 }
+            });
+          }
         }
 
         dispatchedCount++;
       } catch (err) {
-        console.error(`[SegmentService] Error dispatching to user ${user._id}:`, err.message);
+        console.error("[SegmentService] Error dispatching to user " + user._id + ":", err.message);
       }
     });
 
-    console.log(`[SegmentService] Segment ${segment}: Completed sending ${dispatchedCount} notifications.`);
+    console.log("[SegmentService] Segment " + segment + ": Completed sending " + dispatchedCount + " notifications.");
     return { count: dispatchedCount, segment };
   }
 
   // 9:00 AM – KYC Reminders (Segment A, B, C)
   async trigger9AMJobs() {
-    console.log('[SegmentService] --- Triggering 9:00 AM KYC Reminder Jobs ---');
-    const resA = await this.sendToSegment('A');
-    const resB = await this.sendToSegment('B');
-    const resC = await this.sendToSegment('C');
+    console.log("[SegmentService] --- Triggering 9:00 AM KYC Reminder Jobs ---");
+    const resA = await this.sendToSegment("A");
+    const resB = await this.sendToSegment("B");
+    const resC = await this.sendToSegment("C");
     return { A: resA.count, B: resB.count, C: resC.count };
   }
 
   // 11:30 AM – First Order Reminders (Segment D)
   async trigger1130AMJobs() {
-    console.log('[SegmentService] --- Triggering 11:30 AM First Order Job ---');
-    const resD = await this.sendToSegment('D');
+    console.log("[SegmentService] --- Triggering 11:30 AM First Order Job ---");
+    const resD = await this.sendToSegment("D");
     return { D: resD.count };
   }
 
   // 2:00 PM – Cart & Checkout Recovery (Segment E, F)
   async trigger2PMJobs() {
-    console.log('[SegmentService] --- Triggering 2:00 PM Cart & Checkout Recovery Jobs ---');
-    const resE = await this.sendToSegment('E');
-    const resF = await this.sendToSegment('F');
+    console.log("[SegmentService] --- Triggering 2:00 PM Cart & Checkout Recovery Jobs ---");
+    const resE = await this.sendToSegment("E");
+    const resF = await this.sendToSegment("F");
     return { E: resE.count, F: resF.count };
   }
 
-  // 5:30 PM – New Arrivals & Offers (Segment H, I + Seasonal/Trust fallback)
+  // 5:30 PM – New Arrivals & Offers (Segment H, I + Seasonal/Trust fallback broadcast)
   async trigger530PMJobs() {
-    console.log('[SegmentService] --- Triggering 5:30 PM New Arrivals & Offers Jobs ---');
-    const resH = await this.sendToSegment('H');
-    const resI = await this.sendToSegment('I');
+    console.log("[SegmentService] --- Triggering 5:30 PM New Arrivals & Offers Jobs ---");
+    const resH = await this.sendToSegment("H");
+    const resI = await this.sendToSegment("I");
 
-    // If active buyers or VIP buyers were reached, they already got specific H/I content.
-    // For all other app users who have not received marketing today, send Seasonal / Trust / New Arrivals broadcast
-    const randomFallbackType = Math.random() > 0.5 ? 'SEASONAL' : 'TRUST';
+    // Broadcast to users who have not received 5:30 PM notification today
+    const startOfToday = getStartOfTodayIST();
+    const randomFallbackType = Math.random() > 0.5 ? "SEASONAL" : "TRUST";
     const fallbackTemplate = this.getNotificationForSegment(randomFallbackType);
+    
     const fallbackUsers = await User.find({
-      fcmToken: { $exists: true, $nin: [null, ''] },
+      isDeleted: { $ne: true },
+      fcmToken: { $exists: true, $nin: [null, ""] },
       $or: [
-        { lastMarketingNotificationSentAt: { $exists: false } },
-        { lastMarketingNotificationSentAt: null },
-        { lastMarketingNotificationSentAt: { $lt: new Date(Date.now() - 24 * 60 * 60 * 1000) } }
+        { last530PMSentAt: { $exists: false } },
+        { last530PMSentAt: null },
+        { last530PMSentAt: { $lt: startOfToday } }
       ]
     });
 
-    console.log(`[SegmentService] 5:30 PM ${randomFallbackType} broadcast eligible users: ${fallbackUsers.length}`);
+    console.log("[SegmentService] 5:30 PM " + randomFallbackType + " broadcast eligible users: " + fallbackUsers.length);
     let fallbackCount = 0;
     const now = new Date();
     await this.processInBatches(fallbackUsers, 50, async (u) => {
-      await notificationService.sendMarketingNotification(u._id, fallbackTemplate.title, fallbackTemplate.body, '/dashboard');
+      await notificationService.sendMarketingNotification(u._id, fallbackTemplate.title, fallbackTemplate.body, "/dashboard");
       await User.findByIdAndUpdate(u._id, {
-        $set: { lastMarketingNotificationSentAt: now, lastMarketingSegment: randomFallbackType }
+        $set: {
+          last530PMSentAt: now,
+          lastMarketingNotificationSentAt: now,
+          lastMarketingSegment: randomFallbackType
+        }
       });
       fallbackCount++;
     });
@@ -506,30 +576,37 @@ class PushNotificationSegmentService {
     return { H: resH.count, I: resI.count, fallbackType: randomFallbackType, fallbackCount };
   }
 
-  // 8:00 PM – Urgency & Win-back (Segment G, J + Urgency broadcast)
+  // 8:00 PM – Urgency notifications (Segment G, J + Urgency broadcast)
   async trigger8PMJobs() {
-    console.log('[SegmentService] --- Triggering 8:00 PM Urgency & Win-back Jobs ---');
-    const resG = await this.sendToSegment('G');
-    const resJ = await this.sendToSegment('J');
+    console.log("[SegmentService] --- Triggering 8:00 PM Urgency & Win-back Jobs ---");
+    const resG = await this.sendToSegment("G");
+    const resJ = await this.sendToSegment("J");
 
-    // For all other app users who have not received marketing today, send Urgency broadcast
-    const urgencyTemplate = this.getNotificationForSegment('URGENCY');
+    // Broadcast urgency to all other app users who have not received an 8:00 PM notification today
+    const startOfToday = getStartOfTodayIST();
+    const urgencyTemplate = this.getNotificationForSegment("URGENCY");
+    
     const urgencyUsers = await User.find({
-      fcmToken: { $exists: true, $nin: [null, ''] },
+      isDeleted: { $ne: true },
+      fcmToken: { $exists: true, $nin: [null, ""] },
       $or: [
-        { lastMarketingNotificationSentAt: { $exists: false } },
-        { lastMarketingNotificationSentAt: null },
-        { lastMarketingNotificationSentAt: { $lt: new Date(Date.now() - 24 * 60 * 60 * 1000) } }
+        { last8PMSentAt: { $exists: false } },
+        { last8PMSentAt: null },
+        { last8PMSentAt: { $lt: startOfToday } }
       ]
     });
 
-    console.log(`[SegmentService] 8:00 PM URGENCY broadcast eligible users: ${urgencyUsers.length}`);
+    console.log("[SegmentService] 8:00 PM URGENCY broadcast eligible users: " + urgencyUsers.length);
     let urgencyCount = 0;
     const now = new Date();
     await this.processInBatches(urgencyUsers, 50, async (u) => {
-      await notificationService.sendMarketingNotification(u._id, urgencyTemplate.title, urgencyTemplate.body, '/dashboard');
+      await notificationService.sendMarketingNotification(u._id, urgencyTemplate.title, urgencyTemplate.body, "/dashboard");
       await User.findByIdAndUpdate(u._id, {
-        $set: { lastMarketingNotificationSentAt: now, lastMarketingSegment: 'URGENCY' }
+        $set: {
+          last8PMSentAt: now,
+          lastMarketingNotificationSentAt: now,
+          lastMarketingSegment: "URGENCY"
+        }
       });
       urgencyCount++;
     });
@@ -542,10 +619,10 @@ class PushNotificationSegmentService {
    */
   async getSegmentStats() {
     const totalUsers = await User.countDocuments({ isDeleted: { $ne: true } });
-    const usersWithToken = await User.countDocuments({ fcmToken: { $exists: true, $nin: [null, ''] }, isDeleted: { $ne: true } });
+    const usersWithToken = await User.countDocuments({ fcmToken: { $exists: true, $nin: [null, ""] }, isDeleted: { $ne: true } });
 
     const stats = {};
-    const segments = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'SEASONAL', 'URGENCY', 'TRUST'];
+    const segments = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "SEASONAL", "URGENCY", "TRUST"];
 
     for (const seg of segments) {
       const eligible = await this.getEligibleUsersForSegment(seg);

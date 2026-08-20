@@ -1,21 +1,22 @@
 
 async function syncBannerToCategory(bannerDoc) {
-  if (bannerDoc.type === "category_card" && bannerDoc.imageUrl) {
+  if ((bannerDoc.type === "category_card" || bannerDoc.type === "category") && bannerDoc.imageUrl) {
     try {
       const Category = require("../models/Category");
       const mongoose = require("mongoose");
       const target = (bannerDoc.redirectTarget || bannerDoc.title || "").trim();
       if (target) {
+        const cleanTarget = target.replace(/^cat_/, '');
         const orConditions = [
-          { name: new RegExp(`^${target}$`, "i") },
-          { slug: new RegExp(`^${target}$`, "i") }
+          { name: new RegExp(`^${cleanTarget}$`, "i") },
+          { slug: new RegExp(`^${cleanTarget}$`, "i") }
         ];
-        if (mongoose.Types.ObjectId.isValid(target)) {
-          orConditions.push({ _id: target });
+        if (mongoose.Types.ObjectId.isValid(cleanTarget)) {
+          orConditions.push({ _id: cleanTarget });
         }
         await Category.updateMany(
           { $or: orConditions },
-          { $set: { bannerImage: bannerDoc.imageUrl } }
+          { $set: { bannerImage: bannerDoc.imageUrl, ...(bannerDoc.title ? { bannerTitle: bannerDoc.title } : {}) } }
         );
       }
     } catch (_) {}
@@ -80,7 +81,7 @@ exports.getBannerById = async (req, res, next) => {
  */
 exports.createBanner = async (req, res, next) => {
   try {
-    const { title, priority, type, isActive, redirectType, redirectTarget, imageUrl: bodyImageUrl } = req.body;
+    const { title, priority, type, isActive, redirectType, redirectTarget, placementPreset, imageUrl: bodyImageUrl } = req.body;
 
     let imageUrl = bodyImageUrl || '';
 
@@ -105,7 +106,8 @@ exports.createBanner = async (req, res, next) => {
       type: type || 'home',
       isActive: isActive !== undefined ? (isActive === true || isActive === 'true') : true,
       redirectType: redirectType || 'none',
-      redirectTarget: redirectTarget || ''
+      redirectTarget: redirectTarget || '',
+      placementPreset: placementPreset || ''
     });
 
     await banner.save();
@@ -135,7 +137,7 @@ exports.updateBanner = async (req, res, next) => {
       });
     }
 
-    const { title, priority, type, isActive, redirectType, redirectTarget, imageUrl: bodyImageUrl } = req.body;
+    const { title, priority, type, isActive, redirectType, redirectTarget, placementPreset, imageUrl: bodyImageUrl } = req.body;
 
     // Handle replacement file upload if provided
     if (req.file) {
@@ -152,6 +154,7 @@ exports.updateBanner = async (req, res, next) => {
     if (isActive !== undefined) banner.isActive = (isActive === true || isActive === 'true');
     if (redirectType !== undefined) banner.redirectType = redirectType;
     if (redirectTarget !== undefined) banner.redirectTarget = redirectTarget;
+    if (placementPreset !== undefined) banner.placementPreset = placementPreset;
 
     await banner.save();
     await syncBannerToCategory(banner);

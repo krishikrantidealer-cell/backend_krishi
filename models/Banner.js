@@ -34,6 +34,10 @@ const bannerSchema = new mongoose.Schema({
   redirectTarget: {
     type: String,
     trim: true
+  },
+  placementPreset: {
+    type: String,
+    trim: true
   }
 }, {
   timestamps: true

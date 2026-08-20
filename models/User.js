@@ -120,6 +120,28 @@ const userSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  lastFirstOrderSentAt: {
+    type: Date
+  },
+  last530PMSentAt: {
+    type: Date
+  },
+  last8PMSentAt: {
+    type: Date
+  },
+  lastActiveBuyerSentAt: {
+    type: Date
+  },
+  lastVipSentAt: {
+    type: Date
+  },
+  lastRepeatReminderSentAt: {
+    type: Date
+  },
+  lastWinBackSentAt: {
+    type: Date
+  },
+
   lastWhatsappSentAt: {
     type: Date,
     index: true

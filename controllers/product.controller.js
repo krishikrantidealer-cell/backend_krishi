@@ -55,26 +55,80 @@ const matchSubCollectionToBanner = (subName, banner) => {
 // Get all products with cursor-based pagination
 exports.getProducts = async (req, res, next) => {
   try {
-    const { cursor, limit, search, categoryId, subCategoryId, minPrice, maxPrice, isFeatured, collection } = req.query;
+    const { cursor, limit, search, minPrice, maxPrice, isFeatured, collection } = req.query;
+    const rawCategory = req.query.categoryId || req.query.category || req.query.categoryName || req.query.categorySlug;
+    const rawSubCategory = req.query.subCategoryId || req.query.subCategory || req.query.subCategoryName || req.query.subCategorySlug;
     
     const filters = {};
     const conditions = [];
 
-    if (categoryId) {
-      conditions.push({
+    if (rawCategory) {
+      const cleanCat = rawCategory.toString().trim().replace(/^cat_/, '');
+      const resolvedCatIds = [];
+
+      if (mongoose.Types.ObjectId.isValid(cleanCat)) {
+        resolvedCatIds.push(new mongoose.Types.ObjectId(cleanCat));
+      }
+
+      // Also lookup category by name or slug
+      const catDoc = await Category.findOne({
         $or: [
-          { categoryId: categoryId },
-          { categoryIds: categoryId }
+          { name: new RegExp(`^${cleanCat}$`, 'i') },
+          { slug: new RegExp(`^${cleanCat}$`, 'i') }
         ]
-      });
+      }).lean();
+
+      if (catDoc) {
+        if (!resolvedCatIds.some(id => id.toString() === catDoc._id.toString())) {
+          resolvedCatIds.push(catDoc._id);
+        }
+      }
+
+      if (resolvedCatIds.length > 0) {
+        conditions.push({
+          $or: [
+            { categoryId: { $in: resolvedCatIds } },
+            { categoryIds: { $in: resolvedCatIds } }
+          ]
+        });
+      } else {
+        conditions.push({ _id: null });
+      }
     }
-    if (subCategoryId) {
-      conditions.push({
-        $or: [
-          { subCategoryId: subCategoryId },
-          { subCategoryIds: subCategoryId }
-        ]
-      });
+
+    if (rawSubCategory) {
+      const cleanSub = rawSubCategory.toString().trim().replace(/^sub_/, '');
+      const resolvedSubIds = [];
+
+      if (mongoose.Types.ObjectId.isValid(cleanSub)) {
+        resolvedSubIds.push(new mongoose.Types.ObjectId(cleanSub));
+      }
+
+      // Also search within Category subCategories
+      const catWithSub = await Category.find({
+        "subCategories.name": new RegExp(`^${cleanSub}$`, 'i')
+      }).lean();
+
+      for (const c of catWithSub) {
+        for (const s of c.subCategories || []) {
+          if (s.name && s.name.toLowerCase() === cleanSub.toLowerCase()) {
+            if (!resolvedSubIds.some(id => id.toString() === s._id.toString())) {
+              resolvedSubIds.push(s._id);
+            }
+          }
+        }
+      }
+
+      if (resolvedSubIds.length > 0) {
+        conditions.push({
+          $or: [
+            { subCategoryId: { $in: resolvedSubIds } },
+            { subCategoryIds: { $in: resolvedSubIds } }
+          ]
+        });
+      } else {
+        conditions.push({ _id: null });
+      }
     }
 
     if (conditions.length > 0) {
@@ -91,7 +145,7 @@ exports.getProducts = async (req, res, next) => {
       filters.maxPrice = { $lte: Number(maxPrice) };
     }
 
-    const rawContextId = subCategoryId || categoryId || collection || (isFeatured === 'true' ? 'featured' : undefined);
+    const rawContextId = rawSubCategory || rawCategory || collection || (isFeatured === 'true' ? 'featured' : undefined);
     const contextId = rawContextId ? rawContextId.toString().replace(/\./g, '_dot_') : undefined;
 
     const result = await productService.getProducts(filters, {
