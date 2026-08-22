@@ -259,3 +259,48 @@ exports.triggerSegmentNow = async (req, res) => {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
+
+
+/**
+ * Upload banner image to GCS for push campaigns
+ */
+exports.uploadBannerImage = async (req, res, next) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'No image file provided in upload request',
+      });
+    }
+
+    const { uploadToGCS } = require('../utils/gcs');
+    const cleanFileName = req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const destination = `push_banners/${Date.now()}_${cleanFileName}`;
+    const imageUrl = await uploadToGCS(req.file.buffer, destination, req.file.mimetype);
+
+    // Also register in Banner model so it appears across admin banners
+    try {
+      const Banner = require('../models/Banner');
+      await Banner.create({
+        title: req.body.title || cleanFileName.replace(/.[^.]+$/, ''),
+        imageUrl,
+        type: 'marketing',
+        isActive: true,
+        priority: 10,
+      });
+    } catch (_) {}
+
+    return res.status(200).json({
+      success: true,
+      imageUrl,
+      fileName: cleanFileName,
+      message: 'Banner uploaded successfully',
+    });
+  } catch (error) {
+    console.error('[MarketingCampaignController] Error uploading banner:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to upload banner image',
+    });
+  }
+};

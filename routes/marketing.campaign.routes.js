@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const campaignController = require('../controllers/marketingCampaign.controller');
 const { protect, authorizeRoles } = require('../middlewares/auth.middleware');
+const upload = require('../middlewares/upload.middleware');
 
 // Protect all marketing campaign endpoints for admin/sales
 router.use(protect);
@@ -23,6 +24,12 @@ router.put('/:segment/config', campaignController.updateCampaignConfig);
  * @route   POST /api/marketing/push-campaigns/:segment/templates
  * @desc    Add a new notification copy/template to a segment
  */
+/**
+ * @route   POST /api/marketing/push-campaigns/upload-banner
+ * @desc    Upload banner image to Google Cloud Storage
+ */
+router.post('/upload-banner', upload.single('image'), campaignController.uploadBannerImage);
+
 router.post('/:segment/templates', campaignController.addTemplate);
 
 /**
