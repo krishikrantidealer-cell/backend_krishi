@@ -1,3 +1,19 @@
+
+function interpolatePlaceholders(text, user) {
+  if (!text || typeof text !== 'string') return text || '';
+  const rawName = (user?.firstName ? `${user.firstName}${user.lastName ? ' ' + user.lastName : ''}` : (user?.name || '')).trim();
+  const dealerName = rawName || 'Dealer';
+  const rawShopName = (user?.shopName || user?.businessName || user?.storeName || '').trim();
+  const shopName = rawShopName || 'आपकी दुकान';
+
+  return text
+    .replace(/\{\{\s*name\s*\}\}/gi, dealerName)
+    .replace(/\{\{\s*dealerName\s*\}\}/gi, dealerName)
+    .replace(/\{\{\s*shopName\s*\}\}/gi, shopName)
+    .replace(/\{\{\s*shopname\s*\}\}/gi, shopName)
+    .replace(/\{\{\s*dukaan\s*\}\}/gi, shopName);
+}
+
 const NotificationCampaign = require('../models/NotificationCampaign');
 const User = require('../models/User');
 const pushNotificationSegmentService = require('../services/pushNotificationSegment.service');
@@ -198,8 +214,10 @@ exports.sendTestNotification = async (req, res) => {
     const campaign = await NotificationCampaign.findOne({ segmentKey: segment.toUpperCase() });
     const resolvedTemplate = await pushNotificationSegmentService.getNotificationForSegment(segment, targetUser);
 
-    const title = customTitle || resolvedTemplate?.title || "Test Push Notification";
-    const body = customBody || resolvedTemplate?.body || "This is a test preview from Krishi Dealer Panel.";
+    const rawTitle = customTitle || resolvedTemplate?.title || "Test Push Notification";
+    const rawBody = customBody || resolvedTemplate?.body || "This is a test preview from Krishi Dealer Panel.";
+    const title = interpolatePlaceholders(rawTitle, targetUser);
+    const body = interpolatePlaceholders(rawBody, targetUser);
     const imageUrl = customImageUrl !== undefined ? customImageUrl : (resolvedTemplate?.image || resolvedTemplate?.imageUrl || "");
     const actionRoute = customActionRoute || resolvedTemplate?.actionRoute || campaign?.targetRoute || "/dashboard";
 

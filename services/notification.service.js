@@ -18,14 +18,34 @@ try {
   console.error("Firebase Admin initialization failed:", error.message);
 }
 
+
+function interpolateUserPlaceholders(text, user) {
+  if (!text || typeof text !== 'string') return text || '';
+  const rawName = (user?.firstName ? `${user.firstName}${user.lastName ? ' ' + user.lastName : ''}` : (user?.name || '')).trim();
+  const dealerName = rawName || 'Dealer';
+  const rawShopName = (user?.shopName || user?.businessName || user?.storeName || '').trim();
+  const shopName = rawShopName || 'आपकी दुकान';
+
+  return text
+    .replace(/\{\{\s*name\s*\}\}/gi, dealerName)
+    .replace(/\{\{\s*dealerName\s*\}\}/gi, dealerName)
+    .replace(/\{\{\s*shopName\s*\}\}/gi, shopName)
+    .replace(/\{\{\s*shopname\s*\}\}/gi, shopName)
+    .replace(/\{\{\s*dukaan\s*\}\}/gi, shopName);
+}
+
 class NotificationService {
   async sendUtilityNotification(userId, title, body, actionRoute, imageUrl) {
     try {
+      const user = await User.findById(userId);
+      const resolvedTitle = interpolateUserPlaceholders(title, user);
+      const resolvedBody = interpolateUserPlaceholders(body, user);
+
       // 1. Save to Database (Enterprise Persistent Log)
       const dbNotification = await Notification.create({
         user: userId,
-        title: title,
-        body: body,
+        title: resolvedTitle,
+        body: resolvedBody,
         category: 'utility',
         actionRoute: actionRoute || '/',
         ...(imageUrl && { imageUrl: imageUrl })
@@ -41,7 +61,6 @@ class NotificationService {
       }
 
       // 2. Send Push Notification via Firebase
-      const user = await User.findById(userId);
       if (!user || !user.fcmToken) {
         console.log(`FCM Token missing for user ${userId}. Push notification skipped, but logged to DB.`);
         return;
@@ -56,15 +75,15 @@ class NotificationService {
       const message = {
         token: user.fcmToken,
         notification: {
-          title: title,
-          body: body,
+          title: resolvedTitle,
+          body: resolvedBody,
           ...(imageUrl && { imageUrl: imageUrl })
         },
         data: {
           category: 'utility',
           action_route: actionRoute || '/',
-          title: title,
-          body: body,
+          title: resolvedTitle,
+          body: resolvedBody,
           click_action: 'FLUTTER_NOTIFICATION_CLICK',
           ...(imageUrl && { image: imageUrl, imageUrl: imageUrl })
         },
@@ -110,13 +129,18 @@ class NotificationService {
 
   async sendMarketingNotification(userId, title, body, actionRoute, imageUrl) {
     try {
+      const user = await User.findById(userId);
+      const resolvedTitle = interpolateUserPlaceholders(title, user);
+      const resolvedBody = interpolateUserPlaceholders(body, user);
+
       // 1. Save to Database (Enterprise Persistent Log)
       const dbNotification = await Notification.create({
         user: userId,
-        title: title,
-        body: body,
+        title: resolvedTitle,
+        body: resolvedBody,
         category: 'marketing',
-        actionRoute: actionRoute || '/dashboard'
+        actionRoute: actionRoute || '/dashboard',
+        ...(imageUrl && { imageUrl: imageUrl })
       });
       console.log(`Marketing Notification logged to database with ID: ${dbNotification._id}`);
 
@@ -129,7 +153,6 @@ class NotificationService {
       }
 
       // 2. Send Push Notification via Firebase
-      const user = await User.findById(userId);
       if (!user || !user.fcmToken) {
         console.log(`FCM Token missing for user ${userId}. Push notification skipped, but logged to DB.`);
         return;
@@ -143,15 +166,15 @@ class NotificationService {
       const message = {
         token: user.fcmToken,
         notification: {
-          title: title,
-          body: body,
+          title: resolvedTitle,
+          body: resolvedBody,
           ...(imageUrl && { imageUrl: imageUrl })
         },
         data: {
           category: 'marketing',
           action_route: actionRoute || '/dashboard',
-          title: title,
-          body: body,
+          title: resolvedTitle,
+          body: resolvedBody,
           click_action: 'FLUTTER_NOTIFICATION_CLICK',
           ...(imageUrl && { image: imageUrl })
         },

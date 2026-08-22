@@ -1,3 +1,19 @@
+
+function interpolatePlaceholders(text, user) {
+  if (!text || typeof text !== 'string') return text || '';
+  const rawName = (user?.firstName ? `${user.firstName}${user.lastName ? ' ' + user.lastName : ''}` : (user?.name || '')).trim();
+  const dealerName = rawName || 'Dealer';
+  const rawShopName = (user?.shopName || user?.businessName || user?.storeName || '').trim();
+  const shopName = rawShopName || 'आपकी दुकान';
+
+  return text
+    .replace(/\{\{\s*name\s*\}\}/gi, dealerName)
+    .replace(/\{\{\s*dealerName\s*\}\}/gi, dealerName)
+    .replace(/\{\{\s*shopName\s*\}\}/gi, shopName)
+    .replace(/\{\{\s*shopname\s*\}\}/gi, shopName)
+    .replace(/\{\{\s*dukaan\s*\}\}/gi, shopName);
+}
+
 const User = require("../models/User");
 const Order = require("../models/Order");
 const Cart = require("../models/Cart");
@@ -636,15 +652,17 @@ class PushNotificationSegmentService {
         if (!template) return;
 
         const targetRoute = template.actionRoute || (isUtility ? "/kyc" : (["E", "F"].includes(segment) ? "/cart" : "/dashboard"));
+        const personalizedTitle = interpolatePlaceholders(template.title, user);
+        const personalizedBody = interpolatePlaceholders(template.body, user);
 
         if (isUtility) {
-          await notificationService.sendUtilityNotification(user._id, template.title, template.body, targetRoute, template.image || template.imageUrl);
+          await notificationService.sendUtilityNotification(user._id, personalizedTitle, personalizedBody, targetRoute, template.image || template.imageUrl);
           await User.findByIdAndUpdate(user._id, {
             $set: { lastKycReminderSentAt: now },
             $inc: { kycReminderCount: 1 }
           });
         } else {
-          await notificationService.sendMarketingNotification(user._id, template.title, template.body, targetRoute, template.image || template.imageUrl);
+          await notificationService.sendMarketingNotification(user._id, personalizedTitle, personalizedBody, targetRoute, template.image || template.imageUrl);
           
           const updateFields = {
             lastMarketingNotificationSentAt: now,
