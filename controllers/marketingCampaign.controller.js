@@ -186,7 +186,7 @@ exports.deleteTemplate = async (req, res) => {
 exports.sendTestNotification = async (req, res) => {
   try {
     const { segment } = req.params;
-    const { phoneNumber, userId, customTitle, customBody, customImageUrl, customActionRoute } = req.body;
+    const { phoneNumber, userId, customTitle, customBody, customImageUrl, customActionRoute, customBtn1Text, customBtn2Text } = req.body;
 
     let targetUser = null;
     if (phoneNumber) {
@@ -222,10 +222,13 @@ exports.sendTestNotification = async (req, res) => {
     const actionRoute = customActionRoute || resolvedTemplate?.actionRoute || campaign?.targetRoute || "/dashboard";
 
     const isUtility = ["A", "B", "C"].includes(segment.toUpperCase());
+    const btn1Text = customBtn1Text || resolvedTemplate?.btn1Text || "⚡ Open Offer";
+    const btn2Text = customBtn2Text || resolvedTemplate?.btn2Text || "📞 Call Support";
+
     if (isUtility) {
-      await notificationService.sendUtilityNotification(targetUser._id, title, body, actionRoute, imageUrl);
+      await notificationService.sendUtilityNotification(targetUser._id, title, body, actionRoute, imageUrl, btn1Text, btn2Text);
     } else {
-      await notificationService.sendMarketingNotification(targetUser._id, title, body, actionRoute, imageUrl);
+      await notificationService.sendMarketingNotification(targetUser._id, title, body, actionRoute, imageUrl, btn1Text, btn2Text);
     }
 
     return res.status(200).json({

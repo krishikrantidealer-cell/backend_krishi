@@ -655,14 +655,17 @@ class PushNotificationSegmentService {
         const personalizedTitle = interpolatePlaceholders(template.title, user);
         const personalizedBody = interpolatePlaceholders(template.body, user);
 
+        const btn1Text = template.btn1Text || "⚡ Open Offer";
+        const btn2Text = template.btn2Text || "📞 Call Support";
+
         if (isUtility) {
-          await notificationService.sendUtilityNotification(user._id, personalizedTitle, personalizedBody, targetRoute, template.image || template.imageUrl);
+          await notificationService.sendUtilityNotification(user._id, personalizedTitle, personalizedBody, targetRoute, template.image || template.imageUrl, btn1Text, btn2Text);
           await User.findByIdAndUpdate(user._id, {
             $set: { lastKycReminderSentAt: now },
             $inc: { kycReminderCount: 1 }
           });
         } else {
-          await notificationService.sendMarketingNotification(user._id, personalizedTitle, personalizedBody, targetRoute, template.image || template.imageUrl);
+          await notificationService.sendMarketingNotification(user._id, personalizedTitle, personalizedBody, targetRoute, template.image || template.imageUrl, btn1Text, btn2Text);
           
           const updateFields = {
             lastMarketingNotificationSentAt: now,

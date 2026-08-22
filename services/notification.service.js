@@ -35,7 +35,7 @@ function interpolateUserPlaceholders(text, user) {
 }
 
 class NotificationService {
-  async sendUtilityNotification(userId, title, body, actionRoute, imageUrl) {
+  async sendUtilityNotification(userId, title, body, actionRoute, imageUrl, btn1Text = "⚡ Open Offer", btn2Text = "📞 Call Support") {
     try {
       const user = await User.findById(userId);
       const resolvedTitle = interpolateUserPlaceholders(title, user);
@@ -84,6 +84,8 @@ class NotificationService {
           action_route: actionRoute || '/',
           title: resolvedTitle,
           body: resolvedBody,
+          btn1_text: btn1Text || '⚡ Open Offer',
+          btn2_text: btn2Text || '📞 Call Support',
           click_action: 'FLUTTER_NOTIFICATION_CLICK',
           ...(imageUrl && { image: imageUrl, imageUrl: imageUrl })
         },
@@ -127,7 +129,7 @@ class NotificationService {
     }
   }
 
-  async sendMarketingNotification(userId, title, body, actionRoute, imageUrl) {
+  async sendMarketingNotification(userId, title, body, actionRoute, imageUrl, btn1Text = "⚡ Open Offer", btn2Text = "📞 Call Support") {
     try {
       const user = await User.findById(userId);
       const resolvedTitle = interpolateUserPlaceholders(title, user);
@@ -175,8 +177,10 @@ class NotificationService {
           action_route: actionRoute || '/dashboard',
           title: resolvedTitle,
           body: resolvedBody,
+          btn1_text: btn1Text || '⚡ Open Offer',
+          btn2_text: btn2Text || '📞 Call Support',
           click_action: 'FLUTTER_NOTIFICATION_CLICK',
-          ...(imageUrl && { image: imageUrl })
+          ...(imageUrl && { image: imageUrl, imageUrl: imageUrl })
         },
         android: {
           priority: 'high',
