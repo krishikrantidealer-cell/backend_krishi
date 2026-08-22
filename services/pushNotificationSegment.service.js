@@ -607,13 +607,9 @@ class PushNotificationSegmentService {
       case "SEASONAL":
       case "TRUST":
       case "URGENCY": {
+        // Full broadcast to ALL users with active FCM push tokens
         return await User.find({
-          ...validFcmTokenQuery,
-          $or: [
-            { lastMarketingNotificationSentAt: { $exists: false } },
-            { lastMarketingNotificationSentAt: null },
-            { lastMarketingNotificationSentAt: { $lt: startOfToday } }
-          ]
+          ...validFcmTokenQuery
         });
       }
 
