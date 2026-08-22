@@ -2,6 +2,7 @@ const User = require("../models/User");
 const Order = require("../models/Order");
 const Cart = require("../models/Cart");
 const CheckoutSession = require("../models/CheckoutSession");
+const NotificationCampaign = require("../models/NotificationCampaign");
 const notificationService = require("./notification.service");
 
 // Calculate Midnight IST (UTC + 5:30)
@@ -16,119 +17,309 @@ const getStartOfTodayIST = () => {
   return new Date(Date.UTC(year, month, date, 0, 0, 0) - (5.5 * 60 * 60 * 1000));
 };
 
-const SEGMENT_NOTIFICATIONS = {
-  // Segment A: Installed App -> KYC Not Started (Goal: Complete KYC | Frequency: Daily, 3-5 days cap)
-  A: [
-    { title: "🔓 Dealer Price Unlock करें!", body: "बस Shop Photo और License Upload करें। KYC पूरा होते ही Wholesale Rates दिखाई देंगे।" },
-    { title: "🏪 आपकी दुकान तैयार है?", body: "अब सिर्फ KYC Complete करें और Bulk Purchase शुरू करें।" },
-    { title: "💰 Retail नहीं... Dealer Price पर खरीदें!", body: "KYC पूरा करें और ज्यादा Margin कमाएँ।" },
-    { title: "⚡ 2 मिनट का काम...", body: "Shop Photo Upload करें, Wholesale Price Unlock करें।" },
-    { title: "📦 Bulk खरीदारी अब आसान है!", body: "KYC Complete करें और हजारों Products Dealer Rate पर खरीदें." }
-  ],
+const GCS_BANNER_BASE_URL = "https://storage.googleapis.com/krishi-product-images/push_banners";
 
-  // Segment B: KYC Started -> Documents Pending (Goal: Complete KYC | Frequency: Daily)
-  B: [
-    { title: "📄 आपका KYC अधूरा है।", body: "बस बाकी Documents Upload करें और Approval प्राप्त करें।" },
-    { title: "⏳ आपका Approval आपका इंतजार कर रहा है।", body: "Remaining Documents Upload करें।" },
-    { title: "🚀 Wholesale Buying से बस एक कदम दूर।", body: "KYC Complete करें और Dealer Prices देखें." }
-  ],
-
-  // Segment C: KYC Under Review (Goal: Reduce anxiety | Frequency: Once/day)
-  C: [
-    { title: "✅ आपका KYC Review में है।", body: "Approval मिलते ही Notification भेज दी जाएगी।" },
-    { title: "🔍 आपका Verification चल रहा है।", body: "थोड़ा इंतजार करें। जल्द ही Dealer Prices Unlock हो जाएंगी।" }
-  ],
-
-  // Segment D: KYC Approved -> No Order (Goal: First Purchase | Frequency: Daily)
-  D: [
-    { title: "🎉 आपका KYC Approved हो गया!", body: "अब Dealer Price पर अपना पहला Order Place करें।" },
-    { title: "📦 Stock भरने का सही समय!", body: "Wholesale Price Unlock हो चुकी है। आज ही पहला Order करें।" },
-    { title: "💸 ज्यादा Margin कमाने का मौका!", body: "Bulk खरीदें और ज्यादा Profit कमाएँ।" },
-    { title: "🚚 Fast Delivery + Wholesale Rates.", body: "अब पहला Order Place करें।" },
-    { title: "🎯 Dealer बनने का अगला कदम...", body: "पहला Order करें और Business बढ़ाएँ।" }
-  ],
-
-  // Segment E: Cart Abandonment (Goal: Recover Cart | Frequency: 2 reminders)
-  E: [
-    { title: "🛒 आपका Cart आपका इंतजार कर रहा है।", body: "Order Complete करें और Fast Delivery पाएँ।" },
-    { title: "⏰ Cart में Products अभी भी मौजूद हैं।", body: "Checkout पूरा करें।" },
-    { title: "🚚 जल्दी करें!", body: "आपका Bulk Order अभी भी Pending है." }
-  ],
-
-  // Segment F: Payment / Checkout Pending (Goal: Complete Payment | Frequency: 2 reminders)
-  F: [
-    { title: "💳 आपका Payment Pending है।", body: "Order Complete करें और Dispatch शुरू करवाएँ।" },
-    { title: "📦 आपका Order तैयार है।", body: "बस Payment Complete करें।" },
-    { title: "🚀 जल्दी करें!", body: "Payment Complete होते ही Order Dispatch होगा।" }
-  ],
-
-  // Segment G: Ordered Once (Goal: Repeat Purchase | Frequency: 7–15 days)
-  G: [
-    { title: "📈 Stock खत्म होने का इंतजार क्यों?", body: "आज ही Bulk Order करें।" },
-    { title: "🚚 Fast Delivery के साथ फिर से Order करें।", body: "Wholesale Rates आपका इंतजार कर रही हैं।" },
-    { title: "🌾 अपने Business की Supply बनाए रखें।", body: "Bulk Order करें।" },
-    { title: "💰 ज्यादा खरीदें... ज्यादा बचत करें।", body: "Wholesale Rates पर फिर से Order करें और ज्यादा Profit कमाएँ।" }
-  ],
-
-  // Segment H: Active Buyers / New Products (Goal: Cross-sell | Frequency: 2–3/week)
-  H: [
-    { title: "🆕 नए Products आ चुके हैं!", body: "नई Range देखें और सबसे पहले Order करें।" },
-    { title: "🌱 आपके लिए नए Agro Products Available हैं।", body: "App खोलें और देखें।" },
-    { title: "🔥 Best Selling Products की नई Range Available।", body: "अभी देखें और Bulk Order करें।" }
-  ],
-
-  // Segment I: High Value Dealers (Goal: VIP Offers | Frequency: Weekly)
-  I: [
-    { title: "🎁 ₹50,000+ Order पर Special Surprise!", body: "Bulk खरीदारी करें और पाएँ FREE 10L Product.*" },
-    { title: "🏆 बड़े Dealers के लिए Exclusive Benefit!", body: "₹50,000+ खरीदें और Surprise Gift पाएँ।" },
-    { title: "🚛 बड़ा Stock... बड़ा फायदा...", body: "₹50,000+ Order करें और Exclusive Discounts पाएँ।" }
-  ],
-
-  // Segment J: Inactive Dealers 30+ Days (Goal: Win-back | Frequency: Weekly)
-  J: [
-    { title: "👋 काफी समय हो गया...", body: "फिर से Wholesale Price पर खरीदारी शुरू करें।" },
-    { title: "📦 आपका Dealer Account अभी भी Active है।", body: "आज ही Bulk Order करें।" },
-    { title: "💰 Business को दोबारा Growth दें।", body: "Wholesale Rates आपका इंतजार कर रही हैं।" }
-  ],
-
-  // Seasonal Notifications
-  SEASONAL: [
-    { title: "🌧️ खरीफ Season शुरू!", body: "आज ही Bulk Stock करें और Demand बढ़ने से पहले तैयारी करें।" },
-    { title: "🌾 सीजन की तैयारी अभी से करें।", body: "Wholesale Rate पर Bulk खरीदारी का सही समय।" },
-    { title: "🚜 किसानों की Demand बढ़ रही है।", body: "Stock पहले भरें, Profit ज्यादा कमाएँ।" }
-  ],
-
-  // Urgency Notifications
-  URGENCY: [
-    { title: "⚡ आज Order, जल्दी Dispatch!", body: "Dealer Price का फायदा उठाने का मौका। आज ही Order करें!" },
-    { title: "⏳ Dealer Price का फायदा उठाने का मौका।", body: "कीमतें बढ़ने से पहले आज ही ऑर्डर करें।" },
-    { title: "🔥 Popular Products तेजी से Out of Stock हो रहे हैं।", body: "अपना मनपसंद स्टॉक खत्म होने से पहले खरीदें।" }
-  ],
-
-  // Trust Notifications
-  TRUST: [
-    { title: "✅ 100% Genuine Products", body: "कृषि क्रांति पर 100% असली प्रोडक्ट्स सीधे टॉप ब्रांड्स से पाएं।" },
-    { title: "🚚 Fast Delivery Across India", body: "पूरे भारत में सुरक्षित और तेज़ डिलीवरी सीधे आपकी दुकान तक।" },
-    { title: "🏪 Dealer Price Direct to Retailers", body: "बिचौलियों को हटाएं, सीधा होलसेल रेट पर खरीदें और ज्यादा मुनाफा कमाएं।" }
-  ]
+const BANNERS = {
+  KYC_1: `${GCS_BANNER_BASE_URL}/kyc1.png`,
+  KYC_2: `${GCS_BANNER_BASE_URL}/kyc2.png`,
+  MARKETING_1: `${GCS_BANNER_BASE_URL}/marketing1.png`,
+  MARKETING_2: `${GCS_BANNER_BASE_URL}/marketing2.png`,
+  MARKETING_3: `${GCS_BANNER_BASE_URL}/marketing3.png`,
+  MARKETING_4: `${GCS_BANNER_BASE_URL}/marketing4.png`,
 };
+
+// Initial Seed Data if DB is empty
+const INITIAL_CAMPAIGNS_SEED = [
+  {
+    segmentKey: "A",
+    name: "Segment A – Installed App → KYC Not Started",
+    description: "Dealers who downloaded the app but haven't started uploading KYC documents.",
+    goal: "Complete KYC",
+    category: "kyc",
+    isEnabled: true,
+    scheduledTime: "09:00",
+    mode: "rotating",
+    targetRoute: "/kyc",
+    templates: [
+      { title: "🔓 Dealer Price Unlock करें!", body: "बस Shop Photo और License Upload करें। KYC पूरा होते ही Wholesale Rates दिखाई देंगे।", imageUrl: BANNERS.KYC_1, actionRoute: "/kyc", isEnabled: true },
+      { title: "🏪 आपकी दुकान तैयार है?", body: "अब सिर्फ KYC Complete करें और Bulk Purchase शुरू करें।", imageUrl: BANNERS.KYC_2, actionRoute: "/kyc", isEnabled: true },
+      { title: "💰 Retail नहीं... Dealer Price पर खरीदें!", body: "KYC पूरा करें और ज्यादा Margin कमाएँ।", imageUrl: BANNERS.KYC_1, actionRoute: "/kyc", isEnabled: true },
+      { title: "⚡ 2 मिनट का काम...", body: "Shop Photo Upload करें, Wholesale Price Unlock करें।", imageUrl: BANNERS.KYC_2, actionRoute: "/kyc", isEnabled: true },
+      { title: "📦 Bulk खरीदारी अब आसान है!", body: "KYC Complete करें और हजारों Products Dealer Rate पर खरीदें.", imageUrl: BANNERS.KYC_1, actionRoute: "/kyc", isEnabled: true }
+    ]
+  },
+  {
+    segmentKey: "B",
+    name: "Segment B – KYC Started → Docs Pending",
+    description: "Dealers who uploaded partial KYC documents or were rejected and need to re-upload.",
+    goal: "Complete KYC",
+    category: "kyc",
+    isEnabled: true,
+    scheduledTime: "09:00",
+    mode: "rotating",
+    targetRoute: "/kyc",
+    templates: [
+      { title: "📄 आपका KYC अधूरा है।", body: "बस बाकी Documents Upload करें और Approval प्राप्त करें।", imageUrl: BANNERS.KYC_2, actionRoute: "/kyc", isEnabled: true },
+      { title: "⏳ आपका Approval आपका इंतजार कर रहा है।", body: "Remaining Documents Upload करें।", imageUrl: BANNERS.KYC_1, actionRoute: "/kyc", isEnabled: true },
+      { title: "🚀 Wholesale Buying से बस एक कदम दूर।", body: "KYC Complete करें और Dealer Prices देखें.", imageUrl: BANNERS.KYC_2, actionRoute: "/kyc", isEnabled: true }
+    ]
+  },
+  {
+    segmentKey: "C",
+    name: "Segment C – KYC Under Review",
+    description: "Dealers whose KYC is currently submitted and under review by operations team.",
+    goal: "Reduce Verification Anxiety",
+    category: "kyc",
+    isEnabled: true,
+    scheduledTime: "09:00",
+    mode: "rotating",
+    targetRoute: "/kyc",
+    templates: [
+      { title: "✅ आपका KYC Review में है।", body: "Approval मिलते ही Notification भेज दी जाएगी।", imageUrl: BANNERS.KYC_1, actionRoute: "/kyc", isEnabled: true },
+      { title: "🔍 आपका Verification चल रहा है।", body: "थोड़ा इंतजार करें। जल्द ही Dealer Prices Unlock हो जाएंगी।", imageUrl: BANNERS.KYC_2, actionRoute: "/kyc", isEnabled: true }
+    ]
+  },
+  {
+    segmentKey: "D",
+    name: "Segment D – KYC Approved → No Order",
+    description: "Dealers who are approved but haven't placed their first order yet.",
+    goal: "First Wholesale Purchase",
+    category: "marketing",
+    isEnabled: true,
+    scheduledTime: "11:30",
+    mode: "rotating",
+    targetRoute: "/dashboard",
+    templates: [
+      { title: "🎉 आपका KYC Approved हो गया!", body: "अब Dealer Price पर अपना पहला Order Place करें।", imageUrl: BANNERS.MARKETING_1, actionRoute: "/dashboard", isEnabled: true },
+      { title: "📦 Stock भरने का सही समय!", body: "Wholesale Price Unlock हो चुकी है। आज ही पहला Order करें।", imageUrl: BANNERS.MARKETING_3, actionRoute: "/dashboard", isEnabled: true },
+      { title: "💸 ज्यादा Margin कमाने का मौका!", body: "Bulk खरीदें और ज्यादा Profit कमाएँ।", imageUrl: BANNERS.MARKETING_1, actionRoute: "/dashboard", isEnabled: true },
+      { title: "🚚 Fast Delivery + Wholesale Rates.", body: "अब पहला Order Place करें।", imageUrl: BANNERS.MARKETING_4, actionRoute: "/dashboard", isEnabled: true },
+      { title: "🎯 Dealer बनने का अगला कदम...", body: "पहला Order करें और Business बढ़ाएँ।", imageUrl: BANNERS.MARKETING_1, actionRoute: "/dashboard", isEnabled: true }
+    ]
+  },
+  {
+    segmentKey: "E",
+    name: "Segment E – Cart Abandoned",
+    description: "Dealers with items added to cart who haven't completed checkout.",
+    goal: "Recover Cart",
+    category: "cart",
+    isEnabled: true,
+    scheduledTime: "14:00",
+    mode: "rotating",
+    targetRoute: "/cart",
+    templates: [
+      { title: "🛒 आपका Cart आपका इंतजार कर रहा है।", body: "Order Complete करें और Fast Delivery पाएँ।", imageUrl: BANNERS.MARKETING_2, actionRoute: "/cart", isEnabled: true },
+      { title: "⏰ Cart में Products अभी भी मौजूद हैं।", body: "Checkout पूरा करें।", imageUrl: BANNERS.MARKETING_2, actionRoute: "/cart", isEnabled: true },
+      { title: "🚚 जल्दी करें!", body: "आपका Bulk Order अभी भी Pending है.", imageUrl: BANNERS.MARKETING_2, actionRoute: "/cart", isEnabled: true }
+    ]
+  },
+  {
+    segmentKey: "F",
+    name: "Segment F – Payment / Checkout Pending",
+    description: "Dealers with initiated orders or checkout sessions pending payment.",
+    goal: "Complete Payment",
+    category: "order",
+    isEnabled: true,
+    scheduledTime: "14:00",
+    mode: "rotating",
+    targetRoute: "/cart",
+    templates: [
+      { title: "💳 आपका Payment Pending है।", body: "Order Complete करें और Dispatch शुरू करवाएँ।", imageUrl: BANNERS.MARKETING_2, actionRoute: "/cart", isEnabled: true },
+      { title: "📦 आपका Order तैयार है।", body: "बस Payment Complete करें।", imageUrl: BANNERS.MARKETING_2, actionRoute: "/cart", isEnabled: true },
+      { title: "🚀 जल्दी करें!", body: "Payment Complete होते ही Order Dispatch होगा।", imageUrl: BANNERS.MARKETING_2, actionRoute: "/cart", isEnabled: true }
+    ]
+  },
+  {
+    segmentKey: "G",
+    name: "Segment G – Ordered Once",
+    description: "Dealers who placed exactly 1 order and are ready for re-ordering after 7+ days.",
+    goal: "Repeat Purchase",
+    category: "marketing",
+    isEnabled: true,
+    scheduledTime: "20:00",
+    mode: "rotating",
+    targetRoute: "/dashboard",
+    templates: [
+      { title: "📈 Stock खत्म होने का इंतजार क्यों?", body: "आज ही Bulk Order करें।", imageUrl: BANNERS.MARKETING_3, actionRoute: "/dashboard", isEnabled: true },
+      { title: "🚚 Fast Delivery के साथ फिर से Order करें।", body: "Wholesale Rates आपका इंतजार कर रही हैं।", imageUrl: BANNERS.MARKETING_4, actionRoute: "/dashboard", isEnabled: true },
+      { title: "🌾 अपने Business की Supply बनाए रखें।", body: "Bulk Order करें।", imageUrl: BANNERS.MARKETING_3, actionRoute: "/dashboard", isEnabled: true },
+      { title: "💰 ज्यादा खरीदें... ज्यादा बचत करें।", body: "Wholesale Rates पर फिर से Order करें और ज्यादा Profit कमाएँ।", imageUrl: BANNERS.MARKETING_1, actionRoute: "/dashboard", isEnabled: true }
+    ]
+  },
+  {
+    segmentKey: "H",
+    name: "Segment H – Active Buyers / New Products",
+    description: "Active buyers with multiple orders to introduce new catalog arrivals.",
+    goal: "Cross-sell / Catalog Discovery",
+    category: "marketing",
+    isEnabled: true,
+    scheduledTime: "17:30",
+    mode: "rotating",
+    targetRoute: "/dashboard",
+    templates: [
+      { title: "🆕 नए Products आ चुके हैं!", body: "नई Range देखें और सबसे पहले Order करें।", imageUrl: BANNERS.MARKETING_4, actionRoute: "/dashboard", isEnabled: true },
+      { title: "🌱 आपके लिए नए Agro Products Available हैं।", body: "App खोलें और देखें।", imageUrl: BANNERS.MARKETING_4, actionRoute: "/dashboard", isEnabled: true },
+      { title: "🔥 Best Selling Products की नई Range Available।", body: "अभी देखें और Bulk Order करें।", imageUrl: BANNERS.MARKETING_4, actionRoute: "/dashboard", isEnabled: true }
+    ]
+  },
+  {
+    segmentKey: "I",
+    name: "Segment I – High Value Dealers",
+    description: "Dealers with total lifetime spend >= ₹50,000 or single order >= ₹50,000.",
+    goal: "VIP Offers & Loyalty",
+    category: "marketing",
+    isEnabled: true,
+    scheduledTime: "17:30",
+    mode: "rotating",
+    targetRoute: "/dashboard",
+    templates: [
+      { title: "🎁 ₹50,000+ Order पर Special Surprise!", body: "Bulk खरीदारी करें और पाएँ FREE 10L Product.*", imageUrl: BANNERS.MARKETING_1, actionRoute: "/dashboard", isEnabled: true },
+      { title: "🏆 बड़े Dealers के लिए Exclusive Benefit!", body: "₹50,000+ खरीदें और Surprise Gift पाएँ।", imageUrl: BANNERS.MARKETING_4, actionRoute: "/dashboard", isEnabled: true },
+      { title: "🚛 बड़ा Stock... बड़ा फायदा...", body: "₹50,000+ Order करें और Exclusive Discounts पाएँ।", imageUrl: BANNERS.MARKETING_3, actionRoute: "/dashboard", isEnabled: true }
+    ]
+  },
+  {
+    segmentKey: "J",
+    name: "Segment J – Inactive Dealers 30+ Days",
+    description: "Verified dealers with no orders placed in the last 30 days.",
+    goal: "Win-back Inactive Dealers",
+    category: "marketing",
+    isEnabled: true,
+    scheduledTime: "20:00",
+    mode: "rotating",
+    targetRoute: "/dashboard",
+    templates: [
+      { title: "👋 काफी समय हो गया...", body: "फिर से Wholesale Price पर खरीदारी शुरू करें।", imageUrl: BANNERS.MARKETING_3, actionRoute: "/dashboard", isEnabled: true },
+      { title: "📦 आपका Dealer Account अभी भी Active है।", body: "आज ही Bulk Order करें।", imageUrl: BANNERS.MARKETING_1, actionRoute: "/dashboard", isEnabled: true },
+      { title: "💰 Business को दोबारा Growth दें।", body: "Wholesale Rates आपका इंतजार कर रही हैं।", imageUrl: BANNERS.MARKETING_3, actionRoute: "/dashboard", isEnabled: true }
+    ]
+  },
+  {
+    segmentKey: "SEASONAL",
+    name: "Seasonal Demand Notifications",
+    description: "Broadcasted to all dealers for seasonal agriculture stocking surges.",
+    goal: "Seasonal Urgency & Stocking",
+    category: "seasonal",
+    isEnabled: true,
+    scheduledTime: "17:30",
+    mode: "rotating",
+    targetRoute: "/dashboard",
+    templates: [
+      { title: "🌧️ खरीफ Season शुरू!", body: "आज ही Bulk Stock करें और Demand बढ़ने से पहले तैयारी करें।", imageUrl: BANNERS.MARKETING_4, actionRoute: "/dashboard", isEnabled: true },
+      { title: "🌾 सीजन की तैयारी अभी से करें।", body: "Wholesale Rate पर Bulk खरीदारी का सही समय।", imageUrl: BANNERS.MARKETING_4, actionRoute: "/dashboard", isEnabled: true },
+      { title: "🚜 किसानों की Demand बढ़ रही है।", body: "Stock पहले भरें, Profit ज्यादा कमाएँ।", imageUrl: BANNERS.MARKETING_4, actionRoute: "/dashboard", isEnabled: true }
+    ]
+  },
+  {
+    segmentKey: "URGENCY",
+    name: "Urgency Broadcast Notifications",
+    description: "Evening conversion triggers for low stock or special price window alerts.",
+    goal: "Same-Day Conversion Push",
+    category: "marketing",
+    isEnabled: true,
+    scheduledTime: "20:00",
+    mode: "rotating",
+    targetRoute: "/dashboard",
+    templates: [
+      { title: "⚡ आज Order, जल्दी Dispatch!", body: "Dealer Price का फायदा उठाने का मौका। आज ही Order करें!", imageUrl: BANNERS.MARKETING_2, actionRoute: "/dashboard", isEnabled: true },
+      { title: "⏳ Dealer Price का फायदा उठाने का मौका।", body: "कीमतें बढ़ने से पहले आज ही ऑर्डर करें।", imageUrl: BANNERS.MARKETING_1, actionRoute: "/dashboard", isEnabled: true },
+      { title: "🔥 Popular Products तेजी से Out of Stock हो रहे हैं।", body: "अपना मनपसंद स्टॉक खत्म होने से पहले खरीदें।", imageUrl: BANNERS.MARKETING_2, actionRoute: "/dashboard", isEnabled: true }
+    ]
+  },
+  {
+    segmentKey: "TRUST",
+    name: "Platform Trust Notifications",
+    description: "Assurance messages highlighting genuine products, direct pricing, and delivery speed.",
+    goal: "Build Dealer Trust",
+    category: "marketing",
+    isEnabled: true,
+    scheduledTime: "17:30",
+    mode: "rotating",
+    targetRoute: "/dashboard",
+    templates: [
+      { title: "✅ 100% Genuine Products", body: "कृषि क्रांति पर 100% असली प्रोडक्ट्स सीधे टॉप ब्रांड्स से पाएं।", imageUrl: BANNERS.MARKETING_1, actionRoute: "/dashboard", isEnabled: true },
+      { title: "🚚 Fast Delivery Across India", body: "पूरे भारत में सुरक्षित और तेज़ डिलीवरी सीधे आपकी दुकान तक।", imageUrl: BANNERS.MARKETING_4, actionRoute: "/dashboard", isEnabled: true },
+      { title: "🏪 Dealer Price Direct to Retailers", body: "बिचौलियों को हटाएं, सीधा होलसेल रेट पर खरीदें और ज्यादा मुनाफा कमाएं।", imageUrl: BANNERS.MARKETING_3, actionRoute: "/dashboard", isEnabled: true }
+    ]
+  }
+];
 
 class PushNotificationSegmentService {
 
   /**
-   * Get dynamic rotating template by day-of-year so users see varying messages
+   * Automatically seed database with default segments if empty
    */
-  getNotificationForSegment(segment, dayOffset = 0) {
-    const templates = SEGMENT_NOTIFICATIONS[segment];
-    if (!templates || templates.length === 0) return null;
+  async ensureSeedCampaigns() {
+    try {
+      const count = await NotificationCampaign.countDocuments();
+      if (count === 0) {
+        console.log("[PushCampaigns] Seeding initial dynamic campaigns into MongoDB...");
+        await NotificationCampaign.insertMany(INITIAL_CAMPAIGNS_SEED);
+        console.log("[PushCampaigns] Successfully seeded 13 default dynamic notification campaigns.");
+      }
+    } catch (err) {
+      console.error("[PushCampaigns] Error seeding campaigns:", err.message);
+    }
+  }
 
-    const now = new Date();
-    const start = new Date(now.getFullYear(), 0, 0);
-    const diff = now - start;
-    const oneDay = 1000 * 60 * 60 * 24;
-    const dayOfYear = Math.floor(diff / oneDay) + dayOffset;
+  /**
+   * Helper to replace dynamic personalization variables in copy
+   */
+  hydrateVariables(text, user) {
+    if (!text) return "";
+    let hydrated = text;
+    const name = user.firstName || user.name || "Dealer";
+    const shopName = user.shopName || user.businessName || "आपकी दुकान";
+    
+    hydrated = hydrated.replace(/{{\s*name\s*}}/gi, name);
+    hydrated = hydrated.replace(/{{\s*shopName\s*}}/gi, shopName);
+    hydrated = hydrated.replace(/{{\s*phone\s*}}/gi, user.phoneNumber || "");
+    return hydrated;
+  }
 
-    return templates[dayOfYear % templates.length];
+  /**
+   * Get dynamic rotating, pinned, or random template for a segment from MongoDB
+   */
+  async getNotificationForSegment(segmentKey, user = null, dayOffset = 0) {
+    const campaign = await NotificationCampaign.findOne({ segmentKey: segmentKey.toUpperCase() });
+    if (!campaign || !campaign.isEnabled) return null;
+
+    const activeTemplates = (campaign.templates || []).filter(t => t.isEnabled);
+    if (activeTemplates.length === 0) return null;
+
+    let selectedTemplate = null;
+
+    // 1. Pinned Mode
+    if (campaign.mode === "pinned" && campaign.pinnedTemplateId) {
+      selectedTemplate = activeTemplates.find(t => t._id.toString() === campaign.pinnedTemplateId.toString());
+    }
+
+    // 2. Random Mode
+    if (!selectedTemplate && campaign.mode === "random") {
+      const randIdx = Math.floor(Math.random() * activeTemplates.length);
+      selectedTemplate = activeTemplates[randIdx];
+    }
+
+    // 3. Rotating Mode (Default)
+    if (!selectedTemplate) {
+      const now = new Date();
+      const start = new Date(now.getFullYear(), 0, 0);
+      const diff = now - start;
+      const oneDay = 1000 * 60 * 60 * 24;
+      const dayOfYear = Math.floor(diff / oneDay) + dayOffset;
+      selectedTemplate = activeTemplates[dayOfYear % activeTemplates.length];
+    }
+
+    if (!selectedTemplate) return null;
+
+    return {
+      title: user ? this.hydrateVariables(selectedTemplate.title, user) : selectedTemplate.title,
+      body: user ? this.hydrateVariables(selectedTemplate.body, user) : selectedTemplate.body,
+      image: selectedTemplate.imageUrl || null,
+      imageUrl: selectedTemplate.imageUrl || null,
+      actionRoute: selectedTemplate.actionRoute || campaign.targetRoute || "/dashboard",
+      templateId: selectedTemplate._id
+    };
   }
 
   // Process items in parallel batches of 50 to avoid network congestion
@@ -142,7 +333,8 @@ class PushNotificationSegmentService {
   /**
    * Get eligible users for a specific segment
    */
-  async getEligibleUsersForSegment(segment) {
+  async getEligibleUsersForSegment(segmentKey) {
+    const segment = segmentKey.toUpperCase();
     const now = new Date();
     const thirtyMinsAgo = new Date(now.getTime() - 30 * 60 * 1000);
     const threeHoursAgo = new Date(now.getTime() - 3 * 60 * 60 * 1000);
@@ -222,7 +414,7 @@ class PushNotificationSegmentService {
           ]
         });
 
-      case "D": { // KYC Approved -> No Order (Daily at 11:30 AM)
+      case "D": { // KYC Approved -> No Order (Daily at scheduled time)
         const usersWithOrders = await Order.distinct("user", { orderStatus: { $ne: "Cancelled" } });
         return await User.find({
           ...validFcmTokenQuery,
@@ -415,18 +607,20 @@ class PushNotificationSegmentService {
   }
 
   /**
-   * Dispatches notifications to all eligible users in a given segment
+   * Dispatches notifications dynamically to all eligible users in a given segment
    */
-  async sendToSegment(segment, customTemplate = null) {
-    console.log("[SegmentService] Processing Segment " + segment + "...");
-    const template = customTemplate || this.getNotificationForSegment(segment);
-    if (!template) {
-      console.warn("[SegmentService] No template found for segment " + segment);
-      return { count: 0, segment };
+  async sendToSegment(segmentKey, customTemplate = null) {
+    const segment = segmentKey.toUpperCase();
+    console.log(`[DynamicSegmentService] Processing Segment ${segment}...`);
+
+    const campaign = await NotificationCampaign.findOne({ segmentKey: segment });
+    if (campaign && !campaign.isEnabled && !customTemplate) {
+      console.log(`[DynamicSegmentService] Segment ${segment} is currently disabled in panel. Skipping.`);
+      return { count: 0, segment, disabled: true };
     }
 
     const users = await this.getEligibleUsersForSegment(segment);
-    console.log("[SegmentService] Segment " + segment + ": Found " + users.length + " eligible users with active FCM tokens.");
+    console.log(`[DynamicSegmentService] Segment ${segment}: Found ${users.length} eligible users with active FCM tokens.`);
 
     if (users.length === 0) {
       return { count: 0, segment };
@@ -434,26 +628,23 @@ class PushNotificationSegmentService {
 
     const now = new Date();
     const isUtility = ["A", "B", "C"].includes(segment);
-    let targetRoute = "/dashboard";
-
-    if (["A", "B", "C"].includes(segment)) {
-      targetRoute = "/kyc";
-    } else if (["E", "F"].includes(segment)) {
-      targetRoute = "/cart";
-    }
-
     let dispatchedCount = 0;
 
     await this.processInBatches(users, 50, async (user) => {
       try {
+        const template = customTemplate || await this.getNotificationForSegment(segment, user);
+        if (!template) return;
+
+        const targetRoute = template.actionRoute || (isUtility ? "/kyc" : (["E", "F"].includes(segment) ? "/cart" : "/dashboard"));
+
         if (isUtility) {
-          await notificationService.sendUtilityNotification(user._id, template.title, template.body, targetRoute);
+          await notificationService.sendUtilityNotification(user._id, template.title, template.body, targetRoute, template.image || template.imageUrl);
           await User.findByIdAndUpdate(user._id, {
             $set: { lastKycReminderSentAt: now },
             $inc: { kycReminderCount: 1 }
           });
         } else {
-          await notificationService.sendMarketingNotification(user._id, template.title, template.body, targetRoute);
+          await notificationService.sendMarketingNotification(user._id, template.title, template.body, targetRoute, template.image || template.imageUrl);
           
           const updateFields = {
             lastMarketingNotificationSentAt: now,
@@ -461,22 +652,10 @@ class PushNotificationSegmentService {
           };
 
           if (segment === "D") updateFields.lastFirstOrderSentAt = now;
-          if (segment === "H") {
-            updateFields.lastActiveBuyerSentAt = now;
-            updateFields.last530PMSentAt = now;
-          }
-          if (segment === "I") {
-            updateFields.lastVipSentAt = now;
-            updateFields.last530PMSentAt = now;
-          }
-          if (segment === "G") {
-            updateFields.lastRepeatReminderSentAt = now;
-            updateFields.last8PMSentAt = now;
-          }
-          if (segment === "J") {
-            updateFields.lastWinBackSentAt = now;
-            updateFields.last8PMSentAt = now;
-          }
+          if (segment === "H") updateFields.lastActiveBuyerSentAt = now;
+          if (segment === "I") updateFields.lastVipSentAt = now;
+          if (segment === "G") updateFields.lastRepeatReminderSentAt = now;
+          if (segment === "J") updateFields.lastWinBackSentAt = now;
 
           await User.findByIdAndUpdate(user._id, { $set: updateFields });
         }
@@ -505,138 +684,57 @@ class PushNotificationSegmentService {
 
         dispatchedCount++;
       } catch (err) {
-        console.error("[SegmentService] Error dispatching to user " + user._id + ":", err.message);
+        console.error(`[DynamicSegmentService] Error dispatching to user ${user._id}:`, err.message);
       }
     });
 
-    console.log("[SegmentService] Segment " + segment + ": Completed sending " + dispatchedCount + " notifications.");
+    // Update Campaign Statistics in MongoDB
+    if (campaign) {
+      await NotificationCampaign.updateOne(
+        { _id: campaign._id },
+        {
+          $set: {
+            "stats.lastRunAt": now,
+            "stats.lastDispatchedCount": dispatchedCount
+          },
+          $inc: {
+            "stats.totalDispatches": 1,
+            "stats.totalDelivered": dispatchedCount
+          }
+        }
+      ).catch(() => {});
+    }
+
+    console.log(`[DynamicSegmentService] Segment ${segment}: Completed sending ${dispatchedCount} notifications.`);
     return { count: dispatchedCount, segment };
   }
 
-  // 9:00 AM – KYC Reminders (Segment A, B, C)
-  async trigger9AMJobs() {
-    console.log("[SegmentService] --- Triggering 9:00 AM KYC Reminder Jobs ---");
-    const resA = await this.sendToSegment("A");
-    const resB = await this.sendToSegment("B");
-    const resC = await this.sendToSegment("C");
-    return { A: resA.count, B: resB.count, C: resC.count };
-  }
-
-  // 11:30 AM – First Order Reminders (Segment D)
-  async trigger1130AMJobs() {
-    console.log("[SegmentService] --- Triggering 11:30 AM First Order Job ---");
-    const resD = await this.sendToSegment("D");
-    return { D: resD.count };
-  }
-
-  // 2:00 PM – Cart & Checkout Recovery (Segment E, F)
-  async trigger2PMJobs() {
-    console.log("[SegmentService] --- Triggering 2:00 PM Cart & Checkout Recovery Jobs ---");
-    const resE = await this.sendToSegment("E");
-    const resF = await this.sendToSegment("F");
-    return { E: resE.count, F: resF.count };
-  }
-
-  // 5:30 PM – New Arrivals & Offers (Segment H, I + Seasonal/Trust fallback broadcast)
-  async trigger530PMJobs() {
-    console.log("[SegmentService] --- Triggering 5:30 PM New Arrivals & Offers Jobs ---");
-    const resH = await this.sendToSegment("H");
-    const resI = await this.sendToSegment("I");
-
-    // Broadcast to users who have not received 5:30 PM notification today
-    const startOfToday = getStartOfTodayIST();
-    const randomFallbackType = Math.random() > 0.5 ? "SEASONAL" : "TRUST";
-    const fallbackTemplate = this.getNotificationForSegment(randomFallbackType);
-    
-    const fallbackUsers = await User.find({
-      isDeleted: { $ne: true },
-      fcmToken: { $exists: true, $nin: [null, ""] },
-      $or: [
-        { last530PMSentAt: { $exists: false } },
-        { last530PMSentAt: null },
-        { last530PMSentAt: { $lt: startOfToday } }
-      ]
-    });
-
-    console.log("[SegmentService] 5:30 PM " + randomFallbackType + " broadcast eligible users: " + fallbackUsers.length);
-    let fallbackCount = 0;
-    const now = new Date();
-    await this.processInBatches(fallbackUsers, 50, async (u) => {
-      await notificationService.sendMarketingNotification(u._id, fallbackTemplate.title, fallbackTemplate.body, "/dashboard");
-      await User.findByIdAndUpdate(u._id, {
-        $set: {
-          last530PMSentAt: now,
-          lastMarketingNotificationSentAt: now,
-          lastMarketingSegment: randomFallbackType
-        }
-      });
-      fallbackCount++;
-    });
-
-    return { H: resH.count, I: resI.count, fallbackType: randomFallbackType, fallbackCount };
-  }
-
-  // 8:00 PM – Urgency notifications (Segment G, J + Urgency broadcast)
-  async trigger8PMJobs() {
-    console.log("[SegmentService] --- Triggering 8:00 PM Urgency & Win-back Jobs ---");
-    const resG = await this.sendToSegment("G");
-    const resJ = await this.sendToSegment("J");
-
-    // Broadcast urgency to all other app users who have not received an 8:00 PM notification today
-    const startOfToday = getStartOfTodayIST();
-    const urgencyTemplate = this.getNotificationForSegment("URGENCY");
-    
-    const urgencyUsers = await User.find({
-      isDeleted: { $ne: true },
-      fcmToken: { $exists: true, $nin: [null, ""] },
-      $or: [
-        { last8PMSentAt: { $exists: false } },
-        { last8PMSentAt: null },
-        { last8PMSentAt: { $lt: startOfToday } }
-      ]
-    });
-
-    console.log("[SegmentService] 8:00 PM URGENCY broadcast eligible users: " + urgencyUsers.length);
-    let urgencyCount = 0;
-    const now = new Date();
-    await this.processInBatches(urgencyUsers, 50, async (u) => {
-      await notificationService.sendMarketingNotification(u._id, urgencyTemplate.title, urgencyTemplate.body, "/dashboard");
-      await User.findByIdAndUpdate(u._id, {
-        $set: {
-          last8PMSentAt: now,
-          lastMarketingNotificationSentAt: now,
-          lastMarketingSegment: "URGENCY"
-        }
-      });
-      urgencyCount++;
-    });
-
-    return { G: resG.count, J: resJ.count, urgencyCount };
-  }
-
   /**
-   * Diagnostic summary of all segments and total user counts
+   * Diagnostic summary of all campaigns, templates, schedules, and audience counts
    */
   async getSegmentStats() {
+    await this.ensureSeedCampaigns();
+
     const totalUsers = await User.countDocuments({ isDeleted: { $ne: true } });
     const usersWithToken = await User.countDocuments({ fcmToken: { $exists: true, $nin: [null, ""] }, isDeleted: { $ne: true } });
 
-    const stats = {};
-    const segments = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "SEASONAL", "URGENCY", "TRUST"];
+    const campaigns = await NotificationCampaign.find({}).sort({ segmentKey: 1 }).lean();
+    const stats = [];
 
-    for (const seg of segments) {
-      const eligible = await this.getEligibleUsersForSegment(seg);
-      stats[seg] = {
+    for (const camp of campaigns) {
+      const eligible = await this.getEligibleUsersForSegment(camp.segmentKey);
+      const todayTemplate = await this.getNotificationForSegment(camp.segmentKey);
+      stats.push({
+        ...camp,
         eligibleCount: eligible.length,
-        templateCount: (SEGMENT_NOTIFICATIONS[seg] || []).length,
-        todayTemplate: this.getNotificationForSegment(seg)
-      };
+        todayTemplate
+      });
     }
 
     return {
       totalUsers,
       usersWithToken,
-      segments: stats
+      campaigns: stats
     };
   }
 }

@@ -2,6 +2,7 @@ const Order = require('../models/Order');
 const Cart = require('../models/Cart');
 const CheckoutSession = require('../models/CheckoutSession');
 const User = require('../models/User');
+const NotificationCampaign = require('../models/NotificationCampaign');
 const orderService = require('./order.service');
 const notificationService = require('./notification.service');
 const whatsappService = require('./whatsapp.service');
@@ -9,14 +10,8 @@ const pushNotificationSegmentService = require('./pushNotificationSegment.servic
 const whatsappAutomationService = require('./whatsappAutomation.service');
 const { redisClient } = require('../config/redis');
 
-// Persistent track of daily runs to prevent misses due to server reboots or interval drift
-const lastRunDates = {
-  job9AM: null,
-  job1130AM: null,
-  job2PM: null,
-  job530PM: null,
-  job8PM: null
-};
+// Persistent in-memory map of daily runs for fallback
+const lastRunDates = {};
 
 // Redis helpers to read/write last run dates to survive container scaling & server restarts
 const getLastRunDate = async (jobKey) => {
@@ -24,9 +19,9 @@ const getLastRunDate = async (jobKey) => {
     if (redisClient && redisClient.isOpen) {
       return await redisClient.get(`cron:lastrun:${jobKey}`);
     }
-    return lastRunDates[jobKey];
+    return lastRunDates[jobKey] || null;
   } catch (err) {
-    return lastRunDates[jobKey];
+    return lastRunDates[jobKey] || null;
   }
 };
 
@@ -238,9 +233,11 @@ const runKycUrgencyCheck = async () => {
   }
 };
 
-// 5. Scheduled Segment Notifications (Runs every 15-30 mins, checks time window for IST)
+// 5. 100% Dynamic Scheduled Segment Notifications (Evaluates dynamic DB schedules every 10-15 mins)
 const runScheduledSegmentNotifications = async (forcedJob = null) => {
   try {
+    await pushNotificationSegmentService.ensureSeedCampaigns();
+
     // Kolkata is UTC + 5:30. Calculate local Kolkata date/time mathematically
     const date = new Date();
     const kolkataMillis = date.getTime() + (5.5 * 60 * 60 * 1000);
@@ -251,55 +248,36 @@ const runScheduledSegmentNotifications = async (forcedJob = null) => {
     const currentMinutesOfDay = hours * 60 + minutes;
     const datePart = `${kolkataDate.getUTCFullYear()}-${String(kolkataDate.getUTCMonth() + 1).padStart(2, '0')}-${String(kolkataDate.getUTCDate()).padStart(2, '0')}`;
 
-    console.log(`[Cron] Checking Scheduled Notifications (Kolkata Time: ${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}, Date: ${datePart}, forcedJob: ${forcedJob || 'auto'})`);
+    console.log(`[Cron] Dynamic Campaign Checker (Kolkata: ${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}, Date: ${datePart}, forcedJob: ${forcedJob || 'auto'})`);
 
-    // 1. 9:00 AM (09:00 - 11:29 IST = 540 to 689 mins) - KYC Reminders (Segment A, B, C)
-    if (forcedJob === '9AM' || forcedJob === 'ALL' || (!forcedJob && currentMinutesOfDay >= 540 && currentMinutesOfDay < 690)) {
-      const lastRun9AM = await getLastRunDate('job9AM');
-      if (forcedJob || lastRun9AM !== datePart) {
-        console.log(`[Cron] Triggering 9:00 AM KYC Reminder Job for date ${datePart}`);
-        await setLastRunDate('job9AM', datePart);
-        await pushNotificationSegmentService.trigger9AMJobs();
+    const campaigns = await NotificationCampaign.find({}).lean();
+
+    for (const camp of campaigns) {
+      const segKey = camp.segmentKey;
+      const isForced = forcedJob === segKey || forcedJob === 'ALL';
+
+      if (!isForced && !camp.isEnabled) {
+        continue;
       }
-    }
 
-    // 2. 11:30 AM (11:30 - 13:59 IST = 690 to 839 mins) - First Order Reminders (Segment D)
-    if (forcedJob === '1130AM' || forcedJob === 'ALL' || (!forcedJob && currentMinutesOfDay >= 690 && currentMinutesOfDay < 840)) {
-      const lastRun1130AM = await getLastRunDate('job1130AM');
-      if (forcedJob || lastRun1130AM !== datePart) {
-        console.log(`[Cron] Triggering 11:30 AM First Order Job for date ${datePart}`);
-        await setLastRunDate('job1130AM', datePart);
-        await pushNotificationSegmentService.trigger1130AMJobs();
-      }
-    }
+      // Parse scheduled time "HH:mm"
+      const [schedHourStr, schedMinStr] = (camp.scheduledTime || "09:00").split(":");
+      const schedHour = parseInt(schedHourStr, 10) || 0;
+      const schedMin = parseInt(schedMinStr, 10) || 0;
+      const schedMinutesOfDay = schedHour * 60 + schedMin;
 
-    // 3. 2:00 PM (14:00 - 17:29 IST = 840 to 1049 mins) - Cart & Checkout Recovery (Segment E, F)
-    if (forcedJob === '2PM' || forcedJob === 'ALL' || (!forcedJob && currentMinutesOfDay >= 840 && currentMinutesOfDay < 1050)) {
-      const lastRun2PM = await getLastRunDate('job2PM');
-      if (forcedJob || lastRun2PM !== datePart) {
-        console.log(`[Cron] Triggering 2:00 PM Cart & Checkout Recovery Job for date ${datePart}`);
-        await setLastRunDate('job2PM', datePart);
-        await pushNotificationSegmentService.trigger2PMJobs();
-      }
-    }
+      // Allow a 90-minute trigger window around the scheduled time so 15m polling never misses it
+      const isInTimeWindow = currentMinutesOfDay >= schedMinutesOfDay && currentMinutesOfDay < (schedMinutesOfDay + 90);
 
-    // 4. 5:30 PM (17:30 - 19:59 IST = 1050 to 1199 mins) - New Arrivals & Offers (Segment H, I + Seasonal/Trust)
-    if (forcedJob === '530PM' || forcedJob === 'ALL' || (!forcedJob && currentMinutesOfDay >= 1050 && currentMinutesOfDay < 1200)) {
-      const lastRun530PM = await getLastRunDate('job530PM');
-      if (forcedJob || lastRun530PM !== datePart) {
-        console.log(`[Cron] Triggering 5:30 PM New Arrivals Job for date ${datePart}`);
-        await setLastRunDate('job530PM', datePart);
-        await pushNotificationSegmentService.trigger530PMJobs();
-      }
-    }
+      if (isForced || isInTimeWindow) {
+        const jobKey = `dynamic_seg_${segKey}`;
+        const lastRun = await getLastRunDate(jobKey);
 
-    // 5. 8:00 PM (20:00 - 23:59 IST = 1200 to 1439 mins) - Urgency & Win-back (Segment G, J + Urgency)
-    if (forcedJob === '8PM' || forcedJob === 'ALL' || (!forcedJob && currentMinutesOfDay >= 1200 && currentMinutesOfDay < 1440)) {
-      const lastRun8PM = await getLastRunDate('job8PM');
-      if (forcedJob || lastRun8PM !== datePart) {
-        console.log(`[Cron] Triggering 8:00 PM Urgency Job for date ${datePart}`);
-        await setLastRunDate('job8PM', datePart);
-        await pushNotificationSegmentService.trigger8PMJobs();
+        if (isForced || lastRun !== datePart) {
+          console.log(`[Cron] Triggering dynamic campaign for Segment ${segKey} at scheduled time ${camp.scheduledTime} (IST Date: ${datePart})`);
+          await setLastRunDate(jobKey, datePart);
+          await pushNotificationSegmentService.sendToSegment(segKey);
+        }
       }
     }
 
@@ -327,7 +305,7 @@ const runWhatsAppAutomation = async () => {
  * Initialize Fallback Interval-Based Cron Jobs (for local development/persistent server)
  */
 exports.initCronJobs = () => {
-  console.log('--- Background Services Initialized (Orders, Carts & Push Notifications) ---');
+  console.log('--- Background Services Initialized (Orders, Carts & 100% Dynamic Push Campaigns) ---');
 
   // Execute on startup
   runOrderSync();
@@ -342,7 +320,7 @@ exports.initCronJobs = () => {
   setInterval(runAbandonedCartCheck, 60 * 60 * 1000);
   setInterval(runAbandonedCheckoutCheck, 30 * 60 * 1000);
   setInterval(runKycUrgencyCheck, 30 * 60 * 1000);
-  setInterval(() => runScheduledSegmentNotifications(), 15 * 60 * 1000);
+  setInterval(() => runScheduledSegmentNotifications(), 10 * 60 * 1000);
   setInterval(runWhatsAppAutomation, 60 * 60 * 1000);
 };
 

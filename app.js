@@ -1,3 +1,4 @@
+const path = require('path');
 // Triggering restart
 const express = require('express');
 const cors = require('cors');
@@ -21,6 +22,7 @@ const conversationRoutes = require('./routes/conversation.routes');
 const retargetingRoutes = require('./routes/retargeting.routes');
 const callRoutes = require('./routes/call.routes');
 const bannerRoutes = require('./routes/banner.routes');
+const marketingCampaignRoutes = require('./routes/marketing.campaign.routes');
 
 const app = express();
 const zlib = require('zlib');
@@ -28,7 +30,12 @@ const zlib = require('zlib');
 // Trust proxy for correct IP detection behind Render/Load Balancers
 app.set('trust proxy', 1);
 
-app.use(helmet());
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" }
+}));
+
+// Serve static public assets (push notification banners, etc.)
+app.use('/public', express.static(path.join(__dirname, 'public')));
 app.use(cors({
   origin: '*', // Configure this for your Flutter app domain/IP in production
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
@@ -66,6 +73,7 @@ app.use('/api', conversationRoutes);
 app.use('/api/retargeting', retargetingRoutes);
 app.use('/api/calls', callRoutes);
 app.use('/api/banners', bannerRoutes);
+app.use('/api/marketing/push-campaigns', marketingCampaignRoutes);
 
 // 404 Handler for API routes
 app.use('/api', (req, res) => {

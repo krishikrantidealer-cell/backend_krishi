@@ -19,7 +19,7 @@ try {
 }
 
 class NotificationService {
-  async sendUtilityNotification(userId, title, body, actionRoute) {
+  async sendUtilityNotification(userId, title, body, actionRoute, imageUrl) {
     try {
       // 1. Save to Database (Enterprise Persistent Log)
       const dbNotification = await Notification.create({
@@ -27,7 +27,8 @@ class NotificationService {
         title: title,
         body: body,
         category: 'utility',
-        actionRoute: actionRoute || '/'
+        actionRoute: actionRoute || '/',
+        ...(imageUrl && { imageUrl: imageUrl })
       });
       console.log(`Notification logged to database with ID: ${dbNotification._id}`);
 
@@ -56,14 +57,16 @@ class NotificationService {
         token: user.fcmToken,
         notification: {
           title: title,
-          body: body
+          body: body,
+          ...(imageUrl && { imageUrl: imageUrl })
         },
         data: {
           category: 'utility',
           action_route: actionRoute || '/',
           title: title,
           body: body,
-          click_action: 'FLUTTER_NOTIFICATION_CLICK'
+          click_action: 'FLUTTER_NOTIFICATION_CLICK',
+          ...(imageUrl && { image: imageUrl, imageUrl: imageUrl })
         },
         android: {
           priority: 'high',
@@ -71,7 +74,8 @@ class NotificationService {
             channelId: 'krishikranti_high_importance_channel',
             priority: 'max',
             defaultSound: true,
-            sound: 'default'
+            sound: 'default',
+            ...(imageUrl && { imageUrl: imageUrl })
           }
         },
         apns: {
@@ -79,9 +83,15 @@ class NotificationService {
             aps: {
               sound: 'default',
               badge: 1,
-              contentAvailable: true
+              contentAvailable: true,
+              "mutable-content": 1
             }
-          }
+          },
+          ...(imageUrl && {
+            fcmOptions: {
+              image: imageUrl
+            }
+          })
         }
       };
 
@@ -160,9 +170,15 @@ class NotificationService {
             aps: {
               sound: 'default',
               badge: 1,
-              contentAvailable: true
+              contentAvailable: true,
+              "mutable-content": 1
             }
-          }
+          },
+          ...(imageUrl && {
+            fcmOptions: {
+              image: imageUrl
+            }
+          })
         }
       };
 
