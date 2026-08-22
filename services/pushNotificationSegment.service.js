@@ -762,36 +762,233 @@ class PushNotificationSegmentService {
   }
 
   /**
-   * Diagnostic summary of all campaigns, templates, schedules, and audience counts
+   * Fast population count for a specific segment using countDocuments (optimized for UI latency)
+   */
+  async getSegmentCount(segmentKey, onlyUnsentToday = false) {
+    const segment = segmentKey.toUpperCase();
+    const now = new Date();
+    const thirtyMinsAgo = new Date(now.getTime() - 30 * 60 * 1000);
+    const threeHoursAgo = new Date(now.getTime() - 3 * 60 * 60 * 1000);
+    const twoDaysAgo = new Date(now.getTime() - 48 * 60 * 60 * 1000);
+    const sixDaysAgo = new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000);
+    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const fortyEightHoursAgo = new Date(now.getTime() - 48 * 60 * 60 * 1000);
+    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const startOfToday = getStartOfTodayIST();
+
+    const validFcmTokenQuery = {
+      isDeleted: { $ne: true },
+      fcmToken: { $exists: true, $nin: [null, ""] }
+    };
+
+    switch (segment) {
+      case "A": {
+        const query = {
+          ...validFcmTokenQuery,
+          role: "user",
+          kycStatus: { $in: ["pending", "not_started"] },
+          isKycComplete: { $ne: true },
+          shopImage: { $in: [null, ""] },
+          licenceImage: { $in: [null, ""] },
+          gstNumber: { $in: [null, ""] },
+          $or: [{ kycReminderCount: { $exists: false } }, { kycReminderCount: { $lt: 5 } }]
+        };
+        if (onlyUnsentToday) {
+          query.$and = [{
+            $or: [{ lastKycReminderSentAt: { $exists: false } }, { lastKycReminderSentAt: null }, { lastKycReminderSentAt: { $lt: startOfToday } }]
+          }];
+        }
+        return await User.countDocuments(query);
+      }
+
+      case "B": {
+        const query = {
+          ...validFcmTokenQuery,
+          role: "user",
+          kycStatus: { $in: ["pending", "rejected"] },
+          isKycComplete: { $ne: true },
+          $or: [
+            { shopImage: { $nin: [null, ""] } },
+            { licenceImage: { $nin: [null, ""] } },
+            { gstNumber: { $nin: [null, ""] } }
+          ]
+        };
+        if (onlyUnsentToday) {
+          query.$and = [{
+            $or: [{ lastKycReminderSentAt: { $exists: false } }, { lastKycReminderSentAt: null }, { lastKycReminderSentAt: { $lt: startOfToday } }]
+          }];
+        }
+        return await User.countDocuments(query);
+      }
+
+      case "C": {
+        const query = {
+          ...validFcmTokenQuery,
+          role: "user",
+          kycStatus: { $in: ["submitted", "processing"] }
+        };
+        if (onlyUnsentToday) {
+          query.$or = [{ lastKycReminderSentAt: { $exists: false } }, { lastKycReminderSentAt: null }, { lastKycReminderSentAt: { $lt: startOfToday } }];
+        }
+        return await User.countDocuments(query);
+      }
+
+      case "D": {
+        const usersWithOrders = await Order.distinct("user", { orderStatus: { $ne: "Cancelled" } });
+        const query = {
+          ...validFcmTokenQuery,
+          _id: { $nin: usersWithOrders },
+          kycStatus: "verified"
+        };
+        if (onlyUnsentToday) {
+          query.$or = [{ lastFirstOrderSentAt: { $exists: false } }, { lastFirstOrderSentAt: null }, { lastFirstOrderSentAt: { $lt: startOfToday } }];
+        }
+        return await User.countDocuments(query);
+      }
+
+      case "E": {
+        const cartUsers = await Cart.distinct("user", {
+          items: { $exists: true, $not: { $size: 0 } },
+          updatedAt: { $lt: thirtyMinsAgo, $gt: sevenDaysAgo }
+        });
+        if (!cartUsers.length) return 0;
+        return await User.countDocuments({
+          _id: { $in: cartUsers },
+          ...validFcmTokenQuery
+        });
+      }
+
+      case "F": {
+        const [pendingOrderUsers, pendingSessionUsers] = await Promise.all([
+          Order.distinct("user", {
+            paymentStatus: "Pending",
+            orderStatus: { $nin: ["Cancelled", "Delivered"] },
+            createdAt: { $lt: thirtyMinsAgo, $gt: fortyEightHoursAgo }
+          }),
+          CheckoutSession.distinct("user", {
+            status: "Pending",
+            orderCreated: { $ne: true },
+            createdAt: { $lt: thirtyMinsAgo, $gt: fortyEightHoursAgo }
+          })
+        ]);
+        const allIds = Array.from(new Set([...pendingOrderUsers, ...pendingSessionUsers].filter(Boolean)));
+        if (!allIds.length) return 0;
+        return await User.countDocuments({
+          _id: { $in: allIds },
+          ...validFcmTokenQuery
+        });
+      }
+
+      case "G": {
+        const onceUserStats = await Order.aggregate([
+          { $match: { orderStatus: { $ne: "Cancelled" } } },
+          { $group: { _id: "$user", count: { $sum: 1 }, lastOrderDate: { $max: "$createdAt" } } },
+          { $match: { count: 1, lastOrderDate: { $lte: sevenDaysAgo } } }
+        ]);
+        const onceUserIds = onceUserStats.map(r => r._id);
+        if (!onceUserIds.length) return 0;
+        return await User.countDocuments({
+          _id: { $in: onceUserIds },
+          ...validFcmTokenQuery
+        });
+      }
+
+      case "H": {
+        const multiUserStats = await Order.aggregate([
+          { $match: { orderStatus: { $ne: "Cancelled" } } },
+          { $group: { _id: "$user", count: { $sum: 1 } } },
+          { $match: { count: { $gt: 1 } } }
+        ]);
+        const multiUserIds = multiUserStats.map(r => r._id);
+        if (!multiUserIds.length) return 0;
+        return await User.countDocuments({
+          _id: { $in: multiUserIds },
+          ...validFcmTokenQuery
+        });
+      }
+
+      case "I": {
+        const highValueStats = await Order.aggregate([
+          { $match: { orderStatus: { $ne: "Cancelled" } } },
+          { $group: { _id: "$user", totalSpent: { $sum: "$totalAmount" }, maxSingleOrder: { $max: "$totalAmount" } } },
+          { $match: { $or: [{ totalSpent: { $gte: 50000 } }, { maxSingleOrder: { $gte: 50000 } }] } }
+        ]);
+        const highValueIds = highValueStats.map(r => r._id);
+        if (!highValueIds.length) return 0;
+        return await User.countDocuments({
+          _id: { $in: highValueIds },
+          ...validFcmTokenQuery
+        });
+      }
+
+      case "J": {
+        const recentActiveUsers = await Order.distinct("user", {
+          orderStatus: { $ne: "Cancelled" },
+          createdAt: { $gte: thirtyDaysAgo }
+        });
+        return await User.countDocuments({
+          ...validFcmTokenQuery,
+          _id: { $nin: recentActiveUsers },
+          kycStatus: "verified",
+          createdAt: { $lte: thirtyDaysAgo }
+        });
+      }
+
+      case "SEASONAL":
+      case "TRUST":
+      case "URGENCY": {
+        return await User.countDocuments(validFcmTokenQuery);
+      }
+
+      default:
+        return 0;
+    }
+  }
+
+  /**
+   * Diagnostic summary of all campaigns, templates, schedules, and audience counts (Super fast in-memory parallel execution)
    */
   async getSegmentStats() {
     await this.ensureSeedCampaigns();
 
     const startOfToday = getStartOfTodayIST();
-    const totalUsers = await User.countDocuments({ isDeleted: { $ne: true } });
-    const usersWithToken = await User.countDocuments({ fcmToken: { $exists: true, $nin: [null, ""] }, isDeleted: { $ne: true } });
+    const [totalUsers, usersWithToken, campaigns] = await Promise.all([
+      User.countDocuments({ isDeleted: { $ne: true } }),
+      User.countDocuments({ fcmToken: { $exists: true, $nin: [null, ""] }, isDeleted: { $ne: true } }),
+      NotificationCampaign.find({}).sort({ segmentKey: 1 }).lean()
+    ]);
 
-    const campaigns = await NotificationCampaign.find({}).sort({ segmentKey: 1 }).lean();
-    const stats = [];
-
-    for (const camp of campaigns) {
-      const totalPopulation = await this.getTotalUsersInSegment(camp.segmentKey);
-      const remainingToday = await this.getEligibleUsersForSegment(camp.segmentKey);
-      const todayTemplate = await this.getNotificationForSegment(camp.segmentKey);
-
+    const stats = await Promise.all(campaigns.map(async (camp) => {
+      const totalAudience = await this.getSegmentCount(camp.segmentKey, false);
       const isDispatchedToday = Boolean(camp.stats?.lastRunAt && new Date(camp.stats.lastRunAt) >= startOfToday);
       const dispatchedTodayCount = isDispatchedToday ? (camp.stats?.lastDispatchedCount || 0) : 0;
 
-      stats.push({
+      // In-memory template resolver (0ms, no extra DB calls)
+      const activeTemplates = (camp.templates || []).filter(t => t.isEnabled);
+      let todayTemplate = null;
+      if (activeTemplates.length > 0) {
+        if (camp.mode === "pinned" && camp.pinnedTemplateId) {
+          todayTemplate = activeTemplates.find(t => t._id.toString() === camp.pinnedTemplateId.toString());
+        }
+        if (!todayTemplate) {
+          const now = new Date();
+          const start = new Date(now.getFullYear(), 0, 0);
+          const diff = now - start;
+          const oneDay = 1000 * 60 * 60 * 24;
+          const dayOfYear = Math.floor(diff / oneDay);
+          todayTemplate = activeTemplates[dayOfYear % activeTemplates.length];
+        }
+      }
+
+      return {
         ...camp,
-        eligibleCount: totalPopulation.length,
-        totalAudience: totalPopulation.length,
-        remainingToday: remainingToday.length,
+        eligibleCount: totalAudience,
+        totalAudience: totalAudience,
         isDispatchedToday,
         dispatchedTodayCount,
         todayTemplate
-      });
-    }
+      };
+    }));
 
     return {
       totalUsers,
