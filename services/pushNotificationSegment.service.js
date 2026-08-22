@@ -347,9 +347,9 @@ class PushNotificationSegmentService {
   }
 
   /**
-   * Get eligible users for a specific segment
+   * Get total or daily-filtered population for a specific segment
    */
-  async getEligibleUsersForSegment(segmentKey) {
+  async getSegmentPopulation(segmentKey, onlyUnsentToday = false) {
     const segment = segmentKey.toUpperCase();
     const now = new Date();
     const thirtyMinsAgo = new Date(now.getTime() - 30 * 60 * 1000);
@@ -368,8 +368,8 @@ class PushNotificationSegmentService {
     };
 
     switch (segment) {
-      case "A": // Installed -> KYC Not Started (Daily, 3–5 days cap)
-        return await User.find({
+      case "A": {
+        const query = {
           ...validFcmTokenQuery,
           role: "user",
           kycStatus: { $in: ["pending", "not_started"] },
@@ -383,19 +383,23 @@ class PushNotificationSegmentService {
                 { kycReminderCount: { $exists: false } },
                 { kycReminderCount: { $lt: 5 } }
               ]
-            },
-            {
-              $or: [
-                { lastKycReminderSentAt: { $exists: false } },
-                { lastKycReminderSentAt: null },
-                { lastKycReminderSentAt: { $lt: startOfToday } }
-              ]
             }
           ]
-        });
+        };
+        if (onlyUnsentToday) {
+          query.$and.push({
+            $or: [
+              { lastKycReminderSentAt: { $exists: false } },
+              { lastKycReminderSentAt: null },
+              { lastKycReminderSentAt: { $lt: startOfToday } }
+            ]
+          });
+        }
+        return await User.find(query);
+      }
 
-      case "B": // KYC Started -> Documents Pending (Daily)
-        return await User.find({
+      case "B": {
+        const query = {
           ...validFcmTokenQuery,
           role: "user",
           kycStatus: { $in: ["pending", "rejected"] },
@@ -407,52 +411,62 @@ class PushNotificationSegmentService {
                 { licenceImage: { $nin: [null, ""] } },
                 { gstNumber: { $nin: [null, ""] } }
               ]
-            },
-            {
-              $or: [
-                { lastKycReminderSentAt: { $exists: false } },
-                { lastKycReminderSentAt: null },
-                { lastKycReminderSentAt: { $lt: startOfToday } }
-              ]
             }
           ]
-        });
+        };
+        if (onlyUnsentToday) {
+          query.$and.push({
+            $or: [
+              { lastKycReminderSentAt: { $exists: false } },
+              { lastKycReminderSentAt: null },
+              { lastKycReminderSentAt: { $lt: startOfToday } }
+            ]
+          });
+        }
+        return await User.find(query);
+      }
 
-      case "C": // KYC Under Review (Once/day)
-        return await User.find({
+      case "C": {
+        const query = {
           ...validFcmTokenQuery,
           role: "user",
-          kycStatus: { $in: ["submitted", "processing"] },
-          $or: [
+          kycStatus: { $in: ["submitted", "processing"] }
+        };
+        if (onlyUnsentToday) {
+          query.$or = [
             { lastKycReminderSentAt: { $exists: false } },
             { lastKycReminderSentAt: null },
             { lastKycReminderSentAt: { $lt: startOfToday } }
-          ]
-        });
+          ];
+        }
+        return await User.find(query);
+      }
 
-      case "D": { // KYC Approved -> No Order (Daily at scheduled time)
+      case "D": {
         const usersWithOrders = await Order.distinct("user", { orderStatus: { $ne: "Cancelled" } });
-        return await User.find({
+        const query = {
           ...validFcmTokenQuery,
           _id: { $nin: usersWithOrders },
-          kycStatus: "verified",
-          $or: [
+          kycStatus: "verified"
+        };
+        if (onlyUnsentToday) {
+          query.$or = [
             { lastFirstOrderSentAt: { $exists: false } },
             { lastFirstOrderSentAt: null },
             { lastFirstOrderSentAt: { $lt: startOfToday } }
-          ]
-        });
+          ];
+        }
+        return await User.find(query);
       }
 
-      case "E": { // Cart Abandoned (2 reminders max)
-        const abandonedCarts = await Cart.find({
+      case "E": {
+        const cartQuery = {
           items: { $exists: true, $not: { $size: 0 } },
-          updatedAt: { $lt: thirtyMinsAgo, $gt: sevenDaysAgo },
-          $or: [
-            { reminderCount: { $exists: false } },
-            { reminderCount: { $lt: 2 } }
-          ],
-          $and: [
+          updatedAt: { $lt: thirtyMinsAgo, $gt: sevenDaysAgo }
+        };
+        if (onlyUnsentToday) {
+          cartQuery.$or = [{ reminderCount: { $exists: false } }, { reminderCount: { $lt: 2 } }];
+          cartQuery.$and = [
             {
               $or: [
                 { lastReminderSentAt: { $exists: false } },
@@ -460,9 +474,9 @@ class PushNotificationSegmentService {
                 { lastReminderSentAt: { $lt: threeHoursAgo } }
               ]
             }
-          ]
-        }).populate("user");
-
+          ];
+        }
+        const abandonedCarts = await Cart.find(cartQuery).populate("user");
         const userMap = new Map();
         for (const cart of abandonedCarts) {
           if (cart.user && cart.user.fcmToken && !userMap.has(cart.user._id.toString())) {
@@ -473,16 +487,15 @@ class PushNotificationSegmentService {
         return Array.from(userMap.values());
       }
 
-      case "F": { // Checkout / Payment Pending (2 reminders max)
-        const pendingOrders = await Order.find({
+      case "F": {
+        const orderQuery = {
           paymentStatus: "Pending",
           orderStatus: { $nin: ["Cancelled", "Delivered"] },
-          createdAt: { $lt: thirtyMinsAgo, $gt: fortyEightHoursAgo },
-          $or: [
-            { reminderCount: { $exists: false } },
-            { reminderCount: { $lt: 2 } }
-          ],
-          $and: [
+          createdAt: { $lt: thirtyMinsAgo, $gt: fortyEightHoursAgo }
+        };
+        if (onlyUnsentToday) {
+          orderQuery.$or = [{ reminderCount: { $exists: false } }, { reminderCount: { $lt: 2 } }];
+          orderQuery.$and = [
             {
               $or: [
                 { lastReminderSentAt: { $exists: false } },
@@ -490,18 +503,18 @@ class PushNotificationSegmentService {
                 { lastReminderSentAt: { $lt: threeHoursAgo } }
               ]
             }
-          ]
-        }).populate("user");
+          ];
+        }
+        const pendingOrders = await Order.find(orderQuery).populate("user");
 
-        const pendingSessions = await CheckoutSession.find({
+        const sessionQuery = {
           status: "Pending",
           orderCreated: { $ne: true },
-          createdAt: { $lt: thirtyMinsAgo, $gt: fortyEightHoursAgo },
-          $or: [
-            { reminderCount: { $exists: false } },
-            { reminderCount: { $lt: 2 } }
-          ],
-          $and: [
+          createdAt: { $lt: thirtyMinsAgo, $gt: fortyEightHoursAgo }
+        };
+        if (onlyUnsentToday) {
+          sessionQuery.$or = [{ reminderCount: { $exists: false } }, { reminderCount: { $lt: 2 } }];
+          sessionQuery.$and = [
             {
               $or: [
                 { lastReminderSentAt: { $exists: false } },
@@ -509,8 +522,9 @@ class PushNotificationSegmentService {
                 { lastReminderSentAt: { $lt: threeHoursAgo } }
               ]
             }
-          ]
-        }).populate("user");
+          ];
+        }
+        const pendingSessions = await CheckoutSession.find(sessionQuery).populate("user");
 
         const userMap = new Map();
         for (const o of pendingOrders) {
@@ -528,86 +542,93 @@ class PushNotificationSegmentService {
         return Array.from(userMap.values());
       }
 
-      case "G": { // Ordered Once (Repeat purchase after 7–15 days)
+      case "G": {
         const onceUserStats = await Order.aggregate([
           { $match: { orderStatus: { $ne: "Cancelled" } } },
           { $group: { _id: "$user", count: { $sum: 1 }, lastOrderDate: { $max: "$createdAt" } } },
           { $match: { count: 1, lastOrderDate: { $lte: sevenDaysAgo } } }
         ]);
         const onceUserIds = onceUserStats.map(r => r._id);
-
-        return await User.find({
+        const query = {
           ...validFcmTokenQuery,
-          _id: { $in: onceUserIds },
-          $or: [
+          _id: { $in: onceUserIds }
+        };
+        if (onlyUnsentToday) {
+          query.$or = [
             { lastRepeatReminderSentAt: { $exists: false } },
             { lastRepeatReminderSentAt: null },
             { lastRepeatReminderSentAt: { $lt: sevenDaysAgo } }
-          ]
-        });
+          ];
+        }
+        return await User.find(query);
       }
 
-      case "H": { // Active Buyers (2–3 / week)
+      case "H": {
         const multiUserStats = await Order.aggregate([
           { $match: { orderStatus: { $ne: "Cancelled" } } },
           { $group: { _id: "$user", count: { $sum: 1 } } },
           { $match: { count: { $gt: 1 } } }
         ]);
         const multiUserIds = multiUserStats.map(r => r._id);
-
-        return await User.find({
+        const query = {
           ...validFcmTokenQuery,
-          _id: { $in: multiUserIds },
-          $or: [
+          _id: { $in: multiUserIds }
+        };
+        if (onlyUnsentToday) {
+          query.$or = [
             { lastActiveBuyerSentAt: { $exists: false } },
             { lastActiveBuyerSentAt: null },
             { lastActiveBuyerSentAt: { $lt: twoDaysAgo } }
-          ]
-        });
+          ];
+        }
+        return await User.find(query);
       }
 
-      case "I": { // High Value Dealers (Weekly)
+      case "I": {
         const highValueStats = await Order.aggregate([
           { $match: { orderStatus: { $ne: "Cancelled" } } },
           { $group: { _id: "$user", totalSpent: { $sum: "$totalAmount" }, maxSingleOrder: { $max: "$totalAmount" } } },
           { $match: { $or: [{ totalSpent: { $gte: 50000 } }, { maxSingleOrder: { $gte: 50000 } }] } }
         ]);
         const highValueIds = highValueStats.map(r => r._id);
-
-        return await User.find({
+        const query = {
           ...validFcmTokenQuery,
-          _id: { $in: highValueIds },
-          $or: [
+          _id: { $in: highValueIds }
+        };
+        if (onlyUnsentToday) {
+          query.$or = [
             { lastVipSentAt: { $exists: false } },
             { lastVipSentAt: null },
             { lastVipSentAt: { $lt: sixDaysAgo } }
-          ]
-        });
+          ];
+        }
+        return await User.find(query);
       }
 
-      case "J": { // Inactive 30+ Days (Weekly)
+      case "J": {
         const recentActiveUsers = await Order.distinct("user", {
           orderStatus: { $ne: "Cancelled" },
           createdAt: { $gte: thirtyDaysAgo }
         });
-
-        return await User.find({
+        const query = {
           ...validFcmTokenQuery,
           _id: { $nin: recentActiveUsers },
           kycStatus: "verified",
-          createdAt: { $lte: thirtyDaysAgo },
-          $or: [
+          createdAt: { $lte: thirtyDaysAgo }
+        };
+        if (onlyUnsentToday) {
+          query.$or = [
             { lastWinBackSentAt: { $exists: false } },
             { lastWinBackSentAt: null },
             { lastWinBackSentAt: { $lt: sixDaysAgo } }
-          ]
-        });
+          ];
+        }
+        return await User.find(query);
       }
 
       case "SEASONAL":
       case "TRUST":
       case "URGENCY": {
-        // Full broadcast to ALL users with active FCM push tokens
         return await User.find({
           ...validFcmTokenQuery
         });
@@ -616,6 +637,20 @@ class PushNotificationSegmentService {
       default:
         return [];
     }
+  }
+
+  /**
+   * Get eligible users for today's dispatch
+   */
+  async getEligibleUsersForSegment(segmentKey) {
+    return await this.getSegmentPopulation(segmentKey, true);
+  }
+
+  /**
+   * Get total population belonging to this segment
+   */
+  async getTotalUsersInSegment(segmentKey) {
+    return await this.getSegmentPopulation(segmentKey, false);
   }
 
   /**
@@ -732,6 +767,7 @@ class PushNotificationSegmentService {
   async getSegmentStats() {
     await this.ensureSeedCampaigns();
 
+    const startOfToday = getStartOfTodayIST();
     const totalUsers = await User.countDocuments({ isDeleted: { $ne: true } });
     const usersWithToken = await User.countDocuments({ fcmToken: { $exists: true, $nin: [null, ""] }, isDeleted: { $ne: true } });
 
@@ -739,11 +775,20 @@ class PushNotificationSegmentService {
     const stats = [];
 
     for (const camp of campaigns) {
-      const eligible = await this.getEligibleUsersForSegment(camp.segmentKey);
+      const totalPopulation = await this.getTotalUsersInSegment(camp.segmentKey);
+      const remainingToday = await this.getEligibleUsersForSegment(camp.segmentKey);
       const todayTemplate = await this.getNotificationForSegment(camp.segmentKey);
+
+      const isDispatchedToday = Boolean(camp.stats?.lastRunAt && new Date(camp.stats.lastRunAt) >= startOfToday);
+      const dispatchedTodayCount = isDispatchedToday ? (camp.stats?.lastDispatchedCount || 0) : 0;
+
       stats.push({
         ...camp,
-        eligibleCount: eligible.length,
+        eligibleCount: totalPopulation.length,
+        totalAudience: totalPopulation.length,
+        remainingToday: remainingToday.length,
+        isDispatchedToday,
+        dispatchedTodayCount,
         todayTemplate
       });
     }
