@@ -628,14 +628,10 @@ class PushNotificationSegmentService {
 
       case "SEASONAL":
       case "TRUST":
-      case "URGENCY": {
-        return await User.find({
-          ...validFcmTokenQuery
-        });
+      case "URGENCY":
+      default: {
+        return await User.find(validFcmTokenQuery);
       }
-
-      default:
-        return [];
     }
   }
 
@@ -936,12 +932,10 @@ class PushNotificationSegmentService {
 
       case "SEASONAL":
       case "TRUST":
-      case "URGENCY": {
+      case "URGENCY":
+      default: {
         return await User.countDocuments(validFcmTokenQuery);
       }
-
-      default:
-        return 0;
     }
   }
 

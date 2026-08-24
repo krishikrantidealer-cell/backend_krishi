@@ -325,3 +325,92 @@ exports.uploadBannerImage = async (req, res, next) => {
     });
   }
 };
+
+/**
+ * Create a new Campaign Segment
+ * POST /api/marketing/push-campaigns
+ */
+exports.createCampaign = async (req, res) => {
+  try {
+    const {
+      segmentKey,
+      name,
+      description,
+      goal,
+      category,
+      isEnabled,
+      scheduledTime,
+      mode,
+      targetRoute,
+      templates
+    } = req.body;
+
+    if (!segmentKey || !name) {
+      return res.status(400).json({
+        success: false,
+        message: 'Segment Key and Name are required.',
+      });
+    }
+
+    const cleanSegmentKey = segmentKey.toString().trim().toUpperCase();
+
+    // Check if segment key already exists
+    const existing = await NotificationCampaign.findOne({ segmentKey: cleanSegmentKey });
+    if (existing) {
+      return res.status(409).json({
+        success: false,
+        message: `Segment "${cleanSegmentKey}" already exists. Please choose a different key.`,
+      });
+    }
+
+    const campaign = await NotificationCampaign.create({
+      segmentKey: cleanSegmentKey,
+      name: name.trim(),
+      description: (description || '').trim(),
+      goal: (goal || '').trim(),
+      category: category || 'marketing',
+      isEnabled: isEnabled !== undefined ? isEnabled : true,
+      scheduledTime: scheduledTime || '09:00',
+      mode: mode || 'rotating',
+      targetRoute: targetRoute || '/dashboard',
+      templates: Array.isArray(templates) ? templates : [],
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: `Segment "${cleanSegmentKey}" created successfully.`,
+      campaign,
+    });
+  } catch (error) {
+    console.error('[MarketingCampaignController] Error creating campaign segment:', error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * Delete an entire Campaign Segment
+ * DELETE /api/marketing/push-campaigns/:segment
+ */
+exports.deleteCampaign = async (req, res) => {
+  try {
+    const { segment } = req.params;
+    const cleanSegmentKey = segment.toString().trim().toUpperCase();
+
+    const campaign = await NotificationCampaign.findOneAndDelete({ segmentKey: cleanSegmentKey });
+    if (!campaign) {
+      return res.status(404).json({
+        success: false,
+        message: `Segment "${cleanSegmentKey}" not found.`,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: `Segment "${cleanSegmentKey}" deleted successfully.`,
+    });
+  } catch (error) {
+    console.error('[MarketingCampaignController] Error deleting campaign segment:', error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+

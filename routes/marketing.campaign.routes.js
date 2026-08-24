@@ -15,6 +15,18 @@ router.use(authorizeRoles('admin', 'sales'));
 router.get('/', campaignController.getAllCampaigns);
 
 /**
+ * @route   POST /api/marketing/push-campaigns
+ * @desc    Create a new campaign segment
+ */
+router.post('/', campaignController.createCampaign);
+
+/**
+ * @route   DELETE /api/marketing/push-campaigns/:segment
+ * @desc    Delete an entire campaign segment
+ */
+router.delete('/:segment', campaignController.deleteCampaign);
+
+/**
  * @route   PUT /api/marketing/push-campaigns/:segment/config
  * @desc    Update campaign global settings (enabled, schedule time, mode, pinned template)
  */
