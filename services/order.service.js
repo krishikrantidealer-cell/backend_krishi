@@ -231,9 +231,7 @@ class OrderService {
     if (!user) {
       throw new Error('User not found');
     }
-    // Safety: If they've already paid (razorpayPaymentId is present), we MUST allow order creation
-    // even if KYC is pending, otherwise we lose the order while having their money.
-    if (!user.isKycComplete && !paymentData.razorpayPaymentId) {
+    if (!user.isKycComplete) {
       throw new Error('KYC verification is pending. Please wait for administrator approval to place orders.');
     }
 

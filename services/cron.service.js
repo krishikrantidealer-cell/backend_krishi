@@ -149,9 +149,34 @@ const runAbandonedCheckoutCheck = async () => {
       return;
     }
 
-    console.log(`[Cron] Found ${abandonedSessions.length} abandoned checkouts. Sending reminders...`);
+    console.log(`[Cron] Found ${abandonedSessions.length} abandoned checkouts. Verifying payment status & sending reminders...`);
+    const keyId = process.env.RAZORPAY_KEY_ID;
+    const keySecret = process.env.RAZORPAY_KEY_SECRET;
+    const axios = require('axios');
+
     for (let session of abandonedSessions) {
       try {
+        // 0. Auto-Reconciliation: Check if this session was actually paid on Razorpay (Safety Net 3)
+        if (keyId && keySecret && !keySecret.includes('YOUR_') && session.razorpayOrderId && !session.razorpayOrderId.startsWith('mock_')) {
+          try {
+            const auth = Buffer.from(`${keyId}:${keySecret}`).toString('base64');
+            const rzpRes = await axios.get(`https://api.razorpay.com/v1/orders/${session.razorpayOrderId}/payments`, {
+              headers: { 'Authorization': `Basic ${auth}` },
+              timeout: 5000
+            });
+            const payments = rzpRes.data?.items || [];
+            const successfulPayment = payments.find(p => p.status === 'captured' || p.status === 'authorized');
+            if (successfulPayment) {
+              console.log(`[Cron] Auto-recovering paid order for session ${session.razorpayOrderId} with payment ${successfulPayment.id}`);
+              const orderService = require('./order.service');
+              await orderService.confirmOrder(session, { razorpayPaymentId: successfulPayment.id });
+              continue; // Successfully recovered order! Do not send abandoned checkout reminder.
+            }
+          } catch (rzpCheckErr) {
+            console.warn(`[Cron] Razorpay payment check skipped for ${session.razorpayOrderId}:`, rzpCheckErr.message);
+          }
+        }
+
         if (!session.user || !session.user.fcmToken) continue;
 
         // 1. Push Notification

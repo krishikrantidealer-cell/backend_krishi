@@ -538,8 +538,9 @@ exports.razorpayWebhook = async (req, res, next) => {
 
     // Verify webhook signature to ensure it's from Razorpay
     if (webhookSecret && signature) {
+      const rawPayload = req.rawBody || JSON.stringify(req.body);
       const shasum = crypto.createHmac('sha256', webhookSecret);
-      shasum.update(JSON.stringify(req.body));
+      shasum.update(rawPayload);
       const digest = shasum.digest('hex');
 
       if (signature !== digest) {
