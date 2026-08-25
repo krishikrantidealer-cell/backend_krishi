@@ -785,7 +785,8 @@ exports.adminCreateOrder = async (req, res, next) => {
       remainingAmount: remaining,
       orderStatus: orderStatus || 'Processing',
       paymentStatus: paymentStatus || (dbPaymentMethod === 'Online' ? 'Paid' : 'Partially Paid'),
-      placedAt: new Date(),
+      placedAt: req.body.placedAt ? new Date(req.body.placedAt) : new Date(),
+      source: req.body.source || 'panel',
       processingAt: new Date(),
     });
 
@@ -862,3 +863,39 @@ exports.cronSyncOrders = async (req, res, next) => {
   }
 };
 
+
+exports.adminUpdateOrderDate = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { placedAt } = req.body;
+    if (!placedAt) {
+      return res.status(400).json({ success: false, message: "placedAt is required" });
+    }
+    const targetDate = new Date(placedAt);
+    if (isNaN(targetDate.getTime())) {
+      return res.status(400).json({ success: false, message: "Invalid date format" });
+    }
+
+    const order = await Order.findByIdAndUpdate(
+      id,
+      { placedAt: targetDate, createdAt: targetDate },
+      { new: true }
+    ).populate("user");
+
+    if (!order) {
+      return res.status(404).json({ success: false, message: "Order not found" });
+    }
+
+    try {
+      const { broadcastToRoles } = require("../services/websocket.service");
+      broadcastToRoles(["admin", "sales"], { type: "ORDERS_UPDATE" });
+    } catch (wsErr) {
+      console.error("[WS] Failed to broadcast ORDERS_UPDATE on order date change:", wsErr.message);
+    }
+
+    res.json({ success: true, message: "Order date updated successfully", order });
+  } catch (error) {
+    console.error("adminUpdateOrderDate error:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};

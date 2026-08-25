@@ -140,6 +140,11 @@ const orderSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  source: {
+    type: String,
+    enum: ['app', 'panel'],
+    default: 'app'
+  },
   placedAt: {
     type: Date,
     default: Date.now
