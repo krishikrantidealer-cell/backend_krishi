@@ -226,7 +226,7 @@ class OrderService {
     return order;
   }
 
-  async initializeRazorpayPayment(userId, paymentMethod = 'Online', partialPercent = null) {
+  async initializeRazorpayPayment(userId, paymentMethod = 'Online', partialPercent = null, shippingAddress = null) {
     const user = await User.findById(userId);
     if (!user) {
       throw new Error('User not found');
@@ -332,7 +332,7 @@ class OrderService {
             quantity: f.quantity || 1,
             isFree: true
           })) : [],
-          shippingAddress: user.address, // Capture current address
+          shippingAddress: shippingAddress || user.address, // Capture current address
           paymentMethod: paymentMethod,
           advanceAmount: amountToPay,
           remainingAmount: finalAmount - amountToPay

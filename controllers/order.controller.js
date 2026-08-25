@@ -5,11 +5,12 @@ const auditService = require('../services/audit.service');
 
 exports.initializePayment = async (req, res, next) => {
   try {
-    const { paymentMethod, partialPercent } = req.body;
+    const { paymentMethod, partialPercent, shippingAddress } = req.body;
     const razorpayOrder = await orderService.initializeRazorpayPayment(
       req.user._id,
       paymentMethod,
-      partialPercent
+      partialPercent,
+      shippingAddress
     );
 
     res.json({

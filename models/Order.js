@@ -8,7 +8,7 @@ const orderItemSchema = new mongoose.Schema({
   },
   variantId: {
     type: mongoose.Schema.Types.ObjectId,
-    required: true
+    required: false
   },
   title: {
     type: String,
