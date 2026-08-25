@@ -342,7 +342,12 @@ exports.adminUpdateKycStatus = async (req, res, next) => {
 
 exports.adminAssignAgent = async (req, res, next) => {
   try {
-    const { agentId } = req.body;
+    const rawAgentId = req.body.agentId !== undefined
+      ? req.body.agentId
+      : (req.body.assignedAgentId !== undefined ? req.body.assignedAgentId : req.body.assignedAgent);
+    const agentId = (rawAgentId && rawAgentId !== 'unassign' && String(rawAgentId).trim() !== '' && String(rawAgentId).trim() !== 'null')
+      ? rawAgentId
+      : null;
     const { userId } = req.params;
 
     // Get old user state for audit logging

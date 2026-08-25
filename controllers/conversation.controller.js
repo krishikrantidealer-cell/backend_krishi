@@ -180,7 +180,30 @@ const assignConversation = async (req, res) => {
     }
 
     // Update Contact assignment as well
-    await Contact.findByIdAndUpdate(conversation.contactId._id, { assignedTo: agentId });
+    if (conversation.contactId) {
+      await Contact.findByIdAndUpdate(conversation.contactId._id, { assignedTo: agentId });
+
+      // Also sync User if registered
+      if (conversation.contactId.phone) {
+        const cleanPhone = conversation.contactId.phone.replace(/[^\d]/g, '');
+        const targetPhone = cleanPhone.startsWith('91') && cleanPhone.length === 12 ? cleanPhone.slice(2) : cleanPhone;
+        await User.updateMany(
+          {
+            $or: [
+              { phoneNumber: targetPhone },
+              { phoneNumber: `91${targetPhone}` },
+              { phoneNumber: `+91${targetPhone}` }
+            ]
+          },
+          {
+            $set: {
+              assignedAgent: agentId || null,
+              assignedAt: agentId ? new Date() : null
+            }
+          }
+        );
+      }
+    }
 
     res.json({ success: true, message: 'Conversation assigned successfully', data: conversation });
   } catch (error) {
