@@ -4,6 +4,7 @@ const dotenv = require('dotenv');
 dotenv.config();
 
 let redisClient;
+let redisSubscriber;
 
 if (process.env.REDIS_URL) {
   redisClient = createClient({
@@ -19,6 +20,9 @@ if (process.env.REDIS_URL) {
   });
 
   redisClient.on('error', (err) => console.error('[Redis Client Error]:', err.message));
+
+  redisSubscriber = redisClient.duplicate();
+  redisSubscriber.on('error', (err) => console.error('[Redis Subscriber Error]:', err.message));
 } else {
   // Safe mock client when REDIS_URL is not configured
   redisClient = {
@@ -27,17 +31,27 @@ if (process.env.REDIS_URL) {
     get: async () => null,
     set: async () => 'OK',
     del: async () => 1,
+    publish: async () => 0,
     sendCommand: async () => 'OK',
     ping: async () => 'PONG',
+    on: () => {}
+  };
+
+  redisSubscriber = {
+    isOpen: false,
+    connect: async () => {},
+    subscribe: async () => {},
+    unsubscribe: async () => {},
     on: () => {}
   };
 }
 
 const connectRedis = async () => {
-  if (process.env.REDIS_URL && !redisClient.isOpen) {
+  if (process.env.REDIS_URL) {
     try {
-      await redisClient.connect();
-      console.log('✅ Redis connected successfully');
+      if (!redisClient.isOpen) await redisClient.connect();
+      if (redisSubscriber && !redisSubscriber.isOpen) await redisSubscriber.connect();
+      console.log('✅ Redis client and subscriber connected successfully');
     } catch (err) {
       console.warn('⚠️ Redis connection failed, continuing with fallback:', err.message);
     }
@@ -46,5 +60,6 @@ const connectRedis = async () => {
 
 module.exports = {
   redisClient,
+  redisSubscriber,
   connectRedis
 };

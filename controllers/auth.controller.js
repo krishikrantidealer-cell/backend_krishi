@@ -148,6 +148,10 @@ class AuthController {
 
         const cleanUtmVal = (val) => {
           if (!val) return null;
+          const trimmed = val.trim().toLowerCase();
+          if (['(not set)', '(notset)', 'not set', 'not_set', 'notset', 'none', 'null', 'undefined', 'organic'].includes(trimmed)) {
+            return null;
+          }
           try {
             const decoded = decodeURIComponent(val);
             if (decoded.startsWith('{') && decoded.endsWith('}')) {
@@ -173,7 +177,11 @@ class AuthController {
           } catch (e) {}
         }
 
-        if (utmContent) utmContent = cleanUtmVal(utmContent);
+        utmSource = cleanUtmVal(utmSource);
+        utmMedium = cleanUtmVal(utmMedium);
+        utmCampaign = cleanUtmVal(utmCampaign);
+        utmTerm = cleanUtmVal(utmTerm);
+        utmContent = cleanUtmVal(utmContent);
 
         user = await User.create({ 
           phoneNumber,

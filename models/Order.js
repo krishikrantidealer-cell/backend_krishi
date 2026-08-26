@@ -172,8 +172,12 @@ const orderSchema = new mongoose.Schema({
 });
 
 // Optimized Indexes for performance and scalability
+orderSchema.index({ orderId: 1 }, { unique: true });
+orderSchema.index({ razorpayPaymentId: 1 }, { sparse: true });
 orderSchema.index({ user: 1, createdAt: -1 });
 orderSchema.index({ awbNumber: 1 }, { sparse: true });
 orderSchema.index({ orderStatus: 1 });
+orderSchema.index({ paymentStatus: 1 });
+orderSchema.index({ placedAt: -1 });
 
 module.exports = mongoose.model('Order', orderSchema);

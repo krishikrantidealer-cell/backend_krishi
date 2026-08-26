@@ -36,12 +36,32 @@ const setLastRunDate = async (jobKey, datePart) => {
   }
 };
 
+// Distributed lock to prevent multi-instance duplicate cron executions on Cloud Run
+const acquireCronLock = async (jobKey, ttlSeconds = 180) => {
+  try {
+    if (redisClient && redisClient.isOpen) {
+      const lock = await redisClient.set(`lock:cron:${jobKey}`, 'active', {
+        NX: true,
+        EX: ttlSeconds
+      });
+      return lock === 'OK';
+    }
+  } catch (err) {
+    console.warn(`[Cron Lock] Lock check error for ${jobKey}:`, err.message);
+  }
+  return true; // Fallback if Redis is not connected
+};
+
 /**
  * Background Service Tasks (Exposed for manual triggering via Cron Routes)
  */
 
 // 1. Order Sync Task (Every 20 mins)
 const runOrderSync = async () => {
+  if (!await acquireCronLock('order_sync', 300)) {
+    console.log('[Cron] Order Sync already in progress or completed on another instance.');
+    return;
+  }
   try {
     console.log('[Cron] Starting Automated Order Status Sync...');
     const activeOrders = await Order.find({
@@ -70,6 +90,10 @@ const runOrderSync = async () => {
 
 // 2. Abandoned Cart Checker (Every hour)
 const runAbandonedCartCheck = async () => {
+  if (!await acquireCronLock('abandoned_cart', 600)) {
+    console.log('[Cron] Abandoned cart check already executed by another instance.');
+    return;
+  }
   try {
     console.log('[Cron] Checking for Abandoned Carts...');
     const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
@@ -129,6 +153,10 @@ const runAbandonedCartCheck = async () => {
 
 // 3. Abandoned Checkout Checker (Every 30 mins)
 const runAbandonedCheckoutCheck = async () => {
+  if (!await acquireCronLock('abandoned_checkout', 300)) {
+    console.log('[Cron] Abandoned checkout check already executed by another instance.');
+    return;
+  }
   try {
     console.log('[Cron] Checking for Abandoned Checkouts...');
     const thirtyMinsAgo = new Date(Date.now() - 30 * 60 * 1000);
@@ -313,6 +341,10 @@ const runScheduledSegmentNotifications = async (forcedJob = null) => {
 
 // 6. WhatsApp Automation Task (Every hour)
 const runWhatsAppAutomation = async () => {
+  if (!await acquireCronLock('whatsapp_automation', 600)) {
+    console.log('[Cron] WhatsApp Automation already executed by another instance.');
+    return;
+  }
   try {
     console.log('[Cron] Running WhatsApp Automation...');
     await whatsappAutomationService.sendWelcomeMessage();

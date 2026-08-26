@@ -296,6 +296,12 @@ const userSchema = new mongoose.Schema({
   timestamps: true
 });
 
+// Performance Indexes for fast Admin Panel Lead & Dealer filtering
+userSchema.index({ role: 1, kycStatus: 1, isDeleted: 1 });
+userSchema.index({ assignedAgent: 1, isDeleted: 1 });
+userSchema.index({ phoneNumber: 1 });
+userSchema.index({ createdAt: -1 });
+
 const User = mongoose.model('User', userSchema);
 
 module.exports = User;

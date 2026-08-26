@@ -288,15 +288,24 @@ class UserService {
       throw new Error('Invalid User ID');
     }
 
+    const isVerified = status === 'verified';
+
     const updateData = {
       kycStatus: status,
-      isKycComplete: status === 'verified',
-      isVerified: status === 'verified',
-      status: status === 'verified' ? 'verified' : (status === 'rejected' ? 'rejected' : status)
+      isKycComplete: isVerified,
+      isVerified: isVerified,
+      status: isVerified ? 'verified' : (status === 'rejected' ? 'rejected' : status)
     };
 
-    if (status === 'verified') {
+    if (isVerified) {
       updateData.kycApprovedAt = new Date();
+      updateData.isProfileComplete = true;
+    }
+
+    if (status === 'rejected') {
+      updateData.kycRejectedAt = new Date();
+      updateData.kycReason = reason;
+      updateData.reason = reason;
     }
 
     const user = await User.findByIdAndUpdate(

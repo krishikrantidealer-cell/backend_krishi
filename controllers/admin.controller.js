@@ -250,72 +250,71 @@ exports.getDashboardAnalytics = async (req, res, next) => {
 
     const dateQuery = isTotal ? {} : { placedAt: { $gte: startDate, $lte: endDate } };
 
-    // 1. User/Dealer counts
-    const totalUsers = await User.countDocuments({ role: 'user' });
-    const verifiedUsers = await User.countDocuments({ role: 'user', kycStatus: 'verified' });
-    const pendingKyc = await User.countDocuments({ role: 'user', kycStatus: { $in: ['processing', 'submitted'] }, isProfileComplete: true });
-
-    // New Leads Correction: Consistent filtering across all periods
-    // We count users with role 'user' who are not verified yet (prospects)
+    // New Leads Query
     const leadQuery = {
       role: 'user',
       kycStatus: { $ne: 'verified' },
       ...dateQuery
     };
-    const newLeads = await User.countDocuments(leadQuery);
 
-    // 2. Order metrics
-    const totalOrders = await Order.countDocuments();
-    const periodOrders = await Order.countDocuments(dateQuery);
-    const pendingOrders = await Order.countDocuments({ orderStatus: 'Processing' });
-
-    // Optimized Revenue calculations using Aggregation
-    const totalRevenueResult = await Order.aggregate([
-      { $match: { orderStatus: { $ne: 'Cancelled' } } },
-      { $group: { _id: null, total: { $sum: "$totalAmount" } } }
-    ]);
-    const totalRevenue = totalRevenueResult.length > 0 ? totalRevenueResult[0].total : 0;
-
-    const periodRevenueResult = await Order.aggregate([
-      { $match: { ...dateQuery, orderStatus: { $ne: 'Cancelled' } } },
-      { $group: { _id: null, total: { $sum: "$totalAmount" } } }
-    ]);
-    const periodRevenue = periodRevenueResult.length > 0 ? periodRevenueResult[0].total : 0;
-
-    // 3. Checkout Sessions (Abandoned Checkouts logic)
-    // Sessions that are Pending and haven't created an order yet.
-    // We consider them abandoned if they are older than 15 mins.
     const fifteenMinsAgo = new Date(Date.now() - 15 * 60 * 1000);
     const abandonedQuery = isTotal
       ? { status: 'Pending', orderCreated: { $ne: true }, createdAt: { $lt: fifteenMinsAgo } }
       : { status: 'Pending', orderCreated: { $ne: true }, createdAt: { $gte: startDate, $lt: fifteenMinsAgo } };
 
-    const abandonedCheckouts = await CheckoutSession.countDocuments(abandonedQuery);
-
-    const recoveredOrders = await CheckoutSession.countDocuments({
-      orderCreated: true,
-      ...dateQuery
-    });
-
-    // 3b. Enhanced Abandoned Checkout logic from Events
-    // Calculate abandoned checkouts based on event sessions (Started but not Completed)
     const eventDateQuery = isTotal ? {} : { timestamp: { $gte: startDate } };
-    const abandonedEventsStats = await Event.aggregate([
-      { $match: { ...eventDateQuery, eventType: { $in: ['checkout_started', 'payment_success'] } } },
-      {
-        $group: {
-          _id: "$sessionId",
-          hasStarted: { $max: { $cond: [{ $eq: ["$eventType", "checkout_started"] }, 1, 0] } },
-          hasCompleted: { $max: { $cond: [{ $eq: ["$eventType", "payment_success"] }, 1, 0] } }
-        }
-      },
-      { $match: { hasStarted: 1, hasCompleted: 0 } },
-      { $count: "abandonedCount" }
-    ]);
-    const abandonedCheckoutsFromEvents = abandonedEventsStats.length > 0 ? abandonedEventsStats[0].abandonedCount : 0;
 
-    // 4. Product metrics
-    const totalProducts = await Product.countDocuments();
+    // Execute all independent queries in parallel for ultra-fast dashboard rendering
+    const [
+      totalUsers,
+      verifiedUsers,
+      pendingKyc,
+      newLeads,
+      totalOrders,
+      periodOrders,
+      pendingOrders,
+      totalRevenueResult,
+      periodRevenueResult,
+      abandonedCheckouts,
+      recoveredOrders,
+      abandonedEventsStats,
+      totalProducts
+    ] = await Promise.all([
+      User.countDocuments({ role: 'user' }),
+      User.countDocuments({ role: 'user', kycStatus: 'verified' }),
+      User.countDocuments({ role: 'user', kycStatus: { $in: ['processing', 'submitted'] }, isProfileComplete: true }),
+      User.countDocuments(leadQuery),
+      Order.countDocuments(),
+      Order.countDocuments(dateQuery),
+      Order.countDocuments({ orderStatus: 'Processing' }),
+      Order.aggregate([
+        { $match: { orderStatus: { $ne: 'Cancelled' } } },
+        { $group: { _id: null, total: { $sum: "$totalAmount" } } }
+      ]),
+      Order.aggregate([
+        { $match: { ...dateQuery, orderStatus: { $ne: 'Cancelled' } } },
+        { $group: { _id: null, total: { $sum: "$totalAmount" } } }
+      ]),
+      CheckoutSession.countDocuments(abandonedQuery),
+      CheckoutSession.countDocuments({ orderCreated: true, ...dateQuery }),
+      Event.aggregate([
+        { $match: { ...eventDateQuery, eventType: { $in: ['checkout_started', 'payment_success'] } } },
+        {
+          $group: {
+            _id: "$sessionId",
+            hasStarted: { $max: { $cond: [{ $eq: ["$eventType", "checkout_started"] }, 1, 0] } },
+            hasCompleted: { $max: { $cond: [{ $eq: ["$eventType", "payment_success"] }, 1, 0] } }
+          }
+        },
+        { $match: { hasStarted: 1, hasCompleted: 0 } },
+        { $count: "abandonedCount" }
+      ]),
+      Product.countDocuments()
+    ]);
+
+    const totalRevenue = totalRevenueResult.length > 0 ? totalRevenueResult[0].total : 0;
+    const periodRevenue = periodRevenueResult.length > 0 ? periodRevenueResult[0].total : 0;
+    const abandonedCheckoutsFromEvents = abandonedEventsStats.length > 0 ? abandonedEventsStats[0].abandonedCount : 0;
 
     // 5. Events - Cached in Redis for Today
     let eventsCount;

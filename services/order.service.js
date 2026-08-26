@@ -5,6 +5,7 @@ const CheckoutSession = require('../models/CheckoutSession');
 const couponService = require('./coupon.service');
 const sheetsService = require('./sheets.service');
 const whatsappService = require('./whatsapp.service');
+const axios = require('axios');
 
 class OrderService {
   async confirmOrder(session, paymentData, overrideAddress = null) {
@@ -17,6 +18,10 @@ class OrderService {
     // Create the Order from session data
     const orderId = 'ORD-' + Date.now().toString().slice(-6) + Math.floor(Math.random() * 1000);
 
+    const isPartial = session.paymentMethod === 'Partial' || (session.advanceAmount > 0 && session.advanceAmount < session.totalAmount);
+    const advanceAmount = isPartial ? session.advanceAmount : session.totalAmount;
+    const remainingAmount = isPartial ? Math.max(0, session.totalAmount - session.advanceAmount) : 0;
+
     const order = await Order.create({
       user: session.user,
       orderId,
@@ -26,11 +31,11 @@ class OrderService {
       couponCode: session.couponCode,
       freeItems: session.freeItems || [],
       shippingAddress: overrideAddress || session.shippingAddress,
-      paymentMethod: session.paymentMethod,
-      paymentStatus: session.paymentMethod === 'Online' ? 'Paid' : 'Partially Paid',
+      paymentMethod: isPartial ? 'Partial' : 'Online',
+      paymentStatus: isPartial ? (remainingAmount === 0 ? 'Paid' : 'Partially Paid') : 'Paid',
       razorpayPaymentId: paymentData.razorpayPaymentId,
-      advanceAmount: session.advanceAmount,
-      remainingAmount: session.remainingAmount
+      advanceAmount: advanceAmount,
+      remainingAmount: remainingAmount
     });
 
     // Mark session as completed
@@ -172,6 +177,52 @@ class OrderService {
     // 5. Generate a unique, readable Order ID (e.g. ORD-123456)
     const orderId = 'ORD-' + Date.now().toString().slice(-6) + Math.floor(Math.random() * 1000);
 
+    let finalPaymentMethod = paymentMethod === 'Partial' || (paymentMethod && paymentMethod.toLowerCase() === 'partial') ? 'Partial' : 'Online';
+    let advanceAmount = Number(paymentData.advanceAmount) || 0;
+    let remainingAmount = Number(paymentData.remainingAmount) || 0;
+    let paymentStatus = 'Pending';
+
+    // Verify payment with Razorpay or determine partial amounts
+    if (paymentData.razorpayPaymentId) {
+      let paidAmount = advanceAmount;
+      const keyId = process.env.RAZORPAY_KEY_ID;
+      const keySecret = process.env.RAZORPAY_KEY_SECRET;
+
+      if (keyId && keySecret && !keySecret.includes('YOUR_RAZORPAY_KEY_SECRET')) {
+        try {
+          const auth = Buffer.from(`${keyId}:${keySecret}`).toString('base64');
+          const rzpPaymentRes = await axios.get(`https://api.razorpay.com/v1/payments/${paymentData.razorpayPaymentId}`, {
+            headers: { 'Authorization': `Basic ${auth}` },
+            timeout: 5000
+          });
+          if (rzpPaymentRes.data && rzpPaymentRes.data.amount) {
+            paidAmount = rzpPaymentRes.data.amount / 100;
+          }
+        } catch (rzpErr) {
+          console.warn('[OrderService] Could not fetch Razorpay payment details, using payload values:', rzpErr.message);
+        }
+      }
+
+      if (paidAmount < finalAmount || finalPaymentMethod === 'Partial') {
+        finalPaymentMethod = 'Partial';
+        advanceAmount = paidAmount > 0 ? paidAmount : (advanceAmount > 0 ? advanceAmount : Math.round(finalAmount * 0.1));
+        remainingAmount = Math.max(0, finalAmount - advanceAmount);
+        paymentStatus = remainingAmount === 0 ? 'Paid' : 'Partially Paid';
+      } else {
+        finalPaymentMethod = 'Online';
+        advanceAmount = finalAmount;
+        remainingAmount = 0;
+        paymentStatus = 'Paid';
+      }
+    } else {
+      if (finalPaymentMethod === 'Partial') {
+        remainingAmount = remainingAmount > 0 ? remainingAmount : Math.max(0, finalAmount - advanceAmount);
+        paymentStatus = 'Pending';
+      } else {
+        paymentStatus = 'Pending';
+      }
+    }
+
     // 6. Create the Order
     const order = await Order.create({
       user: userId,
@@ -192,13 +243,11 @@ class OrderService {
         isFree: true
       })) : []),
       shippingAddress: address,
-      paymentMethod,
-      paymentStatus: paymentMethod === 'Online'
-        ? 'Paid'
-        : (paymentMethod === 'Partial' ? 'Partially Paid' : 'Pending'),
+      paymentMethod: finalPaymentMethod,
+      paymentStatus: paymentStatus,
       razorpayPaymentId: paymentData.razorpayPaymentId || null,
-      advanceAmount: paymentData.advanceAmount || 0,
-      remainingAmount: paymentData.remainingAmount || 0
+      advanceAmount: advanceAmount,
+      remainingAmount: remainingAmount
     });
 
     // 7. Clear the user's cart thoroughly
@@ -405,14 +454,22 @@ class OrderService {
       .sort({ createdAt: -1 });
   }
 
-  async updateOrderStatus(orderId, status, awbNumber = null, courierName = null, trackingUrl = null) {
+  async updateOrderStatus(orderId, status, awbNumber = null, courierName = null, trackingUrl = null, paymentStatus = null) {
     const order = await Order.findById(orderId);
     if (!order) throw new Error('Order not found');
 
-    order.orderStatus = status;
+    if (status) order.orderStatus = status;
     if (awbNumber) order.awbNumber = awbNumber;
     if (courierName) order.courierName = courierName;
     if (trackingUrl) order.trackingUrl = trackingUrl;
+
+    if (paymentStatus) {
+      order.paymentStatus = paymentStatus;
+      if (paymentStatus === 'Paid') {
+        order.advanceAmount = order.totalAmount;
+        order.remainingAmount = 0;
+      }
+    }
 
     if (status === 'Processing') order.processingAt = new Date();
     else if (status === 'Shipped') order.shippedAt = new Date();

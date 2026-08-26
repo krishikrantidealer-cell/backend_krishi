@@ -107,20 +107,7 @@ exports.createOrder = async (req, res, next) => {
 
 exports.getMyOrders = async (req, res, next) => {
   try {
-    let orders = await orderService.getUserOrders(req.user._id);
-
-    // Await active order sync with 2s timeout for instant accurate status delivery
-    if (orders && Array.isArray(orders)) {
-      const activeOrders = orders.filter(o => o.awbNumber && ['Processing', 'Shipped', 'Out for Delivery'].includes(o.orderStatus));
-      if (activeOrders.length > 0) {
-        await Promise.race([
-          Promise.allSettled(activeOrders.map(o => orderService.syncDelhiveryTracking(o._id, req.user._id))),
-          new Promise(resolve => setTimeout(resolve, 2000))
-        ]);
-        orders = await orderService.getUserOrders(req.user._id);
-      }
-    }
-
+    const orders = await orderService.getUserOrders(req.user._id);
     res.json({ success: true, orders });
   } catch (error) {
     console.error('getMyOrders error:', error);
@@ -130,7 +117,13 @@ exports.getMyOrders = async (req, res, next) => {
 
 exports.getOrderDetails = async (req, res, next) => {
   try {
-    await orderService.syncDelhiveryTracking(req.params.id, req.user._id);
+    // Attempt fast non-blocking background sync without delaying screen render
+    try {
+      await Promise.race([
+        orderService.syncDelhiveryTracking(req.params.id, req.user._id),
+        new Promise(resolve => setTimeout(resolve, 800))
+      ]);
+    } catch (_) {}
 
     const order = await orderService.getOrderById(req.user._id, req.params.id);
     res.json({ success: true, order });
@@ -376,11 +369,11 @@ exports.getAllOrders = async (req, res, next) => {
 
 exports.adminUpdateOrderStatus = async (req, res, next) => {
   try {
-    const { status, awbNumber, courierName, trackingUrl } = req.body;
+    const { status, awbNumber, courierName, trackingUrl, paymentStatus } = req.body;
     const { id } = req.params;
 
     const allowedStatuses = ['Processing', 'Shipped', 'Out for Delivery', 'Delivered', 'Cancelled', 'RTO'];
-    if (!allowedStatuses.includes(status)) {
+    if (status && !allowedStatuses.includes(status)) {
       return res.status(400).json({ success: false, message: 'Invalid order status' });
     }
 
@@ -396,7 +389,8 @@ exports.adminUpdateOrderStatus = async (req, res, next) => {
       });
     }
 
-    const order = await orderService.updateOrderStatus(id, status, awbNumber, courierName, trackingUrl);
+    const targetStatus = status || oldOrder.orderStatus;
+    const order = await orderService.updateOrderStatus(id, targetStatus, awbNumber, courierName, trackingUrl, paymentStatus);
 
     // Trigger WhatsApp & Push notifications
     const whatsappAutomationService = require('../services/whatsappAutomation.service');
@@ -587,14 +581,17 @@ exports.razorpayWebhook = async (req, res, next) => {
       if (userIdFromNotes) {
         console.log(`[Razorpay Webhook] No session found, but found userId in notes: ${userIdFromNotes}. Attempting direct cart-to-order recovery.`);
         try {
+          const paymentTypeFromNotes = payment.notes?.paymentType;
+          const isPartialPayment = paymentTypeFromNotes === 'partial' || (payment.amount / 100) < (payment.notes?.cartTotal ? Number(payment.notes.cartTotal) : Infinity);
           await orderService.createOrderFromCart(
             userIdFromNotes,
-            'Online',
+            isPartialPayment ? 'Partial' : 'Online',
             null, // Use default address
             {
               razorpayPaymentId,
               razorpayOrderId,
-              razorpaySignature: 'recovered_from_webhook_notes'
+              razorpaySignature: 'recovered_from_webhook_notes',
+              advanceAmount: payment.amount / 100
             }
           );
           return res.json({ success: true, message: 'Order recovered via userId in notes' });

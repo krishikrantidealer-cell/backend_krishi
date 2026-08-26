@@ -1,12 +1,80 @@
 const WebSocket = require('ws');
 const url = require('url');
 const User = require('../models/User');
+const { redisClient, redisSubscriber } = require('../config/redis');
 
 let wss;
 const clients = new Map(); // userId -> Set of WS connections
+const currentInstanceId = Math.random().toString(36).slice(2) + Date.now().toString(36);
+
+// Helper for local socket delivery
+const localSendToUser = (userId, data) => {
+  if (clients.has(userId)) {
+    const message = typeof data === 'string' ? data : JSON.stringify(data);
+    clients.get(userId).forEach(client => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(message);
+      }
+    });
+    return true;
+  }
+  return false;
+};
+
+const localBroadcastToRoles = (roles, data) => {
+  if (!wss) return;
+  const message = typeof data === 'string' ? data : JSON.stringify(data);
+  wss.clients.forEach(client => {
+    if (client.readyState === WebSocket.OPEN && roles.includes(client.userRole)) {
+      client.send(message);
+    }
+  });
+};
+
+const localSendToAll = (data) => {
+  if (!wss) return;
+  const message = typeof data === 'string' ? data : JSON.stringify(data);
+  wss.clients.forEach(client => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(message);
+    }
+  });
+};
+
+// Listen for messages published from OTHER Cloud Run instances
+const setupRedisSubscription = () => {
+  if (redisSubscriber && typeof redisSubscriber.subscribe === 'function') {
+    try {
+      redisSubscriber.subscribe('ws:events', (rawMessage) => {
+        try {
+          const payload = JSON.parse(rawMessage);
+          // If message was published by this same container instance, ignore (already delivered locally)
+          if (payload.originInstanceId === currentInstanceId) return;
+
+          if (payload.action === 'sendToUser' && payload.target) {
+            localSendToUser(payload.target, payload.data);
+          } else if (payload.action === 'broadcastToRoles' && Array.isArray(payload.target)) {
+            localBroadcastToRoles(payload.target, payload.data);
+          } else if (payload.action === 'sendToAll') {
+            localSendToAll(payload.data);
+          }
+        } catch (parseErr) {
+          console.error('[WS Redis Sub Error]:', parseErr.message);
+        }
+      }).catch(err => {
+        console.warn('[WS Redis Subscription Warning]:', err.message);
+      });
+    } catch (e) {
+      console.warn('[WS Redis Init Warning]:', e.message);
+    }
+  }
+};
 
 const initWebSocket = (server) => {
   wss = new WebSocket.Server({ server });
+
+  // Initialize cross-instance Pub/Sub subscription
+  setupRedisSubscription();
 
   wss.on('connection', async (ws, req) => {
     const parameters = url.parse(req.url, true).query;
@@ -76,7 +144,6 @@ const initWebSocket = (server) => {
         }
 
         if (data.type === 'PRESENCE_UPDATE' && ws.userId) {
-          const { redisClient } = require('../config/redis');
           if (redisClient && redisClient.isOpen) {
             const presenceKey = `presence:${ws.userId}`;
             const payload = data.data || {};
@@ -92,7 +159,7 @@ const initWebSocket = (server) => {
             await redisClient.hSet(presenceKey, presenceData);
             await redisClient.expire(presenceKey, 60);
 
-            // Targeted Broadcast: Only send presence to Admins and Sales agents
+            // Targeted Broadcast: Send presence to Admins and Sales agents across all instances
             broadcastToRoles(['admin', 'sales'], {
               type: 'PRESENCE_UPDATE',
               data: {
@@ -124,43 +191,56 @@ const initWebSocket = (server) => {
     });
   });
 
-  console.log('[WS] WebSocket Server initialized');
+  console.log('[WS] WebSocket Server initialized with Redis Pub/Sub support');
 };
 
 const sendToUser = (userId, data) => {
-  if (clients.has(userId)) {
-    const message = JSON.stringify(data);
-    clients.get(userId).forEach(client => {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(message);
-      }
-    });
-    return true;
+  // 1. Deliver to local sockets on this instance
+  const delivered = localSendToUser(userId, data);
+
+  // 2. Publish to Redis channel so other Cloud Run instances deliver to their connected sockets
+  if (redisClient && redisClient.isOpen) {
+    redisClient.publish('ws:events', JSON.stringify({
+      originInstanceId: currentInstanceId,
+      action: 'sendToUser',
+      target: userId,
+      data
+    })).catch(err => console.error('[WS Pub/Sub Publish Error]:', err.message));
   }
-  return false;
+
+  return delivered;
 };
 
 const sendToAll = (data) => {
-  if (!wss) return;
-  const message = JSON.stringify(data);
-  wss.clients.forEach(client => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(message);
-    }
-  });
+  // 1. Deliver locally
+  localSendToAll(data);
+
+  // 2. Publish to Redis for other instances
+  if (redisClient && redisClient.isOpen) {
+    redisClient.publish('ws:events', JSON.stringify({
+      originInstanceId: currentInstanceId,
+      action: 'sendToAll',
+      data
+    })).catch(err => console.error('[WS Pub/Sub Publish Error]:', err.message));
+  }
 };
 
 /**
- * Broadcast to specific roles only
+ * Broadcast to specific roles only across all Cloud Run containers
  */
 const broadcastToRoles = (roles, data) => {
-  if (!wss) return;
-  const message = JSON.stringify(data);
-  wss.clients.forEach(client => {
-    if (client.readyState === WebSocket.OPEN && roles.includes(client.userRole)) {
-      client.send(message);
-    }
-  });
+  // 1. Deliver locally
+  localBroadcastToRoles(roles, data);
+
+  // 2. Publish to Redis for all other containers
+  if (redisClient && redisClient.isOpen) {
+    redisClient.publish('ws:events', JSON.stringify({
+      originInstanceId: currentInstanceId,
+      action: 'broadcastToRoles',
+      target: roles,
+      data
+    })).catch(err => console.error('[WS Pub/Sub Publish Error]:', err.message));
+  }
 };
 
 module.exports = {

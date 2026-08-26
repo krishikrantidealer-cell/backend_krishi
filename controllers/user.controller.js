@@ -266,10 +266,18 @@ exports.getUserById = async (req, res, next) => {
 
 exports.adminUpdateKycStatus = async (req, res, next) => {
   try {
-    const { status, reason } = req.body;
+    const rawStatus = req.body.status || req.body.kycStatus;
+    const reason = req.body.reason || req.body.rejectionReason || req.body.kycReason || '';
     const { userId } = req.params;
 
-    if (!['verified', 'rejected'].includes(status)) {
+    if (!rawStatus) {
+      return res.status(400).json({ success: false, message: 'Status is required (e.g. verified or rejected)' });
+    }
+
+    const lower = rawStatus.toString().toLowerCase().trim();
+    const status = (lower === 'dealer' || lower === 'verified' || lower === 'approve' || lower === 'approved') ? 'verified' : (lower === 'reject' || lower === 'rejected' ? 'rejected' : lower);
+
+    if (!['verified', 'rejected', 'processing', 'submitted', 'pending'].includes(status)) {
       return res.status(400).json({ success: false, message: 'Invalid status. Must be verified or rejected' });
     }
 
@@ -305,13 +313,12 @@ exports.adminUpdateKycStatus = async (req, res, next) => {
     }
 
     // Audit critical sales/admin action
-    // Wrapped in its own try/catch to ensure audit logging never breaks the main flow
     try {
       auditService.logAction({
         adminId: req.user._id,
         adminEmail: req.user.email,
         action: `KYC_${status.toUpperCase()}`,
-        targetId: user._id, // Use the ID from the fetched user object for reliability
+        targetId: user._id,
         targetModel: 'User',
         changes: {
           before: { kycStatus: oldUser ? oldUser.kycStatus : null, reason: oldUser ? (oldUser.kycReason || oldUser.reason || '') : '' },
