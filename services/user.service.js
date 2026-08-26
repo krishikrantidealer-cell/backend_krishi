@@ -102,6 +102,7 @@ class UserService {
       'gstNumber',
       'farmSize',
       'cropTypes',
+      'preferredLanguage',
       'status',
       'notes',
       'leadStatus',

@@ -94,103 +94,91 @@ class WhatsAppService {
 
   // --- AUTOMATED WORKFLOWS ---
 
+  _getUserLanguage(user) {
+    if (!user) return 'en_US';
+    const lang = (user.preferredLanguage || '').toLowerCase();
+    if (lang === 'hi' || lang === 'hindi') return 'hi';
+    return 'en_US';
+  }
+
   async notifyAbandonedCheckout(user, checkoutSession) {
     if (!user || !user.phoneNumber) return;
-    const firstName = user.firstName || 'Customer';
-    const fullName = `${firstName}${user.lastName ? ' ' + user.lastName : ''}`;
+    const firstName = user.firstName || 'Dealer';
+    const lang = this._getUserLanguage(user);
 
-    // Template: abandoned_checkout_hindi
-    // Variables: {{1}} = Customer Name, {{2}} = Checkout Link
-    return this.sendTemplateMessage(user.phoneNumber, 'abandoned_checkout_hindi', 'hi', [
-      fullName,
-      'https://krishikranti.com/cart' // Link to the cart/checkout
-    ]);
+    return this.sendTemplateMessage(user.phoneNumber, 'kd_checkout_reminder_1', lang, [firstName]);
   }
 
   async notifyAbandonedCart(user) {
     if (!user || !user.phoneNumber) return;
-    const firstName = user.firstName || 'Customer';
-    const fullName = `${firstName}${user.lastName ? ' ' + user.lastName : ''}`;
+    const firstName = user.firstName || 'Dealer';
+    const lang = this._getUserLanguage(user);
 
-    // Template: abandoned_cart_hindi
-    // Variables: {{1}} = Customer Name, {{2}} = Cart Link
-    return this.sendTemplateMessage(user.phoneNumber, 'abandoned_cart_hindi', 'hi', [
-      fullName,
-      'https://krishikranti.com/cart'
-    ]);
+    return this.sendTemplateMessage(user.phoneNumber, 'kd_cart_abandoned', lang, [firstName]);
   }
 
   async notifyOrderSuccessToUser(order, user) {
     if (!user || !user.phoneNumber) return;
-    const firstName = user.firstName || 'Customer';
-    // Template: order_confirmation_hindi (Vars: 1=Name, 2=OrderID, 3=Amount)
-    return this.sendTemplateMessage(user.phoneNumber, 'order_confirmation_hindi', 'hi', [
+    const firstName = user.firstName || 'Dealer';
+    const lang = this._getUserLanguage(user);
+    const orderId = order.orderId || (order._id ? order._id.toString().slice(-6).toUpperCase() : 'KD-ORDER');
+    const amount = String(order.totalAmount || order.payableAmount || 0);
+
+    return this.sendTemplateMessage(user.phoneNumber, 'kd_order_confirmed', lang, [
       firstName,
-      order.orderId,
-      order.totalAmount
+      orderId,
+      amount
     ]);
   }
 
   async notifyOrderStatusUpdate(order) {
-    // This requires a fetch to get user phone if not in order object
     const User = require('../models/User');
     const user = await User.findById(order.user);
     if (!user || !user.phoneNumber) return;
 
-    // Template: order_status_update (Vars: 1=OrderID, 2=Status)
-    return this.sendTemplateMessage(user.phoneNumber, 'order_status_update', 'en_US', [
-      order.orderId,
-      order.orderStatus
-    ]);
+    const firstName = user.firstName || 'Dealer';
+    const lang = this._getUserLanguage(user);
+    const orderId = order.orderId || (order._id ? order._id.toString().slice(-6).toUpperCase() : 'KD-ORDER');
+
+    if (order.orderStatus === 'Shipped') {
+      const courier = order.trackingDetails?.courierName
+        ? `${order.trackingDetails.courierName} (LR: ${order.trackingDetails.trackingNumber || ''})`
+        : (order.trackingUrl || 'in Krishi Kranti App');
+      return this.sendTemplateMessage(user.phoneNumber, 'kd_order_shipped', lang, [firstName, orderId, courier]);
+    } else if (order.orderStatus === 'Delivered') {
+      return this.sendTemplateMessage(user.phoneNumber, 'kd_order_delivered', lang, [firstName, orderId]);
+    }
   }
 
   /**
-   * Admin Notifications (Still uses template, or can use text if session is open)
+   * Admin Notifications
    */
   async notifyNewOrder(order, user) {
     const adminPhone = process.env.WHATSAPP_ADMIN_PHONE;
     if (!adminPhone) return;
 
     const customerName = user ? `${user.firstName || ''} ${user.lastName || ''}`.trim() : 'Unknown';
-
-    // Admin templates usually don't need much personalization or can use a generic alert
-    return this.sendTemplateMessage(adminPhone, 'admin_new_order_alert', 'en_US', [
-      order.orderId,
+    return this.sendTemplateMessage(adminPhone, 'kd_order_confirmed', 'en_US', [
       customerName,
-      order.totalAmount
+      order.orderId || (order._id ? order._id.toString().slice(-6).toUpperCase() : 'KD-ORDER'),
+      String(order.totalAmount || 0)
     ]);
   }
 
   // --- KYC WORKFLOWS ---
 
-  async notifyKycSubmissionToAdmin(user) {
-    const adminPhone = process.env.WHATSAPP_ADMIN_PHONE;
-    if (!adminPhone) return;
-
-    const customerName = (user.firstName || user.lastName)
-      ? `${user.firstName || ''} ${user.lastName || ''}`.trim()
-      : user.shopName || user.phoneNumber;
-
-    // Template: admin_new_kyc_alert (Vars: 1=CustomerName, 2=ShopName)
-    return this.sendTemplateMessage(adminPhone, 'admin_new_kyc_alert', 'en_US', [
-      customerName,
-      user.shopName || 'N/A'
-    ]);
-  }
-
   async notifyKycStatusUpdate(user, status, reason = '') {
     if (!user || !user.phoneNumber) return;
 
-    const firstName = user.firstName || 'Customer';
+    const firstName = user.firstName || 'Dealer';
+    const lang = this._getUserLanguage(user);
 
     if (status === 'verified') {
-      // Template: kyc_verified_hindi (Vars: 1=Name)
-      return this.sendTemplateMessage(user.phoneNumber, 'kyc_verified_hindi', 'hi', [firstName]);
+      return this.sendTemplateMessage(user.phoneNumber, 'kd_kyc_approved', lang, [firstName]);
     } else if (status === 'rejected') {
-      // Template: kyc_rejected_hindi (Vars: 1=Name, 2=Reason)
-      return this.sendTemplateMessage(user.phoneNumber, 'kyc_rejected_hindi', 'hi', [
+      return this.sendTemplateMessage(user.phoneNumber, 'kd_incomplete_kyc', lang, [
         firstName,
-        reason || 'Documents were not clear.'
+        reason || 'Uploaded Documents'
       ]);
     }
   }
