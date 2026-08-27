@@ -357,12 +357,27 @@ exports.adminAssignAgent = async (req, res, next) => {
       : null;
     const { userId } = req.params;
 
-    // Get old user state for audit logging
+    // Get old user state for audit logging & permission check
     let oldUser = null;
     try {
       oldUser = await userService.getProfile(userId);
     } catch (e) {
       console.error('[Audit] Failed to fetch old user profile for assignment diff:', e.message);
+    }
+
+    // Role-based permission enforcement for sales agents
+    if (req.user.role === 'sales') {
+      const isLead = !oldUser || oldUser.kycStatus !== 'verified';
+      const perms = req.user.permissions;
+      const canReassign = isLead
+        ? (perms?.lead?.reassign === true || perms?.leads?.reassign === true)
+        : (perms?.dealer?.reassign === true || perms?.dealers?.reassign === true);
+      if (!canReassign) {
+        return res.status(403).json({
+          success: false,
+          message: `You do not have permission to reassign ${isLead ? "leads" : "dealers"}.`
+        });
+      }
     }
 
     const user = await userService.assignAgent(userId, agentId);
@@ -372,15 +387,18 @@ exports.adminAssignAgent = async (req, res, next) => {
       try {
         const Contact = require('../models/Contact');
         const Conversation = require('../models/Conversation');
-        const cleanPhone = user.phoneNumber.replace(/[^\d]/g, '');
+        let cleanPhone = user.phoneNumber.replace(/[^\d]/g, '');
+        if (cleanPhone.length > 10) {
+          cleanPhone = cleanPhone.slice(-10);
+        }
+        const phoneVariants = [
+          cleanPhone,
+          `91${cleanPhone}`,
+          `+91${cleanPhone}`,
+          `0${cleanPhone}`
+        ];
         const contact = await Contact.findOneAndUpdate(
-          {
-            $or: [
-              { phone: cleanPhone },
-              { phone: `91${cleanPhone}` },
-              { phone: `+91${cleanPhone}` }
-            ]
-          },
+          { phone: { $in: phoneVariants } },
           { assignedTo: agentId },
           { new: true }
         );
