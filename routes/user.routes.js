@@ -160,7 +160,7 @@ router.put('/:userId/restore', authorizeRoles('admin', 'sales'), userController.
 router.delete('/:userId/permanent', authorizeRoles('admin', 'sales'), userController.adminPermanentlyDeleteUser);
 
 // Assign Sales Agent (Admin only)
-router.put('/:userId/assign-agent', authorizeRoles('admin'), userController.adminAssignAgent);
+router.put('/:userId/assign-agent', authorizeRoles('admin', 'sales'), userController.adminAssignAgent);
 
 // Toggle Block User (Admin only)
 router.put('/:userId/block', authorizeRoles('admin'), userController.adminToggleBlockUser);

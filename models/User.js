@@ -218,6 +218,13 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  permissions: {
+    type: mongoose.Schema.Types.Mixed,
+    default: () => ({
+      lead: { create: true, update: true, reassign: false, delete: true },
+      dealer: { create: true, update: true, reassign: false, delete: true }
+    })
+  },
   monthlyTarget: {
     type: Number,
     default: 500000

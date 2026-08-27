@@ -93,6 +93,7 @@ class UserService {
   async updateProfile(userId, updateData) {
     // Only allow specific fields to be updated
     const allowedUpdates = [
+      'permissions',
       'firstName',
       'lastName',
       'profileImage',
@@ -172,6 +173,10 @@ class UserService {
           source: source || 'App',
           deepLinkUrl: deepLinkUrl || null,
           isProfileComplete: true,
+      permissions: permissions || {
+        lead: { create: true, update: true, reassign: false, delete: true },
+        dealer: { create: true, update: true, reassign: false, delete: true }
+      },
           isVerified: true
         }
       },
@@ -370,7 +375,7 @@ class UserService {
   }
 
   async createSalesAgent(agentData) {
-    const { firstName, lastName, email, phoneNumber, password, monthlyTarget } = agentData;
+    const { firstName, lastName, email, phoneNumber, password, monthlyTarget, permissions } = agentData;
 
     if (!firstName || !lastName || !email || !phoneNumber || !password) {
       throw new Error('All fields (first name, last name, email, phone number, password) are required');
@@ -402,7 +407,7 @@ class UserService {
   }
 
   async updateSalesAgent(agentId, updateData) {
-    const { firstName, lastName, email, phoneNumber, password, monthlyTarget } = updateData;
+    const { firstName, lastName, email, phoneNumber, password, monthlyTarget, permissions } = updateData;
 
     const user = await User.findById(agentId);
     if (!user) throw new Error('Sales agent not found');
@@ -425,6 +430,7 @@ class UserService {
     if (firstName) user.firstName = firstName;
     if (lastName) user.lastName = lastName;
     if (monthlyTarget !== undefined) user.monthlyTarget = monthlyTarget;
+    if (permissions !== undefined) user.permissions = permissions;
 
     if (password && password.trim() !== '') {
       const { hashData } = require('../utils/hash');
