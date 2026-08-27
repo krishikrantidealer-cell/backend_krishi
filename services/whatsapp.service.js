@@ -18,7 +18,7 @@ class WhatsAppService {
    * @param {string} languageCode - Default 'en_US'
    * @param {Array} variables - Array of strings to fill {{1}}, {{2}}, etc.
    */
-  async sendTemplateMessage(phoneNumber, templateName, languageCode = 'en_US', variables = []) {
+  async sendTemplateMessage(phoneNumber, templateName, languageCode = 'hi', variables = []) {
     const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
     const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
 
@@ -95,10 +95,10 @@ class WhatsAppService {
   // --- AUTOMATED WORKFLOWS ---
 
   _getUserLanguage(user) {
-    if (!user) return 'en_US';
+    if (!user) return 'hi';
     const lang = (user.preferredLanguage || '').toLowerCase();
     if (lang === 'hi' || lang === 'hindi') return 'hi';
-    return 'en_US';
+    return 'hi';
   }
 
   async notifyAbandonedCheckout(user, checkoutSession) {

@@ -11,14 +11,14 @@ class WhatsAppAutomationService {
    * Default to 'en_US', or 'hi' if user selected Hindi
    */
   getUserLanguage(user) {
-    if (!user) return 'en_US';
+    if (!user) return 'hi';
     const lang = (user.preferredLanguage || '').toLowerCase();
     if (lang === 'hi' || lang === 'hindi') return 'hi';
     if (lang === 'mr') return 'mr';
     if (lang === 'te') return 'te';
     if (lang === 'ta') return 'ta';
     if (lang === 'kn') return 'kn';
-    return 'en_US';
+    return 'hi';
   }
 
   /**
@@ -278,9 +278,11 @@ class WhatsAppAutomationService {
     if (!user || !user.phoneNumber) return;
     const lang = this.getUserLanguage(user);
     const orderId = order.orderId || (order._id ? order._id.toString().slice(-6).toUpperCase() : 'KD-ORDER');
-    const courier = order.trackingDetails?.courierName
-      ? `${order.trackingDetails.courierName} (LR: ${order.trackingDetails.trackingNumber || ''})`
-      : (order.trackingUrl || 'in Krishi Kranti App');
+    const courier = (order.courierName && order.awbNumber)
+      ? `${order.courierName} (AWB: ${order.awbNumber})`
+      : (order.trackingDetails?.courierName
+          ? `${order.trackingDetails.courierName} (AWB: ${order.trackingDetails.trackingNumber || ""})`
+          : (order.trackingUrl || "in Krishi Kranti App"));
 
     return whatsappService.sendTemplateMessage(
       user.phoneNumber,
