@@ -750,6 +750,9 @@ exports.adminCreateOrder = async (req, res, next) => {
     const advance = paymentMethod === 'Partial' ? (advanceAmount || 0) : computed_total;
     const remaining = computed_total - advance;
 
+    // Map FullPayment → Online (same mode, Online is the existing DB enum value)
+    const dbPaymentMethod = paymentMethod === 'FullPayment' ? 'Online' : (paymentMethod || 'Online');
+
     // Look up and snapshot accurate Cost Price (CP) for each item, including custom base packing
     const ProductModel = require('../models/Product');
     const itemsWithCost = await Promise.all(resolvedItems.map(async (i) => {
