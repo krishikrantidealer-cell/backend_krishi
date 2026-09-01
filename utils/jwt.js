@@ -5,7 +5,7 @@ const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'krishi_kranti_refr
 
 const generateAccessToken = (payload) => {
   return jwt.sign(payload, JWT_ACCESS_SECRET, {
-    expiresIn: '15m',
+    expiresIn: '7d',
   });
 };
 

@@ -16,6 +16,12 @@ const sessionSchema = new mongoose.Schema({
     type: String,
     required: true
   },
+  previousRefreshTokenHash: {
+    type: String
+  },
+  lastRotatedAt: {
+    type: Date
+  },
   ipAddress: String,
   userAgent: String,
   lastUsed: {

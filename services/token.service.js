@@ -78,54 +78,50 @@ class TokenService {
     }
 
     const redisKey = `session:${userId}:${deviceId}`;
+    const session = await Session.findOne({ userId, deviceId });
+    if (!session) throw new Error('Session not found');
 
-    // 1. Check Redis first (fast path)
-    let storedHash;
-    try {
-      storedHash = await redisClient.get(redisKey);
-    } catch (redisErr) {
-      console.error('[Redis Error] Failed to get session from Redis, falling back to MongoDB:', redisErr.message);
-    }
+    // 1. Check if matches current stored hash
+    const isCurrentMatch = await compareData(oldRefreshToken, session.refreshTokenHash);
 
-    // 2. Fallback to MongoDB if Redis cache is empty (unlikely but robust)
-    if (!storedHash) {
-      const session = await Session.findOne({ userId, deviceId });
-      if (!session) throw new Error('Session not found');
-      storedHash = session.refreshTokenHash;
-      // Repopulate Redis
-      try {
-        await redisClient.set(redisKey, storedHash, { EX: REFRESH_TOKEN_EXPIRY });
-      } catch (redisErr) {
-        console.error('[Redis Error] Failed to repopulate session in Redis:', redisErr.message);
+    if (!isCurrentMatch) {
+      // 2. Check Grace Period: If refreshed within last 60 seconds and matches previous hash
+      const isWithinGracePeriod = session.lastRotatedAt && 
+        (Date.now() - new Date(session.lastRotatedAt).getTime()) < 60000;
+
+      if (isWithinGracePeriod && session.previousRefreshTokenHash) {
+        const isPreviousMatch = await compareData(oldRefreshToken, session.previousRefreshTokenHash);
+        if (isPreviousMatch) {
+          // Safe concurrent request within grace period: return a new access token without failing
+          const newAccessToken = generateAccessToken({ userId, deviceId });
+          return { accessToken: newAccessToken, refreshToken: oldRefreshToken };
+        }
       }
+
+      // Invalid token outside grace period: Invalidate only this device session
+      await this.deleteSession(userId, deviceId);
+      throw new Error('Invalid or expired refresh token. Please log in again.');
     }
 
-    // 3. Reuse detection
-    const isMatch = await compareData(oldRefreshToken, storedHash);
-    if (!isMatch) {
-      // TOKEN REUSE DETECTED!
-      // Blacklist this token and invalidate all sessions for safety
-      await this.deleteAllSessions(userId);
-      throw new Error('Token reuse detected. All sessions invalidated for security.');
-    }
-
-    // 4. Generate new tokens
+    // 3. Generate new tokens
     const newRefreshToken = generateRefreshToken({ userId, deviceId });
     const newRefreshTokenHash = await hashData(newRefreshToken);
     const newAccessToken = generateAccessToken({ userId, deviceId });
 
-    // 5. Update MongoDB
+    // 4. Update MongoDB with previous hash and lastRotatedAt for grace period
     await Session.findOneAndUpdate(
       { userId, deviceId },
       {
+        previousRefreshTokenHash: session.refreshTokenHash,
         refreshTokenHash: newRefreshTokenHash,
+        lastRotatedAt: new Date(),
         ipAddress,
         userAgent,
         lastUsed: new Date()
       }
     );
 
-    // 6. Update Redis
+    // 5. Update Redis
     try {
       await redisClient.set(redisKey, newRefreshTokenHash, {
         EX: REFRESH_TOKEN_EXPIRY
