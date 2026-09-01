@@ -156,30 +156,30 @@ class UserService {
   }
 
   async completeProfile(userId, profileData) {
-    const { firstName, lastName, addressType, address, source, deepLinkUrl } = profileData;
+    const { firstName, lastName, addressType, address, source, deepLinkUrl, permissions } = profileData;
 
     if (!firstName || !lastName || !addressType || !address) {
       throw new Error('All profile fields are required');
     }
 
+    const updateFields = {
+      firstName,
+      lastName,
+      addressType,
+      address,
+      source: source || 'App',
+      deepLinkUrl: deepLinkUrl || null,
+      isProfileComplete: true,
+      isVerified: true
+    };
+
+    if (permissions) {
+      updateFields.permissions = permissions;
+    }
+
     const user = await User.findByIdAndUpdate(
       userId,
-      {
-        $set: {
-          firstName,
-          lastName,
-          addressType,
-          address,
-          source: source || 'App',
-          deepLinkUrl: deepLinkUrl || null,
-          isProfileComplete: true,
-      permissions: permissions || {
-        lead: { create: true, update: true, reassign: false, delete: true },
-        dealer: { create: true, update: true, reassign: false, delete: true }
-      },
-          isVerified: true
-        }
-      },
+      { $set: updateFields },
       { new: true, runValidators: true }
     );
 
