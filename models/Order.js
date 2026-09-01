@@ -32,6 +32,10 @@ const orderItemSchema = new mongoose.Schema({
     type: Number,
     required: true
   },
+  costPrice: {
+    type: Number,
+    default: 0
+  },
   variant: {
     type: String,
     default: 'Standard'

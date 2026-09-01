@@ -15,6 +15,8 @@ const variantSchema = new mongoose.Schema({
   price: { type: Number, required: true, min: 0 },
   compareAtPrice: { type: Number, min: 0 },
   farmerPrice: { type: Number, min: 0, default: 0 },
+  costPrice: { type: Number, min: 0, default: 0 },
+  costRate: { type: String },
   packVolume: { type: Number, default: 1.0 },
   weight: { type: Number },
   rates: { type: Map, of: String },
@@ -206,9 +208,11 @@ productSchema.pre('save', async function() {
   }
 
   if (this.variants && this.variants.length > 0) {
-    const prices = this.variants.map(v => v.price);
-    this.minPrice = Math.min(...prices);
-    this.maxPrice = Math.max(...prices);
+    const prices = this.variants
+      .map(v => Number(v.price))
+      .filter(p => !isNaN(p) && p > 0);
+    this.minPrice = prices.length > 0 ? Math.min(...prices) : 0;
+    this.maxPrice = prices.length > 0 ? Math.max(...prices) : 0;
   } else {
     this.minPrice = 0;
     this.maxPrice = 0;

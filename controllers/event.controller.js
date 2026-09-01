@@ -1162,6 +1162,20 @@ exports.getDistrictAnalytics = async (req, res, next) => {
 
     const salesData = await getSalesAssignedUserData(req);
 
+    // 0. Check Redis Cache First
+    const agentScope = salesData ? (req.user?._id?.toString() || req.user?.email || 'sales') : 'global';
+    const cacheKey = `stats:district-analytics:${agentScope}:${days}:${reqStart || ''}_${reqEnd || ''}`;
+    if (redisClient && redisClient.isOpen) {
+      try {
+        const cached = await redisClient.get(cacheKey);
+        if (cached) {
+          return res.json(JSON.parse(cached));
+        }
+      } catch (err) {
+        console.error('[DistrictAnalytics] Redis cache read error:', err.message);
+      }
+    }
+
     const orderMatch = {
       orderStatus: { $ne: 'Cancelled' },
       $or: [
@@ -1490,7 +1504,7 @@ exports.getDistrictAnalytics = async (req, res, next) => {
     const masterCollections = Array.from(new Set(Array.from(collectionMap.values())));
     const masterSubCollections = Array.from(new Set(Array.from(subCollectionMap.values())));
 
-    res.json({
+    const responsePayload = {
       success: true,
       data: results,
       masterTaxonomy: {
@@ -1499,7 +1513,17 @@ exports.getDistrictAnalytics = async (req, res, next) => {
         collections: masterCollections,
         subCollections: masterSubCollections
       }
-    });
+    };
+
+    if (redisClient && redisClient.isOpen) {
+      try {
+        await redisClient.set(cacheKey, JSON.stringify(responsePayload), { EX: 300 });
+      } catch (cacheErr) {
+        console.error('[DistrictAnalytics] Redis cache write error:', cacheErr.message);
+      }
+    }
+
+    res.json(responsePayload);
   } catch (error) {
     next(error);
   }

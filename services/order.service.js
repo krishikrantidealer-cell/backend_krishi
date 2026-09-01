@@ -38,6 +38,9 @@ class OrderService {
       remainingAmount: remainingAmount
     });
 
+    // Invalidate analytics caches
+    this._invalidateAnalyticsCache().catch(() => {});
+
     // Mark session as completed
     session.orderCreated = true;
     session.createdOrderId = order._id;
@@ -126,10 +129,17 @@ class OrderService {
       .filter(item => item.product) // Skip items where product was deleted
       .map(item => {
         let variantName = 'Standard';
+        let variantCostPrice = 0;
         if (item.product.variants) {
           const variant = item.product.variants.id(item.variantId);
           if (variant) {
             variantName = variant.size || 'Standard';
+            if ((item.isCustomBasePack || item.packVolume) && variant.costRate) {
+              const rateNum = parseFloat(variant.costRate.replace(/[^0-9.]/g, '')) || 0;
+              variantCostPrice = item.packVolume ? (rateNum * item.packVolume) : (variant.costPrice || 0);
+            } else {
+              variantCostPrice = variant.costPrice || 0;
+            }
           }
         }
         return {
@@ -140,6 +150,7 @@ class OrderService {
           image: item.product.images && item.product.images.length > 0 ? item.product.images[0] : null,
           quantity: item.quantity,
           price: item.price,
+          costPrice: variantCostPrice,
           variant: variantName
         };
       });
@@ -272,6 +283,9 @@ class OrderService {
       console.error('[WhatsApp] Failed to send user notification:', err.message)
     );
 
+    // Invalidate analytics caches
+    this._invalidateAnalyticsCache().catch(() => {});
+
     return order;
   }
 
@@ -350,10 +364,17 @@ class OrderService {
       try {
         const orderItems = cart.items.map(item => {
           let variantName = 'Standard';
+          let variantCostPrice = 0;
           if (item.product && item.product.variants) {
             const variant = item.product.variants.id(item.variantId);
             if (variant) {
               variantName = variant.size || 'Standard';
+              if ((item.isCustomBasePack || item.packVolume) && variant.costRate) {
+                const rateNum = parseFloat(variant.costRate.replace(/[^0-9.]/g, '')) || 0;
+                variantCostPrice = item.packVolume ? (rateNum * item.packVolume) : (variant.costPrice || 0);
+              } else {
+                variantCostPrice = variant.costPrice || 0;
+              }
             }
           }
           return {
@@ -364,6 +385,7 @@ class OrderService {
             image: item.product.images && item.product.images.length > 0 ? item.product.images[0] : null,
             quantity: item.quantity,
             price: item.price,
+            costPrice: variantCostPrice,
             variant: variantName
           };
         });
@@ -611,6 +633,22 @@ class OrderService {
     } catch (err) {
       console.error(`[Delhivery Sync] Failed to sync order ${orderId}:`, err.message);
       return order;
+    }
+  }
+
+  async _invalidateAnalyticsCache() {
+    try {
+      const { redisClient } = require('../config/redis');
+      if (redisClient && redisClient.isOpen) {
+        const districtKeys = await redisClient.keys('stats:district-analytics:*');
+        const metricKeys = await redisClient.keys('stats:events:summary-metrics:*');
+        const allKeys = [...(districtKeys || []), ...(metricKeys || [])];
+        if (allKeys.length > 0) {
+          await redisClient.del(allKeys);
+        }
+      }
+    } catch (err) {
+      console.error('[OrderService] Analytics cache invalidation error:', err.message);
     }
   }
 }

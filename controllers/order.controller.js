@@ -750,13 +750,27 @@ exports.adminCreateOrder = async (req, res, next) => {
     const advance = paymentMethod === 'Partial' ? (advanceAmount || 0) : computed_total;
     const remaining = computed_total - advance;
 
-    // Map FullPayment → Online (same mode, Online is the existing DB enum value)
-    const dbPaymentMethod = paymentMethod === 'FullPayment' ? 'Online' : paymentMethod;
-
-    const order = await Order.create({
-      user: userId,
-      orderId: shortId,
-      items: resolvedItems.map(i => ({
+    // Look up and snapshot accurate Cost Price (CP) for each item, including custom base packing
+    const ProductModel = require('../models/Product');
+    const itemsWithCost = await Promise.all(resolvedItems.map(async (i) => {
+      let cp = Number(i.costPrice) || 0;
+      if (cp <= 0 && i.product) {
+        try {
+          const prod = await ProductModel.findById(i.product).lean();
+          if (prod && prod.variants) {
+            const v = prod.variants.find(v => (v._id && v._id.toString() === (i.variantId || '').toString()) || (v.id && v.id.toString() === (i.variantId || '').toString()));
+            if (v) {
+              if (i.isCustomBasePack && i.packVolume && v.costRate) {
+                const rateNum = parseFloat(v.costRate.replace(/[^0-9.]/g, '')) || 0;
+                cp = rateNum * i.packVolume;
+              } else {
+                cp = Number(v.costPrice) || 0;
+              }
+            }
+          }
+        } catch (_) {}
+      }
+      return {
         product: i.product,
         variantId: i.variantId,
         title: i.title || 'Product',
@@ -765,12 +779,19 @@ exports.adminCreateOrder = async (req, res, next) => {
         image: i.image || undefined,
         quantity: i.quantity,
         price: i.price,
+        costPrice: cp,
         variant: i.variant || 'Standard',
         packVolume: i.packVolume,
         basePackingUnit: i.basePackingUnit,
         basePacking: i.basePacking || (i.packVolume ? `${i.packVolume} ${i.basePackingUnit || ''}`.trim() : undefined),
         isCustomBasePack: !!i.isCustomBasePack,
-      })),
+      };
+    }));
+
+    const order = await Order.create({
+      user: userId,
+      orderId: shortId,
+      items: itemsWithCost,
       totalAmount: computed_total,
       discountAmount: (discountAmount || 0) + salesCouponDiscount,
       couponCode: couponCode || (appliedSalesCoupon ? appliedSalesCoupon.code : undefined),
