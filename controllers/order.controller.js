@@ -352,11 +352,16 @@ exports.getAllOrders = async (req, res, next) => {
       const assignedUserIds = assignedUsers.map(u => u._id.toString());
 
       if (filters.userId) {
-        if (!assignedUserIds.includes(filters.userId.toString())) {
-          console.warn(`[AdminOrder] Sales agent ${req.user._id} attempted to access unauthorized userId: ${filters.userId}`);
-          return res.json({ success: true, orders: [] });
+        const isAssigned = assignedUserIds.includes(filters.userId.toString());
+        if (!isAssigned) {
+          const hasCreatedOrder = await Order.exists({ user: filters.userId, createdBy: req.user._id });
+          if (!hasCreatedOrder) {
+            console.warn(`[AdminOrder] Sales agent ${req.user._id} attempted to access unauthorized userId: ${filters.userId}`);
+            return res.json({ success: true, orders: [] });
+          }
         }
       } else {
+        filters.salesAgentId = req.user._id;
         filters.users = assignedUserIds;
       }
     }
@@ -648,6 +653,22 @@ exports.adminCreateOrder = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'paymentId (transaction reference) is required' });
     }
 
+    // Idempotency: Check if an order with the exact same paymentId was already created recently (within last 60s)
+    const existingPaymentOrder = await Order.findOne({
+      user: userId,
+      razorpayPaymentId: paymentId.trim(),
+      createdAt: { $gte: new Date(Date.now() - 60 * 1000) }
+    }).populate('items.product');
+
+    if (existingPaymentOrder) {
+      console.warn(`[AdminOrder] Duplicate order submission prevented for paymentId: ${paymentId}`);
+      return res.status(200).json({
+        success: true,
+        message: 'Order already created successfully (duplicate submission intercepted)',
+        order: existingPaymentOrder
+      });
+    }
+
     // Auto-assign buyer to sales agent if creator is sales and buyer has no agent
     if (req.user.role === 'sales') {
       const User = require('../models/User');
@@ -791,8 +812,26 @@ exports.adminCreateOrder = async (req, res, next) => {
       };
     }));
 
+    // Rapid-fire Idempotency Check: Prevent duplicate order creation within 5 seconds for the same user & amount
+    const rapidDuplicateOrder = await Order.findOne({
+      user: userId,
+      createdBy: req.user._id,
+      totalAmount: computed_total,
+      createdAt: { $gte: new Date(Date.now() - 5000) }
+    }).populate('items.product');
+
+    if (rapidDuplicateOrder) {
+      console.warn(`[AdminOrder] Rapid duplicate order creation prevented for userId: ${userId}`);
+      return res.status(200).json({
+        success: true,
+        message: 'Order created successfully',
+        order: rapidDuplicateOrder
+      });
+    }
+
     const order = await Order.create({
       user: userId,
+      createdBy: req.user._id,
       orderId: shortId,
       items: itemsWithCost,
       totalAmount: computed_total,

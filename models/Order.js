@@ -73,6 +73,11 @@ const orderSchema = new mongoose.Schema({
     required: true,
     index: true
   },
+  createdBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    index: true
+  },
   orderId: {
     type: String,
     unique: true,

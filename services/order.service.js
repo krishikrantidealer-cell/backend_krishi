@@ -455,9 +455,22 @@ class OrderService {
       } else {
         query.user = targetUser;
       }
+    } else if (filters.salesAgentId) {
+      const mongoose = require('mongoose');
+      const agentObjId = mongoose.Types.ObjectId.isValid(filters.salesAgentId)
+        ? new mongoose.Types.ObjectId(filters.salesAgentId)
+        : filters.salesAgentId;
+      const userObjIds = (filters.users || []).map(id =>
+        mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : id
+      );
+
+      // Sales agent sees orders for assigned dealers OR orders they created directly
+      query.$or = [
+        { user: { $in: userObjIds } },
+        { createdBy: agentObjId }
+      ];
     } else if (filters.users) {
-      // If users array is provided (even if empty), we MUST filter by it.
-      // An empty array means the sales agent has no assigned users, so they should see no orders.
+      // If users array is provided (even if empty), filter strictly by it.
       query.user = { $in: filters.users };
     }
     
@@ -472,6 +485,7 @@ class OrderService {
           select: 'firstName lastName phoneNumber'
         }
       })
+      .populate('createdBy', 'firstName lastName phoneNumber email')
       .populate('items.product')
       .sort({ createdAt: -1 });
   }
