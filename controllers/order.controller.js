@@ -5,12 +5,14 @@ const auditService = require('../services/audit.service');
 
 exports.initializePayment = async (req, res, next) => {
   try {
-    const { paymentMethod, partialPercent, shippingAddress } = req.body;
+    const { paymentMethod, partialPercent, shippingAddress, items, couponCode } = req.body;
     const razorpayOrder = await orderService.initializeRazorpayPayment(
       req.user._id,
       paymentMethod,
       partialPercent,
-      shippingAddress
+      shippingAddress,
+      items,
+      couponCode
     );
 
     res.json({
@@ -31,7 +33,9 @@ exports.createOrder = async (req, res, next) => {
       razorpayOrderId,
       razorpaySignature,
       advanceAmount,
-      remainingAmount
+      remainingAmount,
+      items,
+      couponCode,
     } = req.body;
 
     const order = await orderService.createOrderFromCart(
@@ -43,7 +47,9 @@ exports.createOrder = async (req, res, next) => {
         razorpayOrderId,
         razorpaySignature,
         advanceAmount,
-        remainingAmount
+        remainingAmount,
+        items,
+        couponCode,
       }
     );
 
@@ -596,7 +602,8 @@ exports.razorpayWebhook = async (req, res, next) => {
               razorpayPaymentId,
               razorpayOrderId,
               razorpaySignature: 'recovered_from_webhook_notes',
-              advanceAmount: payment.amount / 100
+              advanceAmount: payment.amount / 100,
+              isWebhook: true
             }
           );
           return res.json({ success: true, message: 'Order recovered via userId in notes' });

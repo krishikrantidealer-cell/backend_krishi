@@ -174,7 +174,7 @@ async function _enrichItemsWithVariantSize(items) {
 
     return items.map(item => {
       const productId = (item.product?._id || item.product)?.toString();
-      const product   = productMap[productId];
+      const product = productMap[productId];
       if (!product) return item;
 
       const variant = (product.variants || []).find(
@@ -183,8 +183,8 @@ async function _enrichItemsWithVariantSize(items) {
 
       return {
         ...(item.toObject ? item.toObject() : { ...item }),
-        variantSize:  variant?.size        || '',
-        basePacking:  variant?.basePacking || '',
+        variantSize: variant?.size || '',
+        basePacking: variant?.basePacking || '',
       };
     });
   } catch (err) {

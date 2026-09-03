@@ -6,5 +6,4 @@ config/gcs-key.json
 .gitignore
 README.md
 render.yaml
-Dockerfile
 .dockerignore

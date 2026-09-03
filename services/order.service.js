@@ -9,8 +9,9 @@ const axios = require('axios');
 
 class OrderService {
   async confirmOrder(session, paymentData, overrideAddress = null) {
-    if (session.orderCreated) {
-      return await Order.findById(session.createdOrderId).populate('items.product');
+    if (session.orderCreated && session.createdOrderId) {
+      const existing = await Order.findById(session.createdOrderId).populate('items.product');
+      if (existing) return existing;
     }
 
     console.log(`[OrderService] Confirming order for Session: ${session.razorpayOrderId}`);
@@ -70,7 +71,16 @@ class OrderService {
   }
 
   async createOrderFromCart(userId, paymentMethod = 'Online', shippingAddress = null, paymentData = {}) {
-    // 0. Check if a CheckoutSession exists for this Razorpay Order (100% Reliability flow)
+    // 0. Idempotency First: Check if an order already exists with this paymentId (Prevents duplicate charges/errors)
+    if (paymentData.razorpayPaymentId) {
+      const existingOrder = await Order.findOne({ razorpayPaymentId: paymentData.razorpayPaymentId });
+      if (existingOrder) {
+        console.log(`[OrderService] Idempotency: Order already exists for paymentId ${paymentData.razorpayPaymentId}: ${existingOrder.orderId}`);
+        return existingOrder;
+      }
+    }
+
+    // 1. Check if a CheckoutSession exists for this Razorpay Order (100% Reliability flow)
     if (paymentData.razorpayOrderId) {
       const session = await CheckoutSession.findOne({ razorpayOrderId: paymentData.razorpayOrderId });
       if (session) {
@@ -88,9 +98,11 @@ class OrderService {
       throw new Error('KYC verification is pending. Please wait for administrator approval to place orders.');
     }
 
-    // 0. Secure Signature Verification (Prevents Fraud)
+    // 2. Secure Signature Verification (Prevents Fraud)
     const keySecret = process.env.RAZORPAY_KEY_SECRET;
+    const isWebhookRecovery = paymentData.isWebhook || paymentData.razorpaySignature === 'recovered_from_webhook_notes';
     if (
+      !isWebhookRecovery &&
       (paymentMethod === 'Online' || paymentMethod === 'Partial') &&
       keySecret &&
       !keySecret.includes('YOUR_RAZORPAY_KEY_SECRET') &&
@@ -98,12 +110,6 @@ class OrderService {
       paymentData.razorpayPaymentId &&
       paymentData.razorpaySignature
     ) {
-      // Check for duplicate order with this paymentId first (Idempotency)
-      const existingOrder = await Order.findOne({ razorpayPaymentId: paymentData.razorpayPaymentId });
-      if (existingOrder) {
-        return existingOrder;
-      }
-
       const crypto = require('crypto');
       const expectedSignature = crypto
         .createHmac('sha256', keySecret)
@@ -114,8 +120,50 @@ class OrderService {
       }
     }
 
-    // 1. Get the user's cart
-    const cart = await Cart.findOne({ user: userId }).populate('items.product');
+    // 3. Get the user's cart
+    let cart = await Cart.findOne({ user: userId }).populate('items.product');
+
+    // Recovery 1: If cart is empty, check for recent uncompleted CheckoutSession for this user
+    if (!cart || cart.items.length === 0) {
+      const recentSession = await CheckoutSession.findOne({
+        user: userId,
+        orderCreated: { $ne: true }
+      }).sort({ createdAt: -1 });
+
+      if (recentSession && recentSession.items && recentSession.items.length > 0) {
+        const sessionAgeMs = Date.now() - new Date(recentSession.createdAt).getTime();
+        // Within 24 hours
+        if (sessionAgeMs < 24 * 60 * 60 * 1000) {
+          console.log(`[OrderService] Recovered order from recent CheckoutSession (${recentSession._id}) for user: ${userId}`);
+          return await this.confirmOrder(recentSession, paymentData, shippingAddress);
+        }
+      }
+    }
+
+    // Recovery 2: If cart is still empty, check if client provided fallback items
+    if ((!cart || cart.items.length === 0) && Array.isArray(paymentData.items) && paymentData.items.length > 0) {
+      console.log(`[OrderService] Reconstructing cart from client fallback items for user: ${userId}`);
+      const Product = require('../models/Product');
+      if (!cart) {
+        cart = new Cart({ user: userId, items: [] });
+      }
+      for (const item of paymentData.items) {
+        const prod = await Product.findById(item.productId);
+        if (prod) {
+          cart.items.push({
+            product: prod._id,
+            variantId: item.variantId,
+            quantity: Number(item.quantity) || 1,
+            price: Number(item.price) || 0
+          });
+        }
+      }
+      if (paymentData.couponCode) {
+        cart.appliedCoupon = paymentData.couponCode;
+      }
+      await cart.save();
+      cart = await Cart.findOne({ user: userId }).populate('items.product');
+    }
 
     if (!cart || cart.items.length === 0) {
       throw new Error('Your cart is empty');
@@ -289,7 +337,7 @@ class OrderService {
     return order;
   }
 
-  async initializeRazorpayPayment(userId, paymentMethod = 'Online', partialPercent = null, shippingAddress = null) {
+  async initializeRazorpayPayment(userId, paymentMethod = 'Online', partialPercent = null, shippingAddress = null, clientItems = null, couponCode = null) {
     const user = await User.findById(userId);
     if (!user) {
       throw new Error('User not found');
@@ -299,10 +347,35 @@ class OrderService {
     }
 
     const Cart = require('../models/Cart');
+    const Product = require('../models/Product');
     const axios = require('axios');
 
     // 1. Get the user's cart
-    const cart = await Cart.findOne({ user: userId }).populate('items.product');
+    let cart = await Cart.findOne({ user: userId }).populate('items.product');
+
+    // If server cart is empty or missing, but client provided items, sync them into the cart
+    if ((!cart || cart.items.length === 0) && Array.isArray(clientItems) && clientItems.length > 0) {
+      console.log(`[OrderService] Server cart empty during initializePayment. Re-populating from client items for user: ${userId}`);
+      if (!cart) {
+        cart = new Cart({ user: userId, items: [] });
+      }
+      for (const item of clientItems) {
+        const prod = await Product.findById(item.productId);
+        if (prod) {
+          cart.items.push({
+            product: prod._id,
+            variantId: item.variantId,
+            quantity: Number(item.quantity) || 1,
+            price: Number(item.price) || 0
+          });
+        }
+      }
+      if (couponCode) {
+        cart.appliedCoupon = couponCode;
+      }
+      await cart.save();
+      cart = await Cart.findOne({ user: userId }).populate('items.product');
+    }
 
     if (!cart || cart.items.length === 0) {
       throw new Error('Your cart is empty');
