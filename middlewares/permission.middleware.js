@@ -4,7 +4,7 @@
  * Admins are automatically granted all permissions.
  *
  * @param {string} module - "lead" or "dealer"
- * @param {string} action - "create", "update", "reassign", "delete"
+ * @param {string} action - "create", "update", "reassign", "delete", "viewUnassigned"
  */
 const checkPermission = (module, action) => {
   return (req, res, next) => {
@@ -27,7 +27,7 @@ const checkPermission = (module, action) => {
       
       // If no custom permissions are set, apply default standard rules
       if (!perms) {
-        if (action === "reassign") {
+        if (action === "reassign" || action === "viewUnassigned" || action === "unassigned") {
           return res.status(403).json({
             success: false,
             message: `You do not have permission to ${action} ${module}s.`
@@ -46,7 +46,7 @@ const checkPermission = (module, action) => {
         }
       } else {
         // Standard defaults if action key missing
-        if (action !== "reassign") {
+        if (action !== "reassign" && action !== "viewUnassigned" && action !== "unassigned") {
           return next();
         }
       }

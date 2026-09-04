@@ -34,17 +34,41 @@ class UserService {
         query.kycStatus = filters.kycStatus;
       }
     }
-    if (filters.assignedAgent) query.assignedAgent = filters.assignedAgent;
+    if (filters.assignedAgent) {
+      query.assignedAgent = filters.assignedAgent;
+    } else if (filters.assignedAgentCondition) {
+      query.assignedAgent = filters.assignedAgentCondition;
+    }
+
+    const andConditions = [];
+    if (filters.salesScopeCondition) {
+      andConditions.push(filters.salesScopeCondition);
+    }
 
     // Support database keyword search
     if (filters.search) {
       const searchRegex = new RegExp(filters.search, 'i');
-      query.$or = [
-        { firstName: searchRegex },
-        { lastName: searchRegex },
-        { email: searchRegex },
-        { phoneNumber: searchRegex }
-      ];
+      const searchOr = {
+        $or: [
+          { firstName: searchRegex },
+          { lastName: searchRegex },
+          { email: searchRegex },
+          { phoneNumber: searchRegex }
+        ]
+      };
+      if (andConditions.length > 0) {
+        andConditions.push(searchOr);
+      } else {
+        query.$or = searchOr.$or;
+      }
+    }
+    
+    if (andConditions.length > 0) {
+      if (query.$or) {
+        andConditions.push({ $or: query.$or });
+        delete query.$or;
+      }
+      query.$and = andConditions;
     }
     
     const page = parseInt(filters.page) || 1;

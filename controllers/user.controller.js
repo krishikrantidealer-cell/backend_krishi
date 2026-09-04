@@ -230,9 +230,35 @@ exports.getAllUsers = async (req, res, next) => {
       limit: req.query.limit
     };
     if (req.user.role === 'sales') {
-      // Only scope to assignedAgent when querying leads/dealers, not when fetching list of sales agents
+      // Only scope when querying leads/dealers, not when fetching list of sales agents
       if (req.query.role !== 'sales') {
-        filters.assignedAgent = req.user._id;
+        const perms = req.user.permissions;
+        const canViewUnassignedLead = perms?.lead?.viewUnassigned === true || perms?.leads?.viewUnassigned === true || perms?.lead?.unassigned === true || perms?.leads?.unassigned === true;
+        const canViewUnassignedDealer = perms?.dealer?.viewUnassigned === true || perms?.dealers?.viewUnassigned === true || perms?.dealer?.unassigned === true || perms?.dealers?.unassigned === true;
+
+        if (canViewUnassignedLead && canViewUnassignedDealer) {
+          // Can see both assigned to them AND unassigned for all leads/dealers
+          filters.assignedAgentCondition = { $in: [req.user._id, null] };
+        } else if (canViewUnassignedLead && !canViewUnassignedDealer) {
+          // Can see unassigned only if it's a lead (kycStatus !== 'verified')
+          filters.salesScopeCondition = {
+            $or: [
+              { assignedAgent: req.user._id },
+              { assignedAgent: null, kycStatus: { $ne: 'verified' } }
+            ]
+          };
+        } else if (!canViewUnassignedLead && canViewUnassignedDealer) {
+          // Can see unassigned only if it's a dealer (kycStatus === 'verified')
+          filters.salesScopeCondition = {
+            $or: [
+              { assignedAgent: req.user._id },
+              { assignedAgent: null, kycStatus: 'verified' }
+            ]
+          };
+        } else {
+          // Default: only their own assigned leads/dealers
+          filters.assignedAgent = req.user._id;
+        }
       }
     }
     const { users, totalCount, hasMore } = await userService.getAllUsers(filters);
@@ -250,9 +276,21 @@ exports.getUserById = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    // Role Security: Sales agents can ONLY view profile details for leads/dealers assigned to them
-    if (req.user.role === 'sales' && user.assignedAgent && String(user.assignedAgent._id || user.assignedAgent) !== String(req.user._id)) {
-      return res.status(403).json({ success: false, message: 'Access Denied: You can only view leads or dealers assigned to you.' });
+    // Role Security: Sales agents can ONLY view profile details for leads/dealers assigned to them, OR unassigned if they hold viewUnassigned permission
+    if (req.user.role === 'sales') {
+      const isAssignedToAgent = user.assignedAgent && String(user.assignedAgent._id || user.assignedAgent) === String(req.user._id);
+      if (!isAssignedToAgent) {
+        const isUnassigned = !user.assignedAgent;
+        const isLead = user.kycStatus !== 'verified';
+        const perms = req.user.permissions;
+        const canViewUnassigned = isLead
+          ? (perms?.lead?.viewUnassigned === true || perms?.leads?.viewUnassigned === true || perms?.lead?.unassigned === true || perms?.leads?.unassigned === true)
+          : (perms?.dealer?.viewUnassigned === true || perms?.dealers?.viewUnassigned === true || perms?.dealer?.unassigned === true || perms?.dealers?.unassigned === true);
+
+        if (!isUnassigned || !canViewUnassigned) {
+          return res.status(403).json({ success: false, message: 'Access Denied: You do not have permission to view this profile.' });
+        }
+      }
     }
 
     res.json({
