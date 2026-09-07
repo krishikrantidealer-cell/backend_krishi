@@ -1036,3 +1036,51 @@ exports.adminUpdateOrderItems = async (req, res, next) => {
   }
 };
 
+exports.adminUpdateCourierCharge = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { courierCharge } = req.body;
+
+    if (courierCharge === undefined || courierCharge === null || isNaN(Number(courierCharge))) {
+      return res.status(400).json({ success: false, message: 'Valid courierCharge is required' });
+    }
+
+    const order = await Order.findByIdAndUpdate(
+      id,
+      { courierCharge: Math.max(0, Number(courierCharge)) },
+      { new: true }
+    ).populate('user').populate('items.product');
+
+    if (!order) {
+      return res.status(404).json({ success: false, message: 'Order not found' });
+    }
+
+    // Audit Log: Courier Charge Updated by Admin
+    auditService.logAction({
+      adminId: req.user._id,
+      adminEmail: req.user.email,
+      action: 'ADMIN_COURIER_CHARGE_UPDATE',
+      targetId: order._id,
+      targetModel: 'Order',
+      changes: { courierCharge: Number(courierCharge) }
+    }, req);
+
+    try {
+      const { broadcastToRoles } = require('../services/websocket.service');
+      broadcastToRoles(['admin', 'sales'], { type: 'ORDERS_UPDATE' });
+    } catch (wsErr) {
+      console.error('[WS] Failed to broadcast ORDERS_UPDATE on courier charge update:', wsErr.message);
+    }
+
+    res.json({
+      success: true,
+      message: 'Courier charge updated successfully',
+      order
+    });
+  } catch (error) {
+    console.error('adminUpdateCourierCharge error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+

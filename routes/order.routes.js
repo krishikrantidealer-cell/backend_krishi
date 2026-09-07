@@ -63,6 +63,9 @@ router.put('/admin/:id/date', authorizeRoles('admin'), orderController.adminUpda
 router.put('/admin/:id/items', authorizeRoles('admin'), orderController.adminUpdateOrderItems);
 router.put('/admin/:id', authorizeRoles('admin'), orderController.adminUpdateOrderItems);
 
+// Update courier / freight charge (Admin only)
+router.put('/admin/:id/courier-charge', authorizeRoles('admin'), orderController.adminUpdateCourierCharge);
+
 // Admin: live sync single order tracking with Delhivery API
 router.post('/admin/:id/sync-delivery', authorizeRoles('admin', 'sales'), orderController.adminSyncDeliveryStatus);
 

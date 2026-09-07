@@ -149,6 +149,10 @@ const orderSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  courierCharge: {
+    type: Number,
+    default: 0
+  },
   source: {
     type: String,
     enum: ['app', 'panel'],
