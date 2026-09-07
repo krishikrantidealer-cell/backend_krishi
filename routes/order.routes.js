@@ -59,6 +59,10 @@ router.put('/admin/:id/status', authorizeRoles('admin'), orderController.adminUp
 // Update order placedAt date (Admin only)
 router.put('/admin/:id/date', authorizeRoles('admin'), orderController.adminUpdateOrderDate);
 
+// Update order items & cost price (Admin only)
+router.put('/admin/:id/items', authorizeRoles('admin'), orderController.adminUpdateOrderItems);
+router.put('/admin/:id', authorizeRoles('admin'), orderController.adminUpdateOrderItems);
+
 // Admin: live sync single order tracking with Delhivery API
 router.post('/admin/:id/sync-delivery', authorizeRoles('admin', 'sales'), orderController.adminSyncDeliveryStatus);
 

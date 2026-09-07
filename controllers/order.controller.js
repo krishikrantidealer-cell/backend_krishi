@@ -966,3 +966,73 @@ exports.adminUpdateOrderDate = async (req, res, next) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+exports.adminUpdateOrderItems = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { items } = req.body;
+
+    if (!items || !Array.isArray(items)) {
+      return res.status(400).json({ success: false, message: 'items array is required' });
+    }
+
+    const order = await Order.findById(id);
+    if (!order) {
+      return res.status(404).json({ success: false, message: 'Order not found' });
+    }
+
+    // Map and update items (preserving fields and updating costPrice)
+    order.items = items.map(item => ({
+      product: item.product,
+      variantId: item.variantId,
+      title: item.title,
+      vendor: item.vendor,
+      technicalName: item.technicalName,
+      image: item.image,
+      quantity: item.quantity,
+      price: item.price,
+      costPrice: Number(item.costPrice) || 0,
+      variant: item.variant || 'Standard',
+      packVolume: item.packVolume,
+      basePackingUnit: item.basePackingUnit,
+      basePacking: item.basePacking,
+      isCustomBasePack: !!item.isCustomBasePack,
+      isCustomPrice: !!item.isCustomPrice,
+      originalPrice: item.originalPrice,
+    }));
+
+    await order.save();
+
+    // Populate user and items.product for returning full object
+    const populatedOrder = await Order.findById(id).populate('user').populate('items.product');
+
+    // Audit Log: Order Items/CP Updated by Admin
+    auditService.logAction({
+      adminId: req.user._id,
+      adminEmail: req.user.email,
+      action: 'ADMIN_ORDER_ITEMS_UPDATE',
+      targetId: order._id,
+      targetModel: 'Order',
+      changes: {
+        itemsCount: items.length
+      }
+    }, req);
+
+    try {
+      const { broadcastToRoles } = require('../services/websocket.service');
+      broadcastToRoles(['admin', 'sales'], { type: 'ORDERS_UPDATE' });
+    } catch (wsErr) {
+      console.error('[WS] Failed to broadcast ORDERS_UPDATE on items update:', wsErr.message);
+    }
+
+    res.json({
+      success: true,
+      message: 'Order items and cost price updated successfully',
+      order: populatedOrder || order
+    });
+  } catch (error) {
+    console.error('adminUpdateOrderItems error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+

@@ -54,6 +54,18 @@ if (process.env.NODE_ENV === 'development') {
   app.use(morgan('dev'));
 }
 
+// Ensure MongoDB readiness before handling API routes
+app.use(async (req, res, next) => {
+  const mongoose = require('mongoose');
+  if (mongoose.connection.readyState !== 1) {
+    try {
+      const connectDB = require('./config/db');
+      await connectDB();
+    } catch (_) {}
+  }
+  next();
+});
+
 app.use('/api', apiLimiter);
 
 app.use('/api/auth', authRoutes);

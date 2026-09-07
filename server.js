@@ -7,7 +7,14 @@ const PORT = process.env.PORT || 8080;
 
 const startServer = async () => {
   try {
-    // 1. Initialize App & Server early to satisfy Cloud Run health checks
+    // 1. Connect to DB first so models and queries are immediately ready
+    try {
+      await connectDB();
+    } catch (dbErr) {
+      console.error('⚠️ Initial MongoDB connection failed:', dbErr.message);
+    }
+
+    // 2. Initialize App & Server
     const app = require('./app');
     const http = require('http');
     const server = http.createServer(app);
@@ -15,17 +22,12 @@ const startServer = async () => {
 
     initWebSocket(server);
 
-    // Listen on PORT immediately so Cloud Run port probe succeeds instantly
+    // Listen on PORT
     server.listen(PORT, () => {
       console.log(`Server running in ${process.env.NODE_ENV || 'production'} mode on port ${PORT}`);
 
-      // 2. Connect to DB and run background tasks AFTER server starts listening
+      // 3. Run background tasks & migrations AFTER server starts listening
       (async () => {
-        try {
-          await connectDB();
-        } catch (dbErr) {
-          console.error('⚠️ MongoDB connection failed:', dbErr.message);
-        }
 
         try {
           await connectRedis();
