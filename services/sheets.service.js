@@ -16,7 +16,7 @@ function _getCustomTabName() {
   return process.env.GOOGLE_SHEETS_TAB_NAME || 'Form Responses 1';
 }
 
-// Standard 27 Column Headers schema
+// Standard Column Headers schema (Includes Cost Price, Courier Charges, Profit, and Profit Margin)
 const DEFAULT_HEADERS = [
   'Timestamp',
   'Email Address',
@@ -45,6 +45,8 @@ const DEFAULT_HEADERS = [
   'Cost Price',
   'Courier Charges',
   'RTO Charges',
+  'Profit',
+  'Profit Margin',
 ];
 
 // ─── AUTHENTICATION & CLIENT ──────────────────────────────────────────────────
@@ -92,6 +94,8 @@ function _colIndexToLetter(index) {
 
 /**
  * Retrieves the spreadsheet metadata and active tab headers with caching.
+ * If new standard columns (like Profit / Profit Margin) are missing from row 1,
+ * it automatically appends them to the right.
  */
 async function _ensureSheetAndGetInfo(sheets, forceRefresh = false) {
   const now = Date.now();
@@ -139,6 +143,35 @@ async function _ensureSheetAndGetInfo(sheets, forceRefresh = false) {
       requestBody: { values: [DEFAULT_HEADERS] },
     });
     existingHeaders = DEFAULT_HEADERS;
+  } else {
+    // Check if Profit & Profit Margin headers need to be appended
+    const hasProfit = existingHeaders.some(h => {
+      const str = (h || '').toString().trim().toLowerCase();
+      return str === 'profit' || str.includes('net profit') || str.includes('gross profit');
+    });
+    const hasMargin = existingHeaders.some(h => (h || '').toString().trim().toLowerCase().includes('margin'));
+
+    const missingHeaders = [];
+    if (!hasProfit) missingHeaders.push('Profit');
+    if (!hasMargin) missingHeaders.push('Profit Margin');
+
+    if (missingHeaders.length > 0) {
+      const startColIndex = existingHeaders.length;
+      const startColLetter = _colIndexToLetter(startColIndex);
+      const endColLetter = _colIndexToLetter(startColIndex + missingHeaders.length - 1);
+      try {
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: sheetIdToUse,
+          range: `'${sheetTitle}'!${startColLetter}1:${endColLetter}1`,
+          valueInputOption: 'USER_ENTERED',
+          requestBody: { values: [missingHeaders] },
+        });
+        existingHeaders = [...existingHeaders, ...missingHeaders];
+        console.log(`[Sheets] ✅ Appended missing headers [${missingHeaders.join(', ')}] at ${startColLetter}1:${endColLetter}1`);
+      } catch (hdrErr) {
+        console.warn('[Sheets] Could not append missing headers:', hdrErr.message);
+      }
+    }
   }
 
   _cachedSheetInfo = { sheetTitle, sheetId, headers: existingHeaders };
@@ -345,7 +378,7 @@ function _buildRowForHeaders(headers, order, user, existingRow = null) {
       return existingVal || '';
     }
 
-    if (h === 'profit' || h.includes('net profit') || h.includes('gross profit')) {
+    if (h.includes('profit')) {
       const activeCp = computedCostPrice > 0 ? computedCostPrice : (Number(existingRow?.[headers.findIndex(hdr => /cost\s*price/i.test(hdr))]) || 0);
       const activeCourier = courierCharges > 0 ? courierCharges : (Number(existingRow?.[headers.findIndex(hdr => /courier\s*charge/i.test(hdr))]) || 0);
       if (totalAmount > 0 && activeCp > 0) {
