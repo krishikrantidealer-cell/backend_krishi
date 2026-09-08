@@ -1,26 +1,22 @@
 const { google } = require('googleapis');
 const User = require('../models/User');
 const Product = require('../models/Product');
-const path = require('path');
-const fs = require('fs');
-
 const { getServiceAccountCredentials } = require('../config/serviceAccountCredentials');
 
-// ─── CONFIG ──────────────────────────────────────────────────────────────────
+// ─── CONFIGURATION ───────────────────────────────────────────────────────────
 function _getSheetId() {
   const envId = (process.env.GOOGLE_SHEETS_ID || '').trim();
-  // Protect against stale/invalid sheet ID that lacks permissions
-  if (!envId || envId === '1Lvlb9TOn6bUjxENfHisCpkhOEhernUktU7H6fxFwUjU') {
-    return '19F0kkAqlhgRGyCIzTFu3Inppc6wighXStMZA5yCMu5E';
+  if (envId && envId !== '1Lvlb9TOn6bUjxENfHisCpkhOEhernUktU7H6fxFwUjU') {
+    return envId;
   }
-  return envId;
+  return '19F0kkAqlhgRGyCIzTFu3Inppc6wighXStMZA5yCMu5E';
 }
 
 function _getCustomTabName() {
   return process.env.GOOGLE_SHEETS_TAB_NAME || 'Form Responses 1';
 }
 
-// Target 27 Column Headers schema
+// Standard 27 Column Headers schema
 const DEFAULT_HEADERS = [
   'Timestamp',
   'Email Address',
@@ -51,7 +47,7 @@ const DEFAULT_HEADERS = [
   'RTO Charges',
 ];
 
-// ─── AUTH ─────────────────────────────────────────────────────────────────────
+// ─── AUTHENTICATION & CLIENT ──────────────────────────────────────────────────
 let _sheetsClient = null;
 
 function _getClient() {
@@ -70,6 +66,15 @@ function _getClient() {
   return _sheetsClient;
 }
 
+// ─── IN-MEMORY CACHES ────────────────────────────────────────────────────────
+let _cachedSheetInfo = null;
+let _cachedSheetInfoTime = 0;
+const SHEET_INFO_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+// Map: lowercase orderId -> { rowNumber: number, timestamp: number }
+const _orderRowCache = new Map();
+const ROW_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 
 /**
@@ -86,10 +91,14 @@ function _colIndexToLetter(index) {
 }
 
 /**
- * Retrieves the spreadsheet metadata and the active tab name + headers.
- * NEVER clears or overwrites existing data or headers.
+ * Retrieves the spreadsheet metadata and active tab headers with caching.
  */
-async function _ensureSheetAndGetInfo(sheets) {
+async function _ensureSheetAndGetInfo(sheets, forceRefresh = false) {
+  const now = Date.now();
+  if (!forceRefresh && _cachedSheetInfo && (now - _cachedSheetInfoTime < SHEET_INFO_TTL_MS)) {
+    return _cachedSheetInfo;
+  }
+
   const sheetIdToUse = _getSheetId();
   const spreadsheet = await sheets.spreadsheets.get({
     spreadsheetId: sheetIdToUse,
@@ -100,7 +109,6 @@ async function _ensureSheetAndGetInfo(sheets) {
     throw new Error('No sheets found in spreadsheet');
   }
 
-  // Find target sheet tab or default to first tab
   let targetSheet = null;
   const customTab = _getCustomTabName();
   if (customTab) {
@@ -133,7 +141,9 @@ async function _ensureSheetAndGetInfo(sheets) {
     existingHeaders = DEFAULT_HEADERS;
   }
 
-  return { sheetTitle, sheetId, headers: existingHeaders };
+  _cachedSheetInfo = { sheetTitle, sheetId, headers: existingHeaders };
+  _cachedSheetInfoTime = now;
+  return _cachedSheetInfo;
 }
 
 /**
@@ -183,8 +193,8 @@ async function _enrichItemsWithVariantSize(items) {
 
       return {
         ...(item.toObject ? item.toObject() : { ...item }),
-        variantSize: variant?.size || '',
-        basePacking: variant?.basePacking || '',
+        variantSize: variant?.size || item.variant || '',
+        basePacking: variant?.basePacking || item.basePacking || '',
       };
     });
   } catch (err) {
@@ -195,8 +205,10 @@ async function _enrichItemsWithVariantSize(items) {
 
 /**
  * Dynamically builds a row matching the exact header order of the target sheet.
+ * PRESERVES existing manual entries (like Cost Price, RTO charges, custom comments)
+ * when updating an existing row.
  */
-function _buildRowForHeaders(headers, order, user) {
+function _buildRowForHeaders(headers, order, user, existingRow = null) {
   const firstName = user ? (user.firstName || '') : '';
   const lastName = user ? (user.lastName || '') : '';
   const customerName = `${firstName} ${lastName}`.trim() || user?.shopName || 'Customer';
@@ -224,8 +236,10 @@ function _buildRowForHeaders(headers, order, user) {
   const freeItems = order.freeItems || [];
 
   const itemsSummaryList = items.map(i => {
-    const packSize = i.variantSize || i.basePacking || '';
-    return packSize ? `${i.title} (${packSize}) - Qty: ${i.quantity}` : `${i.title} - Qty: ${i.quantity}`;
+    const packSize = i.variantSize || i.basePacking || i.variant || '';
+    return packSize && packSize !== 'Standard'
+      ? `${i.title} (${packSize}) - Qty: ${i.quantity}`
+      : `${i.title} - Qty: ${i.quantity}`;
   });
 
   for (const fItem of freeItems) {
@@ -238,8 +252,8 @@ function _buildRowForHeaders(headers, order, user) {
     ? new Date(order.placedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
     : new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
 
-  const totalAmount = order.totalAmount || 0;
-  const bookingAmount = order.advanceAmount || 0;
+  const totalAmount = order.totalAmount ?? 0;
+  const bookingAmount = order.advanceAmount ?? 0;
   const remainingAmount = order.remainingAmount ?? (order.paymentMethod === 'Online' ? 0 : totalAmount);
   const paymentMode = order.paymentMethod || 'COD';
   const razorpayId = order.razorpayPaymentId || '';
@@ -249,7 +263,7 @@ function _buildRowForHeaders(headers, order, user) {
   const trackingId = order.awbNumber || '';
   const trackingLink = order.trackingUrl || (trackingId ? `https://www.delhivery.com/track/package/${trackingId}` : '');
 
-  // Check if dealer is panel-created / tagged as panel
+  // Dealer tag
   const isPanelDealer = Boolean(
     user?.isPanelCreated === true ||
     (typeof user?.source === 'string' && user.source.toLowerCase().includes('panel')) ||
@@ -266,11 +280,25 @@ function _buildRowForHeaders(headers, order, user) {
 
   const language = user?.preferredLanguage || 'Hindi';
   const trigger = order.orderStatus || 'Processing';
-  const courierCharges = order.shippingCharges || 0;
+  const courierCharges = order.shippingCharges ?? order.courierCharge ?? 0;
+
+  // Calculate snapshot cost price if present in order items
+  const computedCostPrice = items.reduce((sum, item) => {
+    const cp = Number(item.costPrice) || 0;
+    const qty = Number(item.quantity) || 1;
+    return sum + (cp * qty);
+  }, 0);
 
   // Build row strictly matching each header in the target sheet
   return headers.map((rawHeader, idx) => {
     const h = (rawHeader || '').toString().trim().toLowerCase();
+    const existingVal = (existingRow && existingRow[idx] !== undefined) ? existingRow[idx] : '';
+    const isFormula = typeof existingVal === 'string' && existingVal.startsWith('=');
+
+    // Always preserve formulas written directly in the sheet
+    if (isFormula) {
+      return existingVal;
+    }
 
     if (h.includes('timestamp') || h.includes('placed at') || h === 'date') return timestamp;
     if (h.includes('ebs sales') || h.includes('sales agent') || h.includes('sales person')) return agentName;
@@ -289,33 +317,74 @@ function _buildRowForHeaders(headers, order, user) {
     if (h.includes('preferred courier') || h.includes('courier partner')) return courier;
     if (h.includes('payment details') || h.includes('transaction id') || h.includes('razorpay')) return razorpayId;
     if (h.includes('order id')) return order.orderId || '';
-    if (h.includes('tracking id') || h.includes('awb')) return trackingId;
-    if (h.includes('courier name')) return courier;
-    if (h.includes('tracking link') || h.includes('tracking url')) return trackingLink;
+    if (h.includes('tracking id') || h.includes('awb')) return trackingId || existingVal;
+    if (h.includes('courier name')) return courier || existingVal;
+    if (h.includes('tracking link') || h.includes('tracking url')) return trackingLink || existingVal;
     if (h.includes('language')) return language;
     if (h.includes('trigger') || h.includes('order status') || h === 'status') return trigger;
-    if (h.includes('cost price')) return '';
-    if (h.includes('courier charges') || h.includes('shipping')) return courierCharges;
-    if (h.includes('rto charges')) return '';
+
+    // Cost Price: use computed if > 0, otherwise preserve manual input from existing row
+    if (h.includes('cost price') || h === 'cp') {
+      return computedCostPrice > 0 ? computedCostPrice : (existingVal || '');
+    }
+
+    // Courier Charges: use order courier charge if set, otherwise preserve manual input
+    if (h.includes('courier charges') || h.includes('courier charge') || h.includes('shipping')) {
+      return courierCharges > 0 ? courierCharges : (existingVal !== '' ? existingVal : 0);
+    }
+
+    // Profit: if total and cost price are available, calculate Net Profit: Total - CP - Courier
+    if (h.includes('profit margin') || h.includes('margin %') || h.includes('margin')) {
+      const activeCp = computedCostPrice > 0 ? computedCostPrice : (Number(existingRow?.[headers.findIndex(hdr => /cost\s*price/i.test(hdr))]) || 0);
+      const activeCourier = courierCharges > 0 ? courierCharges : (Number(existingRow?.[headers.findIndex(hdr => /courier\s*charge/i.test(hdr))]) || 0);
+      if (totalAmount > 0 && activeCp > 0) {
+        const netProfit = totalAmount - activeCp - activeCourier;
+        const marginPct = ((netProfit / totalAmount) * 100).toFixed(2);
+        return `${marginPct}%`;
+      }
+      return existingVal || '';
+    }
+
+    if (h === 'profit' || h.includes('net profit') || h.includes('gross profit')) {
+      const activeCp = computedCostPrice > 0 ? computedCostPrice : (Number(existingRow?.[headers.findIndex(hdr => /cost\s*price/i.test(hdr))]) || 0);
+      const activeCourier = courierCharges > 0 ? courierCharges : (Number(existingRow?.[headers.findIndex(hdr => /courier\s*charge/i.test(hdr))]) || 0);
+      if (totalAmount > 0 && activeCp > 0) {
+        return Math.round((totalAmount - activeCp - activeCourier) * 100) / 100;
+      }
+      return existingVal || '';
+    }
+
+    // RTO Charges / Manual fields: preserve existing manual entry if present
+    if (h.includes('rto charges') || h.includes('rto charge')) {
+      return existingVal || '';
+    }
+
     if (h.includes('email')) return email;
     if (h.includes('last synced')) return new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
 
-    // Fallback: match by DEFAULT_HEADERS position if header text is identical or position matches
-    return '';
+    // Fallback for custom staff columns: PRESERVE existing value
+    return existingVal || '';
   });
 }
 
 /**
  * Finds the row number (1-indexed) for a given Order ID in the sheet.
- * Dynamically finds which column holds 'Order ID' before scanning.
+ * Uses cached row number if available.
  */
 async function _findRowByOrderId(sheets, sheetTitle, headers, orderId) {
   if (!orderId) return null;
+  const targetId = orderId.toString().trim().toLowerCase();
+
+  // Check cache first
+  const cached = _orderRowCache.get(targetId);
+  if (cached && (Date.now() - cached.timestamp < ROW_CACHE_TTL_MS)) {
+    return cached.rowNumber;
+  }
 
   // Determine column index for 'Order ID'
   let orderIdColIndex = headers.findIndex(h => /order\s*id/i.test(h));
   if (orderIdColIndex === -1) {
-    orderIdColIndex = 0; // Default fallback to first column
+    orderIdColIndex = 0;
   }
 
   const colLetter = _colIndexToLetter(orderIdColIndex);
@@ -327,112 +396,192 @@ async function _findRowByOrderId(sheets, sheetTitle, headers, orderId) {
   });
 
   const rows = res.data.values || [];
-  const targetId = orderId.toString().trim().toLowerCase();
-
   for (let i = 0; i < rows.length; i++) {
     const val = rows[i] && rows[i][0] ? rows[i][0].toString().trim().toLowerCase() : '';
-    if (val === targetId) {
-      return i + 1; // 1-indexed row number
+    if (val) {
+      _orderRowCache.set(val, { rowNumber: i + 1, timestamp: Date.now() });
+      if (val === targetId) {
+        return i + 1;
+      }
     }
   }
   return null;
 }
 
-// ─── PUBLIC API ───────────────────────────────────────────────────────────────
+// ─── RATE-LIMITED TASK QUEUE WITH EXPONENTIAL RETRIES ──────────────────────────
+const _syncQueue = [];
+let _isProcessingQueue = false;
+const RATE_LIMIT_DELAY_MS = 600; // ~100 requests per minute max limit buffer
 
-/**
- * Called when a new order is placed.
- * Safely appends a new row to the sheet without altering existing rows.
- */
-exports.appendOrder = async (order) => {
+async function _enqueueTask(taskFn, taskName = 'SheetsTask') {
+  return new Promise((resolve, reject) => {
+    _syncQueue.push({ taskFn, taskName, resolve, reject, retries: 0 });
+    _processQueue();
+  });
+}
+
+async function _processQueue() {
+  if (_isProcessingQueue || _syncQueue.length === 0) return;
+  _isProcessingQueue = true;
+
+  while (_syncQueue.length > 0) {
+    const item = _syncQueue.shift();
+    try {
+      const result = await item.taskFn();
+      item.resolve(result);
+    } catch (err) {
+      const isRateLimit = err.status === 429 || (err.message && err.message.includes('429'));
+      const isTransient = isRateLimit || err.code === 'ECONNRESET' || err.code === 'ETIMEDOUT';
+
+      if (isTransient && item.retries < 3) {
+        item.retries += 1;
+        const delay = isRateLimit ? 5000 * item.retries : 2000 * item.retries;
+        console.warn(`[SheetsQueue] ⚠️ Retrying ${item.taskName} (attempt ${item.retries}) after ${delay}ms: ${err.message}`);
+        await new Promise(r => setTimeout(r, delay));
+        _syncQueue.unshift(item); // Reinsert at front of queue
+      } else {
+        console.error(`[SheetsQueue] ❌ Failed ${item.taskName} permanently:`, err.message);
+        item.reject(err);
+      }
+    }
+
+    // Rate-limit throttle between requests
+    await new Promise(r => setTimeout(r, RATE_LIMIT_DELAY_MS));
+  }
+
+  _isProcessingQueue = false;
+}
+
+// ─── CORE OPERATIONS (WRAPPED IN QUEUE) ────────────────────────────────────────
+
+async function _performAppendOrder(order) {
   const sheetIdToUse = _getSheetId();
   if (!sheetIdToUse) {
     console.warn('[Sheets] GOOGLE_SHEETS_ID not set — skipping append.');
     return;
   }
 
-  try {
-    const sheets = _getClient();
-    const { sheetTitle, headers } = await _ensureSheetAndGetInfo(sheets);
+  const sheets = _getClient();
+  const { sheetTitle, headers } = await _ensureSheetAndGetInfo(sheets);
 
-    const user = await _fetchUser(order);
-    const enrichedItems = await _enrichItemsWithVariantSize(order.items || []);
-    const row = _buildRowForHeaders(
-      headers,
-      { ...(order.toObject ? order.toObject() : order), items: enrichedItems },
-      user
-    );
+  const user = await _fetchUser(order);
+  const enrichedItems = await _enrichItemsWithVariantSize(order.items || []);
+  const row = _buildRowForHeaders(
+    headers,
+    { ...(order.toObject ? order.toObject() : order), items: enrichedItems },
+    user
+  );
 
-    await sheets.spreadsheets.values.append({
-      spreadsheetId: sheetIdToUse,
-      range: `'${sheetTitle}'!A1`,
-      valueInputOption: 'USER_ENTERED',
-      insertDataOption: 'INSERT_ROWS',
-      requestBody: { values: [row] },
-    });
+  const appendRes = await sheets.spreadsheets.values.append({
+    spreadsheetId: sheetIdToUse,
+    range: `'${sheetTitle}'!A1`,
+    valueInputOption: 'USER_ENTERED',
+    insertDataOption: 'INSERT_ROWS',
+    requestBody: { values: [row] },
+  });
 
-    console.log(`[Sheets] ✅ Order ${order.orderId} appended to sheet tab "${sheetTitle}".`);
-  } catch (err) {
-    // Never throw — sheets failure must never block order placement
-    console.error(`[Sheets] ❌ Failed to append order ${order.orderId}:`, err.message);
+  // Extract newly appended row number from updatedRange if available
+  const updatedRange = appendRes.data?.updates?.updatedRange || '';
+  const match = updatedRange.match(/!A(\d+):/i);
+  if (match && match[1] && order.orderId) {
+    const rowNum = parseInt(match[1], 10);
+    _orderRowCache.set(order.orderId.toString().trim().toLowerCase(), { rowNumber: rowNum, timestamp: Date.now() });
   }
-};
 
-/**
- * Called when an order status or details are updated.
- * Finds the existing row by Order ID and updates that row in-place.
- * If not found, appends it as a new row (never alters other rows).
- */
-exports.updateOrderRow = async (order) => {
+  console.log(`[Sheets] ✅ Order ${order.orderId} appended to sheet tab "${sheetTitle}".`);
+}
+
+async function _performUpdateOrderRow(order) {
   const sheetIdToUse = _getSheetId();
   if (!sheetIdToUse) {
     console.warn('[Sheets] GOOGLE_SHEETS_ID not set — skipping update.');
     return;
   }
 
-  try {
-    const sheets = _getClient();
-    const { sheetTitle, headers } = await _ensureSheetAndGetInfo(sheets);
+  const sheets = _getClient();
+  const { sheetTitle, headers } = await _ensureSheetAndGetInfo(sheets);
 
-    const user = await _fetchUser(order);
-    const enrichedItems = await _enrichItemsWithVariantSize(order.items || []);
-    const row = _buildRowForHeaders(
-      headers,
-      { ...(order.toObject ? order.toObject() : order), items: enrichedItems },
-      user
-    );
+  const rowNumber = await _findRowByOrderId(sheets, sheetTitle, headers, order.orderId);
 
-    const rowNumber = await _findRowByOrderId(sheets, sheetTitle, headers, order.orderId);
+  // Fetch existing row values to preserve manual data columns
+  let existingRow = null;
+  const endColLetter = _colIndexToLetter(Math.max(headers.length - 1, DEFAULT_HEADERS.length - 1));
 
-    if (rowNumber) {
-      const endColLetter = _colIndexToLetter(Math.max(headers.length - 1, row.length - 1));
-      await sheets.spreadsheets.values.update({
+  if (rowNumber) {
+    try {
+      const existingRes = await sheets.spreadsheets.values.get({
         spreadsheetId: sheetIdToUse,
         range: `'${sheetTitle}'!A${rowNumber}:${endColLetter}${rowNumber}`,
-        valueInputOption: 'USER_ENTERED',
-        requestBody: { values: [row] },
       });
-      console.log(`[Sheets] ✅ Order ${order.orderId} updated at row ${rowNumber} in "${sheetTitle}".`);
-    } else {
-      // Row not found — append to the end safely
-      await sheets.spreadsheets.values.append({
-        spreadsheetId: sheetIdToUse,
-        range: `'${sheetTitle}'!A1`,
-        valueInputOption: 'USER_ENTERED',
-        insertDataOption: 'INSERT_ROWS',
-        requestBody: { values: [row] },
-      });
-      console.log(`[Sheets] ✅ Order ${order.orderId} not found in "${sheetTitle}" — appended as new row.`);
+      existingRow = (existingRes.data.values && existingRes.data.values[0]) || null;
+    } catch (e) {
+      console.warn(`[Sheets] Could not fetch existing row ${rowNumber} values:`, e.message);
     }
-  } catch (err) {
-    console.error(`[Sheets] ❌ Failed to update order ${order.orderId}:`, err.message);
   }
+
+  const user = await _fetchUser(order);
+  const enrichedItems = await _enrichItemsWithVariantSize(order.items || []);
+  const row = _buildRowForHeaders(
+    headers,
+    { ...(order.toObject ? order.toObject() : order), items: enrichedItems },
+    user,
+    existingRow
+  );
+
+  if (rowNumber) {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: sheetIdToUse,
+      range: `'${sheetTitle}'!A${rowNumber}:${endColLetter}${rowNumber}`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: { values: [row] },
+    });
+    console.log(`[Sheets] ✅ Order ${order.orderId} updated at row ${rowNumber} in "${sheetTitle}" (manual columns preserved).`);
+  } else {
+    // Row not found — append to the end safely
+    const appendRes = await sheets.spreadsheets.values.append({
+      spreadsheetId: sheetIdToUse,
+      range: `'${sheetTitle}'!A1`,
+      valueInputOption: 'USER_ENTERED',
+      insertDataOption: 'INSERT_ROWS',
+      requestBody: { values: [row] },
+    });
+    const updatedRange = appendRes.data?.updates?.updatedRange || '';
+    const match = updatedRange.match(/!A(\d+):/i);
+    if (match && match[1] && order.orderId) {
+      const rowNum = parseInt(match[1], 10);
+      _orderRowCache.set(order.orderId.toString().trim().toLowerCase(), { rowNumber: rowNum, timestamp: Date.now() });
+    }
+    console.log(`[Sheets] ✅ Order ${order.orderId} not found in "${sheetTitle}" — appended as new row.`);
+  }
+}
+
+// ─── PUBLIC API ───────────────────────────────────────────────────────────────
+
+/**
+ * Called when a new order is placed.
+ * Appends a new row via the rate-limited, retrying queue.
+ */
+exports.appendOrder = async (order) => {
+  return _enqueueTask(() => _performAppendOrder(order), `appendOrder(${order?.orderId})`)
+    .catch(err => {
+      console.error(`[Sheets] ❌ Append order error handled:`, err.message);
+    });
 };
 
 /**
- * Syncs orders from database to Google Sheets non-destructively.
- * Updates matching order rows in place, or appends new orders to the bottom using batchUpdate to prevent quota exhaustion.
- * NEVER clears or deletes existing rows.
+ * Called when an order status or details are updated.
+ * Finds existing row, preserves manual data, and updates in-place via queue.
+ */
+exports.updateOrderRow = async (order) => {
+  return _enqueueTask(() => _performUpdateOrderRow(order), `updateOrderRow(${order?.orderId})`)
+    .catch(err => {
+      console.error(`[Sheets] ❌ Update order error handled:`, err.message);
+    });
+};
+
+/**
+ * Syncs all orders from database to Google Sheets safely and non-destructively.
+ * Preserves existing manual columns, updates in-place, and appends missing orders.
  */
 exports.syncAllOrdersToSheet = async () => {
   const sheetIdToUse = _getSheetId();
@@ -444,7 +593,7 @@ exports.syncAllOrdersToSheet = async () => {
   try {
     const Order = require('../models/Order');
     const sheets = _getClient();
-    const { sheetTitle, headers } = await _ensureSheetAndGetInfo(sheets);
+    const { sheetTitle, headers } = await _ensureSheetAndGetInfo(sheets, true);
 
     console.log('[Sheets] Fetching all orders from database...');
     const orders = await Order.find({})
@@ -459,25 +608,26 @@ exports.syncAllOrdersToSheet = async () => {
       .sort({ placedAt: 1 })
       .exec();
 
-    console.log(`[Sheets] Found ${orders.length} orders. Processing sync safely...`);
+    console.log(`[Sheets] Found ${orders.length} orders in DB. Reading existing sheet rows...`);
 
-    // Fetch all existing Order IDs from the sheet to match row numbers
-    let orderIdColIndex = headers.findIndex(h => /order\s*id/i.test(h));
-    if (orderIdColIndex === -1) orderIdColIndex = 0;
-    const colLetter = _colIndexToLetter(orderIdColIndex);
-
-    const sheetIdRes = await sheets.spreadsheets.values.get({
+    // Fetch all existing rows to preserve manual fields and map orderId -> rowNumber
+    const endColLetter = _colIndexToLetter(Math.max(headers.length - 1, DEFAULT_HEADERS.length - 1));
+    const allRowsRes = await sheets.spreadsheets.values.get({
       spreadsheetId: sheetIdToUse,
-      range: `'${sheetTitle}'!${colLetter}:${colLetter}`,
+      range: `'${sheetTitle}'!A1:${endColLetter}`,
     });
 
-    const existingRows = sheetIdRes.data.values || [];
-    const orderRowMap = new Map(); // orderId -> 1-based row number
+    const allRows = allRowsRes.data.values || [];
+    let orderIdColIndex = headers.findIndex(h => /order\s*id/i.test(h));
+    if (orderIdColIndex === -1) orderIdColIndex = 0;
 
-    for (let r = 0; r < existingRows.length; r++) {
-      const val = existingRows[r] && existingRows[r][0] ? existingRows[r][0].toString().trim().toLowerCase() : '';
+    const orderRowMap = new Map(); // orderId -> { rowNumber, rowData }
+    for (let r = 1; r < allRows.length; r++) {
+      const rowData = allRows[r];
+      const val = rowData && rowData[orderIdColIndex] ? rowData[orderIdColIndex].toString().trim().toLowerCase() : '';
       if (val) {
-        orderRowMap.set(val, r + 1);
+        orderRowMap.set(val, { rowNumber: r + 1, rowData });
+        _orderRowCache.set(val, { rowNumber: r + 1, timestamp: Date.now() });
       }
     }
 
@@ -514,24 +664,25 @@ exports.syncAllOrdersToSheet = async () => {
 
         return {
           ...(item.toObject ? item.toObject() : { ...item }),
-          variantSize: variant?.size || '',
-          basePacking: variant?.basePacking || '',
+          variantSize: variant?.size || item.variant || '',
+          basePacking: variant?.basePacking || item.basePacking || '',
         };
       });
+
+      const targetId = (order.orderId || '').toString().trim().toLowerCase();
+      const existingEntry = targetId ? orderRowMap.get(targetId) : null;
+      const existingRow = existingEntry ? existingEntry.rowData : null;
 
       const row = _buildRowForHeaders(
         headers,
         { ...(order.toObject ? order.toObject() : order), items: enrichedItems },
-        order.user
+        order.user,
+        existingRow
       );
 
-      const targetId = (order.orderId || '').toString().trim().toLowerCase();
-      const existingRowNumber = targetId ? orderRowMap.get(targetId) : null;
-
-      if (existingRowNumber) {
-        const endColLetter = _colIndexToLetter(Math.max(headers.length - 1, row.length - 1));
+      if (existingEntry) {
         batchUpdates.push({
-          range: `'${sheetTitle}'!A${existingRowNumber}:${endColLetter}${existingRowNumber}`,
+          range: `'${sheetTitle}'!A${existingEntry.rowNumber}:${endColLetter}${existingEntry.rowNumber}`,
           values: [row],
         });
       } else {
@@ -539,7 +690,7 @@ exports.syncAllOrdersToSheet = async () => {
       }
     }
 
-    // Execute in-place updates in batches of 50 to avoid payload size and quota issues
+    // Execute in-place updates in batches of 50 to stay within limits
     const BATCH_SIZE = 50;
     for (let i = 0; i < batchUpdates.length; i += BATCH_SIZE) {
       const chunk = batchUpdates.slice(i, i + BATCH_SIZE);
@@ -550,24 +701,33 @@ exports.syncAllOrdersToSheet = async () => {
           data: chunk,
         },
       });
+      // Small pause between chunks to avoid rate limiting
+      if (i + BATCH_SIZE < batchUpdates.length) {
+        await new Promise(r => setTimeout(r, 500));
+      }
     }
 
-    // Append any orders not already in the sheet in a single request
+    // Append any orders not already in the sheet
     if (rowsToAppend.length > 0) {
-      await sheets.spreadsheets.values.append({
-        spreadsheetId: sheetIdToUse,
-        range: `'${sheetTitle}'!A1`,
-        valueInputOption: 'USER_ENTERED',
-        insertDataOption: 'INSERT_ROWS',
-        requestBody: { values: rowsToAppend },
-      });
+      for (let i = 0; i < rowsToAppend.length; i += BATCH_SIZE) {
+        const chunk = rowsToAppend.slice(i, i + BATCH_SIZE);
+        await sheets.spreadsheets.values.append({
+          spreadsheetId: sheetIdToUse,
+          range: `'${sheetTitle}'!A1`,
+          valueInputOption: 'USER_ENTERED',
+          insertDataOption: 'INSERT_ROWS',
+          requestBody: { values: chunk },
+        });
+        if (i + BATCH_SIZE < rowsToAppend.length) {
+          await new Promise(r => setTimeout(r, 500));
+        }
+      }
     }
 
-    console.log(`[Sheets] ✅ Sync completed. Updated: ${batchUpdates.length}, Appended: ${rowsToAppend.length}`);
+    console.log(`[Sheets] ✅ Sync completed safely. Updated: ${batchUpdates.length}, Appended: ${rowsToAppend.length}`);
     return { success: true, count: batchUpdates.length + rowsToAppend.length };
   } catch (err) {
     console.error('[Sheets] ❌ Failed to sync all orders:', err.message);
     throw err;
   }
 };
-

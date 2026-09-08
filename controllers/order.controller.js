@@ -960,6 +960,14 @@ exports.adminUpdateOrderDate = async (req, res, next) => {
       console.error("[WS] Failed to broadcast ORDERS_UPDATE on order date change:", wsErr.message);
     }
 
+    // Sync updated date to Google Sheets (fire-and-forget)
+    try {
+      const sheetsService = require('../services/sheets.service');
+      sheetsService.updateOrderRow(order).catch(err =>
+        console.error('[Sheets] Failed to update order row on date change:', err.message)
+      );
+    } catch (_) {}
+
     res.json({ success: true, message: "Order date updated successfully", order });
   } catch (error) {
     console.error("adminUpdateOrderDate error:", error);
@@ -1025,6 +1033,14 @@ exports.adminUpdateOrderItems = async (req, res, next) => {
       console.error('[WS] Failed to broadcast ORDERS_UPDATE on items update:', wsErr.message);
     }
 
+    // Sync updated items & Cost Price to Google Sheets (fire-and-forget)
+    try {
+      const sheetsService = require('../services/sheets.service');
+      sheetsService.updateOrderRow(populatedOrder || order).catch(err =>
+        console.error('[Sheets] Failed to update order row on items/CP update:', err.message)
+      );
+    } catch (_) {}
+
     res.json({
       success: true,
       message: 'Order items and cost price updated successfully',
@@ -1071,6 +1087,14 @@ exports.adminUpdateCourierCharge = async (req, res, next) => {
     } catch (wsErr) {
       console.error('[WS] Failed to broadcast ORDERS_UPDATE on courier charge update:', wsErr.message);
     }
+
+    // Sync updated courier charge to Google Sheets (fire-and-forget)
+    try {
+      const sheetsService = require('../services/sheets.service');
+      sheetsService.updateOrderRow(order).catch(err =>
+        console.error('[Sheets] Failed to update order row on courier charge update:', err.message)
+      );
+    } catch (_) {}
 
     res.json({
       success: true,
