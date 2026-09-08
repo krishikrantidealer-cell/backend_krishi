@@ -159,7 +159,28 @@ async function _ensureSheetAndGetInfo(sheets, forceRefresh = false) {
       const startColIndex = existingHeaders.length;
       const startColLetter = _colIndexToLetter(startColIndex);
       const endColLetter = _colIndexToLetter(startColIndex + missingHeaders.length - 1);
+      const currentGridCols = targetSheet.properties?.gridProperties?.columnCount || 26;
+
       try {
+        // Automatically expand sheet grid columns if needed
+        if (currentGridCols < startColIndex + missingHeaders.length) {
+          const colsToAdd = (startColIndex + missingHeaders.length) - currentGridCols + 2;
+          await sheets.spreadsheets.batchUpdate({
+            spreadsheetId: sheetIdToUse,
+            requestBody: {
+              requests: [
+                {
+                  appendDimension: {
+                    sheetId: sheetId,
+                    dimension: 'COLUMNS',
+                    length: colsToAdd,
+                  },
+                },
+              ],
+            },
+          });
+        }
+
         await sheets.spreadsheets.values.update({
           spreadsheetId: sheetIdToUse,
           range: `'${sheetTitle}'!${startColLetter}1:${endColLetter}1`,
