@@ -476,20 +476,48 @@ exports.sheetsWebhook = async (req, res, next) => {
     // Normalize status string (case-insensitive & trimmed)
     const rawStatus = (status || '').toString().trim().toLowerCase();
     const statusMap = {
+      'confirmed': 'Processing',
       'processing': 'Processing',
+      'pending': 'Processing',
+      'booked': 'Processing',
       'shipped': 'Shipped',
+      'dispatched': 'Shipped',
+      'in-transit': 'Shipped',
+      'in transit': 'Shipped',
+      'intransit': 'Shipped',
       'out for delivery': 'Out for Delivery',
+      'out-for-delivery': 'Out for Delivery',
       'delivered': 'Delivered',
+      'delivery': 'Delivered',
       'cancelled': 'Cancelled',
       'canceled': 'Cancelled',
       'rto': 'RTO',
+      'rto delivered': 'RTO',
+      'rto in-transit': 'RTO',
+      'rto-in-transit': 'RTO',
+      'return': 'RTO',
+      'returned': 'RTO',
+    };
+
+    const courierStatusDetailMap = {
+      'confirmed': 'Confirmed',
+      'processing': 'Processing',
+      'shipped': 'Shipped',
+      'in-transit': 'In-Transit',
+      'in transit': 'In-Transit',
+      'out for delivery': 'Out for Delivery',
+      'delivered': 'Delivered',
+      'rto in-transit': 'RTO In-Transit',
+      'rto-in-transit': 'RTO In-Transit',
+      'rto delivered': 'RTO Delivered',
+      'cancelled': 'Cancelled',
     };
 
     const normalizedStatus = statusMap[rawStatus];
     if (!normalizedStatus) {
       return res.status(400).json({
         success: false,
-        message: `Invalid order status: ${status}. Allowed: Processing, Shipped, Out for Delivery, Delivered, Cancelled, RTO`
+        message: `Invalid order status: ${status}. Allowed: Confirmed, Processing, Shipped, In-Transit, Out for Delivery, Delivered, RTO In-Transit, RTO Delivered, Cancelled`
       });
     }
 
@@ -509,6 +537,12 @@ exports.sheetsWebhook = async (req, res, next) => {
       else if (normalizedStatus === 'Delivered' && !order.deliveredAt) order.deliveredAt = new Date();
       else if (normalizedStatus === 'Cancelled' && !order.cancelledAt) order.cancelledAt = new Date();
       else if (normalizedStatus === 'RTO' && !order.rtoAt) order.rtoAt = new Date();
+      hasChanges = true;
+    }
+
+    const detailCourierStatus = courierStatusDetailMap[rawStatus];
+    if (detailCourierStatus && order.courierStatus !== detailCourierStatus) {
+      order.courierStatus = detailCourierStatus;
       hasChanges = true;
     }
 
