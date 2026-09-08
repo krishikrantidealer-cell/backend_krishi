@@ -568,7 +568,12 @@ class OrderService {
     if (!order) throw new Error('Order not found');
 
     if (status) order.orderStatus = status;
-    if (awbNumber) order.awbNumber = awbNumber;
+    if (awbNumber) {
+      order.awbNumber = awbNumber.toString().trim();
+      if (!trackingUrl && !order.trackingUrl) {
+        order.trackingUrl = `https://www.delhivery.com/track/package/${order.awbNumber}`;
+      }
+    }
     if (courierName) order.courierName = courierName;
     if (trackingUrl) order.trackingUrl = trackingUrl;
 

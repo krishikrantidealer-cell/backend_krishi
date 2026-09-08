@@ -460,7 +460,7 @@ exports.adminUpdateOrderStatus = async (req, res, next) => {
 
 exports.sheetsWebhook = async (req, res, next) => {
   try {
-    const { orderId, status, secret } = req.body;
+    const { orderId, status, secret, awbNumber, trackingId, courierName, trackingUrl } = req.body;
 
     const expectedSecret = process.env.SHEETS_WEBHOOK_SECRET || 'default_secret_key_123';
     const clientSecret = req.headers['x-sheets-secret'] || secret || req.query.secret;
@@ -473,36 +473,72 @@ exports.sheetsWebhook = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Missing orderId or status in payload' });
     }
 
-    const allowedStatuses = ['Processing', 'Shipped', 'Out for Delivery', 'Delivered', 'Cancelled', 'RTO'];
-    if (!allowedStatuses.includes(status)) {
-      return res.status(400).json({ success: false, message: 'Invalid order status' });
+    // Normalize status string (case-insensitive & trimmed)
+    const rawStatus = (status || '').toString().trim().toLowerCase();
+    const statusMap = {
+      'processing': 'Processing',
+      'shipped': 'Shipped',
+      'out for delivery': 'Out for Delivery',
+      'delivered': 'Delivered',
+      'cancelled': 'Cancelled',
+      'canceled': 'Cancelled',
+      'rto': 'RTO',
+    };
+
+    const normalizedStatus = statusMap[rawStatus];
+    if (!normalizedStatus) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid order status: ${status}. Allowed: Processing, Shipped, Out for Delivery, Delivered, Cancelled, RTO`
+      });
     }
 
-    const order = await Order.findOne({ orderId });
+    const cleanOrderId = orderId.toString().trim();
+    const order = await Order.findOne({ orderId: cleanOrderId });
     if (!order) {
-      return res.status(404).json({ success: false, message: 'Order not found' });
+      return res.status(404).json({ success: false, message: `Order not found with orderId: ${cleanOrderId}` });
     }
 
-    // If status is the same, no action needed
-    if (order.orderStatus === status) {
-      return res.json({ success: true, message: 'Status already matches', orderStatus: order.orderStatus });
+    let hasChanges = false;
+
+    if (order.orderStatus !== normalizedStatus) {
+      order.orderStatus = normalizedStatus;
+      if (normalizedStatus === 'Processing' && !order.processingAt) order.processingAt = new Date();
+      else if (normalizedStatus === 'Shipped' && !order.shippedAt) order.shippedAt = new Date();
+      else if (normalizedStatus === 'Out for Delivery' && !order.outForDeliveryAt) order.outForDeliveryAt = new Date();
+      else if (normalizedStatus === 'Delivered' && !order.deliveredAt) order.deliveredAt = new Date();
+      else if (normalizedStatus === 'Cancelled' && !order.cancelledAt) order.cancelledAt = new Date();
+      else if (normalizedStatus === 'RTO' && !order.rtoAt) order.rtoAt = new Date();
+      hasChanges = true;
     }
 
-    order.orderStatus = status;
-    if (status === 'Processing') order.processingAt = new Date();
-    else if (status === 'Shipped') order.shippedAt = new Date();
-    else if (status === 'Out for Delivery') order.outForDeliveryAt = new Date();
-    else if (status === 'Delivered') order.deliveredAt = new Date();
-    else if (status === 'Cancelled') order.cancelledAt = new Date();
-    else if (status === 'RTO') order.rtoAt = new Date();
+    const newAwb = (awbNumber || trackingId || '').toString().trim();
+    if (newAwb && order.awbNumber !== newAwb) {
+      order.awbNumber = newAwb;
+      hasChanges = true;
+    }
+
+    if (courierName && order.courierName !== courierName) {
+      order.courierName = courierName;
+      hasChanges = true;
+    }
+
+    if (trackingUrl && order.trackingUrl !== trackingUrl) {
+      order.trackingUrl = trackingUrl;
+      hasChanges = true;
+    }
+
+    if (!hasChanges) {
+      return res.json({ success: true, message: 'Status already up-to-date', orderStatus: order.orderStatus });
+    }
 
     await order.save();
 
     // Trigger Notification in background
     notificationService.sendUtilityNotification(
       order.user,
-      `Order Status Update: ${status} 📦`,
-      `Your order ${order.orderId} status has been updated to ${status} via Google Sheets.`,
+      `Order Status Update: ${normalizedStatus} 📦`,
+      `Your order ${order.orderId} status has been updated to ${normalizedStatus} via Google Sheets.`,
       `/order_details/${order._id}`
     ).catch(err => console.error("Error sending order status notification:", err));
 
@@ -514,13 +550,17 @@ exports.sheetsWebhook = async (req, res, next) => {
         type: 'ORDER_STATUS_UPDATE',
         orderId: order._id.toString(),
         orderStatus: order.orderStatus,
-        courierStatus: null
+        courierStatus: order.courierStatus || null
       });
     } catch (wsErr) {
-      console.error("[WS] Failed to broadcast order update:", wsErr.message);
+      console.error("[WS] Failed to broadcast order update from sheets webhook:", wsErr.message);
     }
 
-    res.json({ success: true, message: `Order ${orderId} updated to ${status} from sheet`, orderStatus: status });
+    res.json({
+      success: true,
+      message: `Order ${cleanOrderId} updated to ${normalizedStatus} from sheet`,
+      orderStatus: normalizedStatus
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
