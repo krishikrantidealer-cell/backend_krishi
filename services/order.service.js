@@ -587,10 +587,11 @@ class OrderService {
 
     if (status === 'Processing') order.processingAt = new Date();
     else if (status === 'Shipped') order.shippedAt = new Date();
+    else if (status === 'In-Transit' || status === 'In Transit') order.inTransitAt = new Date();
     else if (status === 'Out for Delivery') order.outForDeliveryAt = new Date();
     else if (status === 'Delivered') order.deliveredAt = new Date();
     else if (status === 'Cancelled') order.cancelledAt = new Date();
-    else if (status === 'RTO') order.rtoAt = new Date();
+    else if (status === 'RTO' || status === 'RTO In-Transit' || status === 'RTO Delivered') order.rtoAt = new Date();
 
     await order.save();
 
@@ -655,7 +656,10 @@ class OrderService {
         if (statusLower.includes('manifested') || statusLower.includes('dispatched') || statusLower.includes('pending')) {
           order.orderStatus = 'Processing';
           if (!order.processingAt) order.processingAt = new Date();
-        } else if (statusLower.includes('picked up') || statusLower.includes('in transit') || statusLower.includes('arrived at hub') || statusLower.includes('in-transit') || statusLower.includes('reached')) {
+        } else if (statusLower.includes('in transit') || statusLower.includes('in-transit') || statusLower.includes('intransit')) {
+          order.orderStatus = 'In-Transit';
+          if (!order.inTransitAt) order.inTransitAt = new Date();
+        } else if (statusLower.includes('picked up') || statusLower.includes('arrived at hub') || statusLower.includes('reached')) {
           order.orderStatus = 'Shipped';
           if (!order.shippedAt) order.shippedAt = new Date();
         } else if (statusLower.includes('out for delivery')) {
@@ -664,6 +668,12 @@ class OrderService {
         } else if ((statusLower.includes('delivered') || statusLower.includes('successful')) && !statusLower.includes('rto') && !statusLower.includes('undelivered')) {
           order.orderStatus = 'Delivered';
           if (!order.deliveredAt) order.deliveredAt = new Date();
+        } else if (statusLower.includes('rto in-transit') || statusLower.includes('rto-in-transit')) {
+          order.orderStatus = 'RTO In-Transit';
+          if (!order.rtoAt) order.rtoAt = new Date();
+        } else if (statusLower.includes('rto delivered')) {
+          order.orderStatus = 'RTO Delivered';
+          if (!order.rtoAt) order.rtoAt = new Date();
         } else if (statusLower.includes('rto') || statusLower.includes('returned') || statusLower.includes('undelivered')) {
           order.orderStatus = 'RTO';
           if (!order.rtoAt) order.rtoAt = new Date();

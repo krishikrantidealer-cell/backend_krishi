@@ -130,7 +130,7 @@ const orderSchema = new mongoose.Schema({
   },
   orderStatus: {
     type: String,
-    enum: ['Processing', 'Shipped', 'Out for Delivery', 'Delivered', 'Cancelled', 'RTO'],
+    enum: ['Processing', 'Shipped', 'In-Transit', 'In Transit', 'Out for Delivery', 'Delivered', 'Cancelled', 'RTO', 'RTO In-Transit', 'RTO Delivered'],
     default: 'Processing'
   },
   courierStatus: {
@@ -166,6 +166,9 @@ const orderSchema = new mongoose.Schema({
     type: Date
   },
   shippedAt: {
+    type: Date
+  },
+  inTransitAt: {
     type: Date
   },
   outForDeliveryAt: {

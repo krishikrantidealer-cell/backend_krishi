@@ -183,11 +183,90 @@ exports.getCategories = async (req, res) => {
     const categories = await productService.getCategoriesHierarchy();
     res.json({
       success: true,
-      categories
+      categories,
+      data: categories
     });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Failed to fetch categories' });
   }
+};
+
+// Get single category by ID, slug, or name
+exports.getCategory = async (req, res, next) => {
+  try {
+    const rawId = req.params.id;
+    const cleanId = rawId ? rawId.toString().trim() : '';
+    let category = null;
+
+    if (mongoose.Types.ObjectId.isValid(cleanId)) {
+      category = await Category.findById(cleanId).lean();
+    }
+    if (!category) {
+      category = await Category.findOne({
+        $or: [
+          { slug: cleanId },
+          { slug: new RegExp(`^${cleanId}$`, 'i') },
+          { name: new RegExp(`^${cleanId}$`, 'i') },
+          { title: new RegExp(`^${cleanId}$`, 'i') }
+        ]
+      }).lean();
+    }
+
+    if (!category) {
+      // Also check Collection
+      let col = null;
+      if (mongoose.Types.ObjectId.isValid(cleanId)) {
+        col = await Collection.findById(cleanId).lean();
+      }
+      if (!col) {
+        col = await Collection.findOne({
+          $or: [
+            { slug: cleanId },
+            { slug: new RegExp(`^${cleanId}$`, 'i') },
+            { name: new RegExp(`^${cleanId}$`, 'i') }
+          ]
+        }).lean();
+      }
+      if (col) {
+        return res.json({
+          success: true,
+          category: {
+            _id: col._id,
+            id: col._id,
+            name: col.name,
+            title: col.name,
+            slug: col.slug,
+            bannerImage: col.bannerImage || '',
+            image: col.bannerImage || ''
+          },
+          data: {
+            _id: col._id,
+            id: col._id,
+            name: col.name,
+            title: col.name,
+            slug: col.slug,
+            bannerImage: col.bannerImage || '',
+            image: col.bannerImage || ''
+          }
+        });
+      }
+      return res.status(404).json({ success: false, message: 'Category not found' });
+    }
+
+    res.json({
+      success: true,
+      category,
+      data: category
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Get products by category (route alias)
+exports.getProductsByCategory = async (req, res, next) => {
+  req.query.category = req.params.id;
+  return exports.getProducts(req, res, next);
 };
 
 // Consolidated Discovery API for Home Screen (BFF Pattern)

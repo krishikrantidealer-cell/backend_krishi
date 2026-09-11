@@ -64,6 +64,11 @@ router.put('/:id', protect, authorizeRoles('admin'), upload.array('images', 10),
 // Delete a product
 router.delete('/:id', protect, authorizeRoles('admin'), productController.deleteProduct);
 
+// Get single category by ID, slug or name
+router.get('/categories/:id', productController.getCategory);
+router.get('/category/:id', productController.getCategory);
+router.get('/category/:id/products', productController.getProductsByCategory);
+
 // Get single product details
 router.get('/:id', productController.getProduct);
 

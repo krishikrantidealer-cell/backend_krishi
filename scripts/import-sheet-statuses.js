@@ -48,15 +48,22 @@ async function importStatusesFromSheet() {
 
     const statusMap = {
       'delivered': 'Delivered',
-      'rto delivered': 'RTO',
-      'in-transit': 'Shipped',
-      'in transit': 'Shipped',
+      'delivery': 'Delivered',
+      'rto delivered': 'RTO Delivered',
+      'in-transit': 'In-Transit',
+      'in transit': 'In-Transit',
+      'intransit': 'In-Transit',
       'rto initiated': 'RTO',
-      'rto in-transit': 'RTO',
+      'rto in-transit': 'RTO In-Transit',
+      'rto-in-transit': 'RTO In-Transit',
       'out for delivery': 'Out for Delivery',
+      'out-for-delivery': 'Out for Delivery',
       'shipped': 'Shipped',
+      'dispatched': 'Shipped',
       'processing': 'Processing',
       'confirmed': 'Processing',
+      'pending': 'Processing',
+      'booked': 'Processing',
       'cancelled': 'Cancelled',
       'canceled': 'Cancelled',
       'rto': 'RTO',
@@ -91,10 +98,11 @@ async function importStatusesFromSheet() {
 
         if (normalizedStatus === 'Processing') updateFields.processingAt = new Date();
         else if (normalizedStatus === 'Shipped') updateFields.shippedAt = new Date();
+        else if (normalizedStatus === 'In-Transit' || normalizedStatus === 'In Transit') updateFields.inTransitAt = new Date();
         else if (normalizedStatus === 'Out for Delivery') updateFields.outForDeliveryAt = new Date();
         else if (normalizedStatus === 'Delivered') updateFields.deliveredAt = new Date();
         else if (normalizedStatus === 'Cancelled') updateFields.cancelledAt = new Date();
-        else if (normalizedStatus === 'RTO') updateFields.rtoAt = new Date();
+        else if (normalizedStatus === 'RTO' || normalizedStatus === 'RTO In-Transit' || normalizedStatus === 'RTO Delivered') updateFields.rtoAt = new Date();
       }
 
       if (trackingId) {

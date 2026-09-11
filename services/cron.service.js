@@ -66,7 +66,7 @@ const runOrderSync = async () => {
     console.log('[Cron] Starting Automated Order Status Sync...');
     const activeOrders = await Order.find({
       awbNumber: { $exists: true, $ne: '' },
-      orderStatus: { $in: ['Processing', 'Shipped', 'Out for Delivery'] }
+      orderStatus: { $in: ['Processing', 'Shipped', 'In-Transit', 'In Transit', 'Out for Delivery', 'RTO In-Transit'] }
     });
 
     if (activeOrders.length === 0) {

@@ -180,7 +180,10 @@ exports.delhiveryWebhook = async (req, res, next) => {
     if (statusLower.includes('manifested') || statusLower.includes('dispatched') || statusLower.includes('pending')) {
       order.orderStatus = 'Processing';
       if (!order.processingAt) order.processingAt = new Date();
-    } else if (statusLower.includes('picked up') || statusLower.includes('in transit') || statusLower.includes('arrived at hub') || statusLower.includes('in-transit') || statusLower.includes('reached')) {
+    } else if (statusLower.includes('in transit') || statusLower.includes('in-transit') || statusLower.includes('intransit')) {
+      order.orderStatus = 'In-Transit';
+      if (!order.inTransitAt) order.inTransitAt = new Date();
+    } else if (statusLower.includes('picked up') || statusLower.includes('arrived at hub') || statusLower.includes('reached')) {
       order.orderStatus = 'Shipped';
       if (!order.shippedAt) order.shippedAt = new Date();
     } else if (statusLower.includes('out for delivery')) {
@@ -189,6 +192,12 @@ exports.delhiveryWebhook = async (req, res, next) => {
     } else if ((statusLower.includes('delivered') || statusLower.includes('successful')) && !statusLower.includes('rto') && !statusLower.includes('undelivered')) {
       order.orderStatus = 'Delivered';
       if (!order.deliveredAt) order.deliveredAt = new Date();
+    } else if (statusLower.includes('rto in-transit') || statusLower.includes('rto-in-transit')) {
+      order.orderStatus = 'RTO In-Transit';
+      if (!order.rtoAt) order.rtoAt = new Date();
+    } else if (statusLower.includes('rto delivered')) {
+      order.orderStatus = 'RTO Delivered';
+      if (!order.rtoAt) order.rtoAt = new Date();
     } else if (statusLower.includes('rto') || statusLower.includes('returned') || statusLower.includes('undelivered')) {
       order.orderStatus = 'RTO';
       if (!order.rtoAt) order.rtoAt = new Date();
@@ -255,7 +264,7 @@ exports.cancelOrder = async (req, res, next) => {
       return res.status(404).json({ success: false, message: "Order not found" });
     }
 
-    if (['Shipped', 'Out for Delivery', 'Delivered', 'RTO', 'Cancelled'].includes(order.orderStatus) || (order.awbNumber && order.awbNumber.trim() !== '')) {
+    if (['Shipped', 'In-Transit', 'In Transit', 'Out for Delivery', 'Delivered', 'RTO', 'RTO In-Transit', 'RTO Delivered', 'Cancelled'].includes(order.orderStatus) || (order.awbNumber && order.awbNumber.trim() !== '')) {
       return res.status(400).json({
         success: false,
         message: "Order has already been dispatched or assigned a tracking ID and cannot be cancelled."
@@ -383,7 +392,7 @@ exports.adminUpdateOrderStatus = async (req, res, next) => {
     const { status, awbNumber, courierName, trackingUrl, paymentStatus } = req.body;
     const { id } = req.params;
 
-    const allowedStatuses = ['Processing', 'Shipped', 'Out for Delivery', 'Delivered', 'Cancelled', 'RTO'];
+    const allowedStatuses = ['Processing', 'Shipped', 'In-Transit', 'In Transit', 'Out for Delivery', 'Delivered', 'Cancelled', 'RTO', 'RTO In-Transit', 'RTO Delivered'];
     if (status && !allowedStatuses.includes(status)) {
       return res.status(400).json({ success: false, message: 'Invalid order status' });
     }
@@ -482,9 +491,9 @@ exports.sheetsWebhook = async (req, res, next) => {
       'booked': 'Processing',
       'shipped': 'Shipped',
       'dispatched': 'Shipped',
-      'in-transit': 'Shipped',
-      'in transit': 'Shipped',
-      'intransit': 'Shipped',
+      'in-transit': 'In-Transit',
+      'in transit': 'In-Transit',
+      'intransit': 'In-Transit',
       'out for delivery': 'Out for Delivery',
       'out-for-delivery': 'Out for Delivery',
       'delivered': 'Delivered',
@@ -492,9 +501,9 @@ exports.sheetsWebhook = async (req, res, next) => {
       'cancelled': 'Cancelled',
       'canceled': 'Cancelled',
       'rto': 'RTO',
-      'rto delivered': 'RTO',
-      'rto in-transit': 'RTO',
-      'rto-in-transit': 'RTO',
+      'rto delivered': 'RTO Delivered',
+      'rto in-transit': 'RTO In-Transit',
+      'rto-in-transit': 'RTO In-Transit',
       'return': 'RTO',
       'returned': 'RTO',
     };
@@ -505,6 +514,7 @@ exports.sheetsWebhook = async (req, res, next) => {
       'shipped': 'Shipped',
       'in-transit': 'In-Transit',
       'in transit': 'In-Transit',
+      'intransit': 'In-Transit',
       'out for delivery': 'Out for Delivery',
       'delivered': 'Delivered',
       'rto in-transit': 'RTO In-Transit',
@@ -533,10 +543,11 @@ exports.sheetsWebhook = async (req, res, next) => {
       order.orderStatus = normalizedStatus;
       if (normalizedStatus === 'Processing' && !order.processingAt) order.processingAt = new Date();
       else if (normalizedStatus === 'Shipped' && !order.shippedAt) order.shippedAt = new Date();
+      else if ((normalizedStatus === 'In-Transit' || normalizedStatus === 'In Transit') && !order.inTransitAt) order.inTransitAt = new Date();
       else if (normalizedStatus === 'Out for Delivery' && !order.outForDeliveryAt) order.outForDeliveryAt = new Date();
       else if (normalizedStatus === 'Delivered' && !order.deliveredAt) order.deliveredAt = new Date();
       else if (normalizedStatus === 'Cancelled' && !order.cancelledAt) order.cancelledAt = new Date();
-      else if (normalizedStatus === 'RTO' && !order.rtoAt) order.rtoAt = new Date();
+      else if ((normalizedStatus === 'RTO' || normalizedStatus === 'RTO In-Transit' || normalizedStatus === 'RTO Delivered') && !order.rtoAt) order.rtoAt = new Date();
       hasChanges = true;
     }
 
