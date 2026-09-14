@@ -358,23 +358,6 @@ const runWhatsAppAutomation = async () => {
   }
 };
 
-// 7. Unsynced Orders Google Sheets Auto-Recovery (Every 15 mins)
-const runUnsyncedOrdersSheetSync = async () => {
-  if (!await acquireCronLock('sheets_unsynced_sync', 300)) {
-    console.log('[Cron] Unsynced Orders Sheet Sync already in progress on another instance.');
-    return;
-  }
-  try {
-    const sheetsService = require('./sheets.service');
-    const result = await sheetsService.syncUnsyncedOrders();
-    if (result && result.count > 0) {
-      console.log(`[Cron] ✅ Unsynced Orders Sheet Sync recovered ${result.count} orders.`);
-    }
-  } catch (error) {
-    console.error('[Cron] Error in Unsynced Orders Sheet Sync cron job:', error.message);
-  }
-};
-
 /**
  * Initialize Fallback Interval-Based Cron Jobs (for local development/persistent server)
  */
@@ -388,16 +371,14 @@ exports.initCronJobs = () => {
   runKycUrgencyCheck();
   runScheduledSegmentNotifications();
   runWhatsAppAutomation();
-  runUnsyncedOrdersSheetSync();
 
   // Set intervals
   setInterval(runOrderSync, 20 * 60 * 1000);
   setInterval(runAbandonedCartCheck, 60 * 60 * 1000);
   setInterval(runAbandonedCheckoutCheck, 30 * 60 * 1000);
   setInterval(runKycUrgencyCheck, 30 * 60 * 1000);
-  setInterval(() => runScheduledSegmentNotifications(), 10 * 60 * 1000);
+  setInterval(() => runScheduledSegmentNotifications(), 10 * 1000);
   setInterval(runWhatsAppAutomation, 60 * 60 * 1000);
-  setInterval(runUnsyncedOrdersSheetSync, 15 * 60 * 1000);
 };
 
 // Export individual tasks for router triggering
@@ -408,6 +389,5 @@ module.exports = {
   runAbandonedCheckoutCheck,
   runKycUrgencyCheck,
   runScheduledSegmentNotifications,
-  runWhatsAppAutomation,
-  runUnsyncedOrdersSheetSync
+  runWhatsAppAutomation
 };

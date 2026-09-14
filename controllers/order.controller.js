@@ -958,11 +958,16 @@ exports.adminCreateOrder = async (req, res, next) => {
       );
     }
 
-    // NEW: Sync new order to Google Sheets (fire-and-forget)
+    // Sync new order to Google Sheets reliably before returning response
     const sheetsService = require('../services/sheets.service');
-    sheetsService.appendOrder(order).catch(err =>
-      console.error('[Sheets] Failed to append new admin-created order:', err.message)
-    );
+    try {
+      await Promise.race([
+        sheetsService.appendOrder(order),
+        new Promise(resolve => setTimeout(resolve, 3500))
+      ]);
+    } catch (sheetErr) {
+      console.error('[Sheets] Failed to append new admin-created order:', sheetErr.message);
+    }
 
     // Non-blocking notification to dealer (WhatsApp & Push)
     const whatsappAutomationService = require('../services/whatsappAutomation.service');

@@ -58,7 +58,14 @@ class OrderService {
     }
 
     // Sync & Notify
-    sheetsService.appendOrder(order).catch(err => console.error('[Sheets] confirmOrder error:', err.message));
+    try {
+      await Promise.race([
+        sheetsService.appendOrder(order),
+        new Promise(resolve => setTimeout(resolve, 3500))
+      ]);
+    } catch (err) {
+      console.error('[Sheets] confirmOrder error:', err.message);
+    }
 
     User.findById(session.user).then(user => {
       if (user) {
@@ -318,10 +325,15 @@ class OrderService {
     cart.freeItems = [];
     await cart.save();
 
-    // 8. Sync new order to Google Sheets (fire-and-forget)
-    sheetsService.appendOrder(order).catch(err =>
-      console.error('[Sheets] Failed to append new order:', err.message)
-    );
+    // 8. Sync new order to Google Sheets reliably before returning
+    try {
+      await Promise.race([
+        sheetsService.appendOrder(order),
+        new Promise(resolve => setTimeout(resolve, 3500))
+      ]);
+    } catch (err) {
+      console.error('[Sheets] Failed to append new order:', err.message);
+    }
 
     // 9. Send WhatsApp notification to admin & user (fire-and-forget)
     whatsappService.notifyNewOrder(order, user).catch(err =>
