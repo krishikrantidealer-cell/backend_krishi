@@ -1,6 +1,7 @@
 const { google } = require('googleapis');
 const User = require('../models/User');
 const Product = require('../models/Product');
+const Order = require('../models/Order');
 const { getServiceAccountCredentials } = require('../config/serviceAccountCredentials');
 
 // ─── CONFIGURATION ───────────────────────────────────────────────────────────
@@ -291,9 +292,10 @@ function _buildRowForHeaders(headers, order, user, existingRow = null) {
 
   const itemsSummaryList = items.map(i => {
     const packSize = i.variantSize || i.basePacking || i.variant || '';
+    const priceStr = (i.price !== undefined && i.price !== null) ? ` @ ₹${i.price}` : '';
     return packSize && packSize !== 'Standard'
-      ? `${i.title} (${packSize}) - Qty: ${i.quantity}`
-      : `${i.title} - Qty: ${i.quantity}`;
+      ? `${i.title} (${packSize}) - Qty: ${i.quantity}${priceStr}`
+      : `${i.title} - Qty: ${i.quantity}${priceStr}`;
   });
 
   for (const fItem of freeItems) {
@@ -467,9 +469,9 @@ const _syncQueue = [];
 let _isProcessingQueue = false;
 const RATE_LIMIT_DELAY_MS = 600; // ~100 requests per minute max limit buffer
 
-async function _enqueueTask(taskFn, taskName = 'SheetsTask') {
+async function _enqueueTask(taskFn, taskName = 'SheetsTask', orderId = null) {
   return new Promise((resolve, reject) => {
-    _syncQueue.push({ taskFn, taskName, resolve, reject, retries: 0 });
+    _syncQueue.push({ taskFn, taskName, orderId, resolve, reject, retries: 0 });
     _processQueue();
   });
 }
@@ -495,6 +497,12 @@ async function _processQueue() {
         _syncQueue.unshift(item); // Reinsert at front of queue
       } else {
         console.error(`[SheetsQueue] ❌ Failed ${item.taskName} permanently:`, err.message);
+        if (item.orderId) {
+          Order.updateOne(
+            { orderId: item.orderId },
+            { $set: { sheetSyncError: err.message } }
+          ).catch(() => {});
+        }
         item.reject(err);
       }
     }
@@ -541,6 +549,13 @@ async function _performAppendOrder(order) {
     const rowNum = parseInt(match[1], 10);
     _orderRowCache.set(order.orderId.toString().trim().toLowerCase(), { rowNumber: rowNum, timestamp: Date.now() });
   }
+
+  // Mark as synced in MongoDB
+  const query = order._id ? { _id: order._id } : { orderId: order.orderId };
+  await Order.updateOne(
+    query,
+    { $set: { syncedToSheet: true, sheetSyncedAt: new Date() }, $unset: { sheetSyncError: 1 } }
+  ).catch(dbErr => console.warn('[Sheets] Failed to update syncedToSheet in DB:', dbErr.message));
 
   console.log(`[Sheets] ✅ Order ${order.orderId} appended to sheet tab "${sheetTitle}".`);
 }
@@ -607,6 +622,13 @@ async function _performUpdateOrderRow(order) {
     }
     console.log(`[Sheets] ✅ Order ${order.orderId} not found in "${sheetTitle}" — appended as new row.`);
   }
+
+  // Mark as synced in MongoDB
+  const query = order._id ? { _id: order._id } : { orderId: order.orderId };
+  await Order.updateOne(
+    query,
+    { $set: { syncedToSheet: true, sheetSyncedAt: new Date() }, $unset: { sheetSyncError: 1 } }
+  ).catch(dbErr => console.warn('[Sheets] Failed to update syncedToSheet in DB:', dbErr.message));
 }
 
 // ─── PUBLIC API ───────────────────────────────────────────────────────────────
@@ -616,7 +638,7 @@ async function _performUpdateOrderRow(order) {
  * Appends a new row via the rate-limited, retrying queue.
  */
 exports.appendOrder = async (order) => {
-  return _enqueueTask(() => _performAppendOrder(order), `appendOrder(${order?.orderId})`)
+  return _enqueueTask(() => _performAppendOrder(order), `appendOrder(${order?.orderId})`, order?.orderId)
     .catch(err => {
       console.error(`[Sheets] ❌ Append order error handled:`, err.message);
     });
@@ -627,7 +649,7 @@ exports.appendOrder = async (order) => {
  * Finds existing row, preserves manual data, and updates in-place via queue.
  */
 exports.updateOrderRow = async (order) => {
-  return _enqueueTask(() => _performUpdateOrderRow(order), `updateOrderRow(${order?.orderId})`)
+  return _enqueueTask(() => _performUpdateOrderRow(order), `updateOrderRow(${order?.orderId})`, order?.orderId)
     .catch(err => {
       console.error(`[Sheets] ❌ Update order error handled:`, err.message);
     });
@@ -645,7 +667,6 @@ exports.syncAllOrdersToSheet = async () => {
   }
 
   try {
-    const Order = require('../models/Order');
     const sheets = _getClient();
     const { sheetTitle, headers } = await _ensureSheetAndGetInfo(sheets, true);
 
@@ -705,6 +726,7 @@ exports.syncAllOrdersToSheet = async () => {
 
     const batchUpdates = [];
     const rowsToAppend = [];
+    const syncedOrderIds = [];
 
     for (const order of orders) {
       const enrichedItems = (order.items || []).map(item => {
@@ -742,6 +764,7 @@ exports.syncAllOrdersToSheet = async () => {
       } else {
         rowsToAppend.push(row);
       }
+      syncedOrderIds.push(order._id);
     }
 
     // Execute in-place updates in batches of 50 to stay within limits
@@ -778,10 +801,71 @@ exports.syncAllOrdersToSheet = async () => {
       }
     }
 
+    // Mark all successfully processed orders in DB
+    if (syncedOrderIds.length > 0) {
+      await Order.updateMany(
+        { _id: { $in: syncedOrderIds } },
+        { $set: { syncedToSheet: true, sheetSyncedAt: new Date() }, $unset: { sheetSyncError: 1 } }
+      ).catch(dbErr => console.warn('[Sheets] Failed to mark synced orders in DB:', dbErr.message));
+    }
+
     console.log(`[Sheets] ✅ Sync completed safely. Updated: ${batchUpdates.length}, Appended: ${rowsToAppend.length}`);
     return { success: true, count: batchUpdates.length + rowsToAppend.length };
   } catch (err) {
     console.error('[Sheets] ❌ Failed to sync all orders:', err.message);
+    throw err;
+  }
+};
+
+/**
+ * Self-healing sync: finds any order in MongoDB that has not yet been synced
+ * to Google Sheets (syncedToSheet !== true) and updates/appends it safely.
+ */
+exports.syncUnsyncedOrders = async () => {
+  const sheetIdToUse = _getSheetId();
+  if (!sheetIdToUse) {
+    console.warn('[Sheets] GOOGLE_SHEETS_ID not set — skipping syncUnsyncedOrders.');
+    return { success: false, message: 'GOOGLE_SHEETS_ID not set', count: 0 };
+  }
+
+  try {
+    const unsyncedOrders = await Order.find({
+      $or: [
+        { syncedToSheet: false },
+        { syncedToSheet: { $exists: false } }
+      ]
+    })
+      .populate({
+        path: 'user',
+        select: 'firstName lastName phoneNumber alternatePhone email shopName assignedAgent preferredLanguage isPanelCreated source createdVia',
+        populate: {
+          path: 'assignedAgent',
+          select: 'firstName lastName phoneNumber email',
+        },
+      })
+      .sort({ createdAt: 1 })
+      .limit(100)
+      .exec();
+
+    if (unsyncedOrders.length === 0) {
+      return { success: true, count: 0, message: 'All orders are synced to Google Sheets' };
+    }
+
+    console.log(`[Sheets] 🔍 Found ${unsyncedOrders.length} unsynced orders in DB. Syncing to Google Sheets...`);
+    let syncedCount = 0;
+    for (const order of unsyncedOrders) {
+      try {
+        await _performUpdateOrderRow(order);
+        syncedCount++;
+      } catch (orderErr) {
+        console.error(`[Sheets] Failed to sync unsynced order ${order.orderId}:`, orderErr.message);
+      }
+    }
+
+    console.log(`[Sheets] ✅ Self-healing sync finished. Synced ${syncedCount}/${unsyncedOrders.length} orders.`);
+    return { success: true, count: syncedCount, totalFound: unsyncedOrders.length };
+  } catch (err) {
+    console.error('[Sheets] ❌ Error in syncUnsyncedOrders:', err.message);
     throw err;
   }
 };

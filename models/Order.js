@@ -182,6 +182,18 @@ const orderSchema = new mongoose.Schema({
   },
   rtoAt: {
     type: Date
+  },
+  syncedToSheet: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
+  sheetSyncedAt: {
+    type: Date
+  },
+  sheetSyncError: {
+    type: String,
+    trim: true
   }
 }, {
   timestamps: true
@@ -195,5 +207,6 @@ orderSchema.index({ awbNumber: 1 }, { sparse: true });
 orderSchema.index({ orderStatus: 1 });
 orderSchema.index({ paymentStatus: 1 });
 orderSchema.index({ placedAt: -1 });
+orderSchema.index({ syncedToSheet: 1, createdAt: -1 });
 
 module.exports = mongoose.model('Order', orderSchema);

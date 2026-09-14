@@ -39,6 +39,7 @@ router.get('/trigger', verifyCronAuth, async (req, res) => {
       cronService.runAbandonedCheckoutCheck().catch(e => console.error('[Cron Route Error] runAbandonedCheckoutCheck:', e.message));
       cronService.runKycUrgencyCheck().catch(e => console.error('[Cron Route Error] runKycUrgencyCheck:', e.message));
       cronService.runWhatsAppAutomation().catch(e => console.error('[Cron Route Error] runWhatsAppAutomation:', e.message));
+      cronService.runUnsyncedOrdersSheetSync().catch(e => console.error('[Cron Route Error] runUnsyncedOrdersSheetSync:', e.message));
     }
 
     return res.status(200).json({
