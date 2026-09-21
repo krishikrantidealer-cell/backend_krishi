@@ -571,8 +571,9 @@ class OrderService {
         }
       })
       .populate('createdBy', 'firstName lastName phoneNumber email')
-      .populate('items.product')
-      .sort({ createdAt: -1 });
+      .populate('items.product', 'title name slug price unit sku images thumbnail')
+      .sort({ createdAt: -1 })
+      .lean();
   }
 
   async updateOrderStatus(orderId, status, awbNumber = null, courierName = null, trackingUrl = null, paymentStatus = null) {

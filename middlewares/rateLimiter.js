@@ -90,6 +90,7 @@ const portalLoginLimiter = rateLimit({
   max: 100, // 100 login attempts per 15 minutes
   standardHeaders: true,
   legacyHeaders: false,
+  validate: false,
   keyGenerator: (req) => {
     // Key by email to isolate individual accounts and prevent shared IP blocks
     if (req.body && req.body.email) {
@@ -119,6 +120,7 @@ const authLimiter = rateLimit({
   max: 1000, // Relaxed to 1000 to support cellular CGNAT
   standardHeaders: true,
   legacyHeaders: false,
+  validate: false,
   skip: (req) => {
     if (process.env.NODE_ENV === 'development') return true;
     if (req.body && req.body.phoneNumber === '9999999999') return true;

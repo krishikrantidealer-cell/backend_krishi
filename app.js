@@ -34,14 +34,15 @@ app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" }
 }));
 
-// Serve static public assets (push notification banners, etc.)
-app.use('/public', express.static(path.join(__dirname, 'public')));
 app.use(cors({
-  origin: '*', // Configure this for your Flutter app domain/IP in production
+  origin: true, // Dynamically allow calling origin so credentials: true complies with browser CORS rules
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With'],
   credentials: true
 }));
+
+// Serve static public assets (push notification banners, etc.)
+app.use('/public', express.static(path.join(__dirname, 'public')));
 
 app.use(express.json({
   verify: (req, res, buf) => {
