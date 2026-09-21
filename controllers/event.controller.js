@@ -431,15 +431,31 @@ exports.getEvents = async (req, res, next) => {
     });
 
     const uniqueIdentifiers = [...new Set(rawUserKeys.filter(Boolean))];
-    const userOrConditions = uniqueIdentifiers.map(u => {
-      const cond = [{ email: u }, { phoneNumber: u }];
-      if (mongoose.Types.ObjectId.isValid(u)) cond.push({ _id: new mongoose.Types.ObjectId(u) });
-      return cond;
-    }).flat();
+    const emails = [];
+    const phones = [];
+    const objectIds = [];
+
+    uniqueIdentifiers.forEach(u => {
+      const str = String(u).trim();
+      if (mongoose.Types.ObjectId.isValid(str) && /^[a-fA-F0-9]{24}$/.test(str)) {
+        objectIds.push(new mongoose.Types.ObjectId(str));
+      } else if (str.includes('@')) {
+        emails.push(str.toLowerCase());
+      } else {
+        phones.push(str);
+        const clean = str.replace(/\D/g, '');
+        if (clean.length >= 10) phones.push(clean.slice(-10));
+      }
+    });
+
+    const userQueries = [];
+    if (objectIds.length > 0) userQueries.push({ _id: { $in: objectIds } });
+    if (emails.length > 0) userQueries.push({ email: { $in: emails } });
+    if (phones.length > 0) userQueries.push({ phoneNumber: { $in: phones } });
 
     let usersList = [];
-    if (userOrConditions.length > 0) {
-      usersList = await User.find({ $or: userOrConditions })
+    if (userQueries.length > 0) {
+      usersList = await User.find(userQueries.length === 1 ? userQueries[0] : { $or: userQueries })
         .select('firstName lastName phoneNumber shopName role email kycStatus userType')
         .lean();
     }
@@ -737,6 +753,20 @@ exports.getFunnelData = async (req, res, next) => {
       startDate = new Date(Date.now() - numDays * 24 * 60 * 60 * 1000);
     }
 
+    // 0. Check Redis Cache First
+    const agentScope = assignedUserData ? (req.user?._id?.toString() || req.user?.email || 'sales') : 'global';
+    const cacheKey = `stats:events:funnel:${agentScope}:${days}:${reqStart || ''}_${reqEnd || ''}`;
+    if (redisClient && redisClient.isOpen) {
+      try {
+        const cached = await redisClient.get(cacheKey);
+        if (cached) {
+          return res.json({ success: true, data: JSON.parse(cached) });
+        }
+      } catch (err) {
+        console.error('[FunnelAnalytics] Redis cache read error:', err.message);
+      }
+    }
+
     const timeframeQuery = { createdAt: { $gte: startDate, $lte: endDate } };
     const cartTimeframeQuery = { updatedAt: { $gte: startDate, $lte: endDate } };
 
@@ -869,6 +899,14 @@ exports.getFunnelData = async (req, res, next) => {
       };
     });
 
+    if (redisClient && redisClient.isOpen) {
+      try {
+        await redisClient.set(cacheKey, JSON.stringify(formatted), { EX: 60 });
+      } catch (cacheErr) {
+        console.error('[FunnelAnalytics] Redis cache write error:', cacheErr.message);
+      }
+    }
+
     res.json({ success: true, data: formatted });
   } catch (error) {
     next(error);
@@ -935,14 +973,25 @@ exports.getSummaryMetrics = async (req, res, next) => {
       }
     }
 
-    // 2. Query MongoDB, limiting matching events to the last 14 days for optimal performance
-    const fourteenDaysAgo = new Date();
-    fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14);
-
     const userEventStates = await Event.aggregate([
       {
         $match: {
-          timestamp: { $gte: fourteenDaysAgo }
+          timestamp: { $gte: fourteenDaysAgo },
+          eventType: {
+            $in: [
+              'payment_failed',
+              'payment_fail',
+              'checkout_started',
+              'checkout_init',
+              'add_to_cart',
+              'cart_add',
+              'payment_success',
+              'payment_completed',
+              'order_placed',
+              'order_created',
+              'order_completed'
+            ]
+          }
         }
       },
       {

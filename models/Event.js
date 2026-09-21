@@ -52,6 +52,10 @@ const eventSchema = new mongoose.Schema({
 
 eventSchema.index({ user: 1, timestamp: -1 });
 eventSchema.index({ eventType: 1, timestamp: -1 });
+eventSchema.index({ timestamp: -1, eventType: 1 });
+eventSchema.index({ role: 1, timestamp: -1 });
+eventSchema.index({ user: 1, eventType: 1, timestamp: -1 });
+eventSchema.index({ timestamp: -1, user: 1 });
 
 const Event = mongoose.model('Event', eventSchema);
 
