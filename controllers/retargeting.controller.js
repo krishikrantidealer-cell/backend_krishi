@@ -46,8 +46,9 @@ const getRetargetingCohorts = async (req, res) => {
     }
 
     const leads = await User.find(query)
-      .select('firstName lastName shopName phoneNumber role preferredLanguage state city updatedAt assignedAgent')
+      .select('firstName lastName shopName phoneNumber role preferredLanguage state city address updatedAt assignedAgent')
       .populate('assignedAgent', 'firstName lastName')
+      .sort({ updatedAt: -1 })
       .limit(100);
 
     res.json({
@@ -79,23 +80,38 @@ const sendRetargetingBroadcast = async (req, res) => {
     const users = await User.find({ _id: { $in: userIds } });
     let successCount = 0;
     let failCount = 0;
+    const errors = [];
 
     for (const u of users) {
       if (!u.phoneNumber) continue;
       try {
         const targetLang = u.preferredLanguage || defaultLanguage;
+        const customerName = `${u.firstName || ''} ${u.lastName || ''}`.trim() || u.shopName || 'Customer';
+        const city = u.city || u.address?.cityTehsil || '';
+
+        // Dynamic placeholder resolution
+        const resolvedValues = bodyValues.map(v => {
+          let str = String(v);
+          str = str.replace(/\{\{name\}\}/gi, customerName);
+          str = str.replace(/\{\{shop\}\}/gi, u.shopName || customerName);
+          str = str.replace(/\{\{city\}\}/gi, city);
+          return str;
+        });
+
+        const finalValues = resolvedValues.length > 0 ? resolvedValues : [customerName];
 
         await myoperatorService.sendMessage({
           phone: u.phoneNumber,
           type: 'Template',
           templateName,
-          bodyValues: bodyValues.length > 0 ? bodyValues : [u.firstName || u.shopName || 'Customer'],
+          bodyValues: finalValues,
           languageCode: targetLang
         });
         successCount++;
       } catch (err) {
         console.error(`[Retargeting Broadcast] Failed for ${u.phoneNumber}:`, err.message);
         failCount++;
+        errors.push({ phone: u.phoneNumber, error: err.message });
       }
     }
 
@@ -103,7 +119,8 @@ const sendRetargetingBroadcast = async (req, res) => {
       success: true,
       message: `Broadcast completed. Sent: ${successCount}, Failed: ${failCount}`,
       successCount,
-      failCount
+      failCount,
+      errors: errors.slice(0, 5)
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

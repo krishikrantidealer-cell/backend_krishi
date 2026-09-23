@@ -10,5 +10,6 @@ router.post('/webhook/myoperator/calls', controller.handleCallWebhook);
 router.use(protect);
 router.post('/trigger', controller.triggerOutboundCall);
 router.get('/logs', controller.getCallLogs);
+router.post('/disposition', controller.saveCallDisposition);
 
 module.exports = router;

@@ -23,6 +23,7 @@ const retargetingRoutes = require('./routes/retargeting.routes');
 const callRoutes = require('./routes/call.routes');
 const bannerRoutes = require('./routes/banner.routes');
 const marketingCampaignRoutes = require('./routes/marketing.campaign.routes');
+const timelineRoutes = require('./routes/timeline.routes');
 
 const app = express();
 const zlib = require('zlib');
@@ -88,6 +89,7 @@ app.use('/api/retargeting', retargetingRoutes);
 app.use('/api/calls', callRoutes);
 app.use('/api/banners', bannerRoutes);
 app.use('/api/marketing/push-campaigns', marketingCampaignRoutes);
+app.use('/api/timeline', timelineRoutes);
 
 // 404 Handler for API routes
 app.use('/api', (req, res) => {

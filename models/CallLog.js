@@ -83,6 +83,18 @@ const callLogSchema = new mongoose.Schema({
   callSummary: {
     type: String
   },
+  userDisposition: {
+    type: String,       // e.g. "Interested", "Callback Requested", "Price Objection", "Order Ready", "Wrong Number"
+    default: null
+  },
+  followUpDate: {
+    type: Date,
+    default: null
+  },
+  followUpNote: {
+    type: String,
+    default: null
+  },
   notes: {
     type: String
   },
