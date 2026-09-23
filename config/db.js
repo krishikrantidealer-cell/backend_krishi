@@ -5,8 +5,7 @@ let isConnecting = false;
 const connectDB = async () => {
   const mongoURI = process.env.MONGODB_URI || process.env.MONGO_URI;
   if (!mongoURI) {
-    console.error('Error: MONGODB_URI or MONGO_URI environment variable is missing.');
-    return;
+    throw new Error('MONGODB_URI or MONGO_URI environment variable is missing.');
   }
 
   if (mongoose.connection.readyState === 1) {
@@ -31,8 +30,7 @@ const connectDB = async () => {
   } catch (error) {
     isConnecting = false;
     console.error(`MongoDB Connection Error: ${error.message}`);
-    // Auto-retry connection after 3 seconds
-    setTimeout(connectDB, 3000);
+    throw error;
   }
 };
 

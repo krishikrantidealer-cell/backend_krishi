@@ -8,11 +8,7 @@ const PORT = process.env.PORT || 8080;
 const startServer = async () => {
   try {
     // 1. Connect to DB first so models and queries are immediately ready
-    try {
-      await connectDB();
-    } catch (dbErr) {
-      console.error('⚠️ Initial MongoDB connection failed:', dbErr.message);
-    }
+    await connectDB();
 
     // 2. Initialize App & Server
     const app = require('./app');

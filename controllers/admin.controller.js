@@ -66,7 +66,9 @@ exports.getAuditLogs = async (req, res, next) => {
     }
 
     if (search) {
-      const searchRegex = new RegExp(search, 'i');
+      const cleanSearch = String(search).trim();
+      const escapedSearch = cleanSearch.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+      const searchRegex = new RegExp(escapedSearch, 'i');
       const matchedUsers = await User.find({
         $or: [
           { firstName: searchRegex },

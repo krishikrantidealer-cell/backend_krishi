@@ -1,4 +1,5 @@
 const Order = require('../models/Order');
+const Product = require('../models/Product');
 const Cart = require('../models/Cart');
 const User = require('../models/User');
 const CheckoutSession = require('../models/CheckoutSession');
@@ -42,6 +43,26 @@ class OrderService {
     // Invalidate analytics caches
     this._invalidateAnalyticsCache().catch(() => {});
 
+    // Atomically decrement stock for each ordered item
+    if (Array.isArray(session.items)) {
+      for (const item of session.items) {
+        const prodId = item.product?._id || item.product;
+        const qty = parseInt(item.quantity || 1, 10);
+        if (prodId && qty > 0) {
+          try {
+            await Product.findByIdAndUpdate(prodId, {
+              $inc: {
+                stock: -qty,
+                totalStock: -qty
+              }
+            });
+          } catch (stockErr) {
+            console.error(`[Stock Decrement Error] Failed for product ${prodId}:`, stockErr.message);
+          }
+        }
+      }
+    }
+
     // Mark session as completed
     session.orderCreated = true;
     session.createdOrderId = order._id;
@@ -57,15 +78,10 @@ class OrderService {
       await cart.save();
     }
 
-    // Sync & Notify
-    try {
-      await Promise.race([
-        sheetsService.appendOrder(order),
-        new Promise(resolve => setTimeout(resolve, 3500))
-      ]);
-    } catch (err) {
-      console.error('[Sheets] confirmOrder error:', err.message);
-    }
+    // Sync to Google Sheets asynchronously (non-blocking)
+    sheetsService.appendOrder(order).catch(err => {
+      console.error('[Sheets Sync Non-blocking Error]:', err.message);
+    });
 
     User.findById(session.user).then(user => {
       if (user) {

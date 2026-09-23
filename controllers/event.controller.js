@@ -2,7 +2,7 @@ const Event = require('../models/Event');
 const mongoose = require('mongoose');
 const User = require('../models/User');
 const { redisClient } = require('../config/redis');
-const { sendToAll } = require('../services/websocket.service');
+const { broadcastToRoles } = require('../services/websocket.service');
 const { autoIdentifyDistrict, autoIdentifyState } = require('../utils/geoNormalizer');
 
 function calculateIntentScore(screen = '', action = '', payload = {}) {
@@ -69,8 +69,8 @@ exports.createEvent = async (req, res, next) => {
       await redisClient.hSet(presenceKey, presenceData);
       await redisClient.expire(presenceKey, 120);
 
-      // Notify Admins via WebSocket
-      sendToAll({ type: 'PRESENCE_UPDATE', data: { user, ...presenceData } });
+      // Notify Admins & Sales via WebSocket
+      broadcastToRoles(['admin', 'sales'], { type: 'PRESENCE_UPDATE', data: { user, ...presenceData } });
     }
 
     // Increment Redis daily events count

@@ -60,7 +60,10 @@ class AuthController {
   async sendOTP(req, res) {
     try {
       const { phoneNumber } = req.body;
-      const otp = await authService.sendOTP(phoneNumber);
+      if (!phoneNumber || typeof phoneNumber !== 'string' || phoneNumber.trim().length < 10) {
+        return res.status(400).json({ success: false, message: 'Please provide a valid 10-digit phone number' });
+      }
+      const otp = await authService.sendOTP(phoneNumber.trim());
       
       res.status(200).json({ 
         success: true, 
@@ -76,10 +79,14 @@ class AuthController {
   async verifyOTP(req, res) {
     try {
       const { phoneNumber, otp, deviceId } = req.body;
+      if (!phoneNumber || !otp) {
+        return res.status(400).json({ success: false, message: 'Phone number and OTP are required' });
+      }
       
-      await authService.verifyOTP(phoneNumber, otp);
+      const cleanPhone = String(phoneNumber).trim();
+      await authService.verifyOTP(cleanPhone, String(otp).trim());
 
-      let user = await User.findOne({ phoneNumber, isDeleted: { $ne: true } });
+      let user = await User.findOne({ phoneNumber: cleanPhone, isDeleted: { $ne: true } });
 
       if (!user) {
         // Look for soft-deleted user in trash with matching phone prefix

@@ -47,11 +47,14 @@ class UserService {
 
     // Support database keyword search
     if (filters.search) {
-      const searchRegex = new RegExp(filters.search, 'i');
+      const cleanSearch = String(filters.search).trim();
+      const escapedSearch = cleanSearch.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+      const searchRegex = new RegExp(escapedSearch, 'i');
       const searchOr = {
         $or: [
           { firstName: searchRegex },
           { lastName: searchRegex },
+          { shopName: searchRegex },
           { email: searchRegex },
           { phoneNumber: searchRegex }
         ]

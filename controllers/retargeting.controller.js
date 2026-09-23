@@ -82,37 +82,42 @@ const sendRetargetingBroadcast = async (req, res) => {
     let failCount = 0;
     const errors = [];
 
-    for (const u of users) {
-      if (!u.phoneNumber) continue;
-      try {
-        const targetLang = u.preferredLanguage || defaultLanguage;
-        const customerName = `${u.firstName || ''} ${u.lastName || ''}`.trim() || u.shopName || 'Customer';
-        const city = u.city || u.address?.cityTehsil || '';
+    // Process in concurrent batches of 10 to avoid HTTP timeouts
+    const BATCH_SIZE = 10;
+    for (let i = 0; i < users.length; i += BATCH_SIZE) {
+      const batch = users.slice(i, i + BATCH_SIZE);
+      await Promise.allSettled(batch.map(async (u) => {
+        if (!u.phoneNumber) return;
+        try {
+          const targetLang = u.preferredLanguage || defaultLanguage;
+          const customerName = `${u.firstName || ''} ${u.lastName || ''}`.trim() || u.shopName || 'Customer';
+          const city = u.city || u.address?.cityTehsil || '';
 
-        // Dynamic placeholder resolution
-        const resolvedValues = bodyValues.map(v => {
-          let str = String(v);
-          str = str.replace(/\{\{name\}\}/gi, customerName);
-          str = str.replace(/\{\{shop\}\}/gi, u.shopName || customerName);
-          str = str.replace(/\{\{city\}\}/gi, city);
-          return str;
-        });
+          // Dynamic placeholder resolution
+          const resolvedValues = bodyValues.map(v => {
+            let str = String(v);
+            str = str.replace(/\{\{name\}\}/gi, customerName);
+            str = str.replace(/\{\{shop\}\}/gi, u.shopName || customerName);
+            str = str.replace(/\{\{city\}\}/gi, city);
+            return str;
+          });
 
-        const finalValues = resolvedValues.length > 0 ? resolvedValues : [customerName];
+          const finalValues = resolvedValues.length > 0 ? resolvedValues : [customerName];
 
-        await myoperatorService.sendMessage({
-          phone: u.phoneNumber,
-          type: 'Template',
-          templateName,
-          bodyValues: finalValues,
-          languageCode: targetLang
-        });
-        successCount++;
-      } catch (err) {
-        console.error(`[Retargeting Broadcast] Failed for ${u.phoneNumber}:`, err.message);
-        failCount++;
-        errors.push({ phone: u.phoneNumber, error: err.message });
-      }
+          await myoperatorService.sendMessage({
+            phone: u.phoneNumber,
+            type: 'Template',
+            templateName,
+            bodyValues: finalValues,
+            languageCode: targetLang
+          });
+          successCount++;
+        } catch (err) {
+          console.error(`[Retargeting Broadcast] Failed for ${u.phoneNumber}:`, err.message);
+          failCount++;
+          errors.push({ phone: u.phoneNumber, error: err.message });
+        }
+      }));
     }
 
     res.json({

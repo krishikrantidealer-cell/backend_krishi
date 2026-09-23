@@ -248,14 +248,17 @@ const handleCallWebhook = async (req, res) => {
         });
       }
 
+      const terminalStatuses = ['answered', 'ended', 'completed', 'missed', 'busy', 'failed'];
+      const isAlreadyTerminal = terminalStatuses.includes(callLog.status) && (callLog.durationSeconds > 0 || callLog.recordingUrl);
+
       if (event === 'call.answered') {
         callLog.status = 'answered';
       } else if (event === 'call.end' || event === 'call.summary') {
         callLog.status = duration > 0 ? 'answered' : (payload.status === 'busy' ? 'busy' : 'missed');
-        callLog.durationSeconds = duration;
+        if (duration > 0 || !callLog.durationSeconds) callLog.durationSeconds = duration;
         if (recordingUrl) callLog.recordingUrl = recordingUrl;
         callLog.callSummary = callSummary;
-      } else if (payload.status) {
+      } else if (payload.status && !isAlreadyTerminal) {
         callLog.status = payload.status.toLowerCase();
       }
 

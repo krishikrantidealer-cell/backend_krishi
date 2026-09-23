@@ -78,34 +78,40 @@ const initWebSocket = (server) => {
 
   wss.on('connection', async (ws, req) => {
     const parameters = url.parse(req.url, true).query;
-    const userId = parameters.userId;
+    const claimedUserId = parameters.userId;
     const token = parameters.token;
 
-    // ── Security: verify the JWT token matches the claimed userId ─────────────
-    if (userId && token) {
-      try {
-        const jwt = require('jsonwebtoken');
-        const decoded = jwt.verify(token, process.env.JWT_ACCESS_SECRET);
-        // Reject if the token's user id doesn't match the claimed userId
-        const tokenUserId = decoded.userId || decoded.id || decoded._id;
-        if (tokenUserId !== userId) {
-          console.warn(`[WS] Token userId mismatch — claimed: ${userId}, actual: ${tokenUserId}`);
-          ws.close(4001, 'Unauthorized');
-          return;
-        }
-      } catch (err) {
-        console.warn(`[WS] Invalid token on connection attempt:`, err.message);
-        ws.close(4001, 'Unauthorized');
-        return;
-      }
-    } else if (!userId) {
-      // No userId at all — disconnect silently
-      ws.close(4002, 'Missing userId');
+    // ── Security: Strictly verify JWT token on every WebSocket connection ───────
+    if (!token) {
+      console.warn(`[WS] Connection rejected: Missing token for user: ${claimedUserId || 'unknown'}`);
+      ws.close(4001, 'Unauthorized: Missing token');
       return;
     }
 
-    if (userId) {
-      ws.userId = userId;
+    let authenticatedUserId;
+    try {
+      const { verifyAccessToken } = require('../utils/jwt');
+      const decoded = verifyAccessToken(token);
+      if (!decoded) {
+        console.warn(`[WS] Connection rejected: Invalid or expired token for user: ${claimedUserId || 'unknown'}`);
+        ws.close(4001, 'Unauthorized: Invalid token');
+        return;
+      }
+      authenticatedUserId = (decoded.userId || decoded.id || decoded._id)?.toString();
+    } catch (err) {
+      console.warn(`[WS] Connection rejected: Token verification error:`, err.message);
+      ws.close(4001, 'Unauthorized: Invalid token');
+      return;
+    }
+
+    if (!authenticatedUserId || (claimedUserId && authenticatedUserId !== claimedUserId.toString())) {
+      console.warn(`[WS] Token userId mismatch — claimed: ${claimedUserId}, actual: ${authenticatedUserId}`);
+      ws.close(4001, 'Unauthorized: Identity mismatch');
+      return;
+    }
+
+    const userId = authenticatedUserId;
+    ws.userId = userId;
 
       // Fetch user info for targeted broadcasts and better display
       try {
@@ -133,7 +139,6 @@ const initWebSocket = (server) => {
           timestamp: new Date().toISOString()
         }
       }));
-    }
 
     ws.on('message', async (message) => {
       try {
