@@ -5,18 +5,47 @@ const User = require('../models/User');
 class MyOperatorService {
   constructor() {
     this.wabaKey = process.env.MYOPERATOR_WABA_KEY;
+    this.companyId = process.env.MYOPERATOR_COMPANY_ID || '6ab0de5d51766538';
+    this.phoneNumberId = process.env.MYOPERATOR_PHONE_NUMBER_ID || '';
     this.baseUrl = 'https://publicapi.myoperator.co';
   }
 
   getHeaders() {
-    return {
-      'x-api-key': this.wabaKey,
-      'Content-Type': 'application/json'
+    const headers = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json'
     };
+    if (this.wabaKey) {
+      headers['Authorization'] = `Bearer ${this.wabaKey}`;
+    }
+    if (this.companyId) {
+      headers['X-MYOP-COMPANY-ID'] = this.companyId;
+    }
+    return headers;
   }
 
   /**
-   * Send WhatsApp Message via MyOperator WABA Public API
+   * Helper to ensure phone_number_id is available
+   */
+  async getPhoneNumberId() {
+    if (this.phoneNumberId) return this.phoneNumberId;
+    try {
+      const response = await axios.get(`${this.baseUrl}/chat/phonenumbers`, {
+        headers: this.getHeaders()
+      });
+      const numbers = response.data?.data?.results || response.data?.data || [];
+      if (numbers.length > 0 && numbers[0].id) {
+        this.phoneNumberId = numbers[0].id;
+        return this.phoneNumberId;
+      }
+    } catch (err) {
+      console.warn('[MyOperator] Could not auto-fetch phone_number_id:', err.message);
+    }
+    return '';
+  }
+
+  /**
+   * Send WhatsApp Message via MyOperator WABA Public API (/chat/messages)
    */
   async sendMessage({ phone, countryCode = '91', type = 'Text', textBody = '', templateName = '', languageCode = 'en', bodyValues = [], mediaUrl = '', mediaType = 'Image' }) {
     if (!this.wabaKey) {
@@ -26,35 +55,37 @@ class MyOperatorService {
 
     try {
       const cleanPhone = phone.replace(/\D/g, '').replace(/^91/, '');
-      const fullPhone = `+${countryCode}${cleanPhone}`;
+      const phoneNumId = await this.getPhoneNumberId();
 
       let payload = {
-        recipient: {
-          country_code: `+${countryCode}`,
-          phone_number: cleanPhone
-        }
+        phone_number_id: phoneNumId || undefined,
+        customer_country_code: countryCode,
+        customer_number: cleanPhone,
+        data: {}
       };
 
       if (type === 'Template' || templateName) {
-        payload.type = 'template';
-        payload.template = {
-          name: templateName,
-          language: {
-            code: languageCode
-          },
-          components: [
-            {
-              type: 'body',
-              parameters: bodyValues.map(val => ({
-                type: 'text',
-                text: String(val)
-              }))
-            }
-          ]
+        payload.data = {
+          type: 'template',
+          template: {
+            name: templateName,
+            language: {
+              code: languageCode
+            },
+            components: [
+              {
+                type: 'body',
+                parameters: bodyValues.map(val => ({
+                  type: 'text',
+                  text: String(val)
+                }))
+              }
+            ]
+          }
         };
 
         if (mediaUrl) {
-          payload.template.components.unshift({
+          payload.data.template.components.unshift({
             type: 'header',
             parameters: [
               {
@@ -68,24 +99,27 @@ class MyOperatorService {
         }
       } else {
         // Freeform Session Message
-        payload.type = 'text';
-        payload.text = {
-          body: textBody || ''
+        payload.data = {
+          type: 'text',
+          context: {
+            body: textBody || '',
+            preview_url: false
+          }
         };
 
         if (mediaUrl) {
           const typeKey = mediaType.toLowerCase() === 'document' ? 'document' : 'image';
-          payload.type = typeKey;
-          payload[typeKey] = {
+          payload.data.type = typeKey;
+          payload.data[typeKey] = {
             link: mediaUrl,
             caption: textBody || ''
           };
         }
       }
 
-      console.log(`[MyOperator WABA] Dispatching ${payload.type} to ${fullPhone}`);
+      console.log(`[MyOperator WABA] Dispatching to +${countryCode}${cleanPhone}:`, JSON.stringify(payload));
 
-      const response = await axios.post(`${this.baseUrl}/messages`, payload, {
+      const response = await axios.post(`${this.baseUrl}/chat/messages`, payload, {
         headers: this.getHeaders()
       });
 
@@ -93,7 +127,7 @@ class MyOperatorService {
     } catch (error) {
       const errorData = error.response?.data;
       console.error('[MyOperator WABA API Error]:', JSON.stringify(errorData || error.message));
-      throw new Error(errorData?.message || errorData?.error?.message || error.message || 'Failed to dispatch WhatsApp message via MyOperator');
+      throw new Error(errorData?.message || errorData?.error?.message || (errorData?.errors ? JSON.stringify(errorData.errors) : error.message) || 'Failed to dispatch WhatsApp message via MyOperator');
     }
   }
 
@@ -103,10 +137,10 @@ class MyOperatorService {
   async getTemplates() {
     if (!this.wabaKey) return [];
     try {
-      const response = await axios.get(`${this.baseUrl}/templates`, {
+      const response = await axios.get(`${this.baseUrl}/chat/templates`, {
         headers: this.getHeaders()
       });
-      return response.data?.data || response.data || [];
+      return response.data?.data?.results || response.data?.data || response.data || [];
     } catch (error) {
       console.error('[MyOperator WABA Templates Error]:', error.response?.data || error.message);
       return [];
