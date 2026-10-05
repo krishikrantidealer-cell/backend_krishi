@@ -229,6 +229,22 @@ const userSchema = new mongoose.Schema({
     type: Number,
     default: 500000
   },
+  // Dedicated MyOperator Agent Account Configuration (DID, VID, Extension, Credentials)
+  myoperatorConfig: {
+    did: { type: String, trim: true, index: true }, // Dedicated Inward/Outward Number (e.g. 9112345678)
+    vid: { type: String, trim: true, index: true }, // Virtual ID / Extension (e.g. 101, 102)
+    extension: { type: String, trim: true },
+    apiKey: { type: String, trim: true },
+    secretKey: { type: String, trim: true },
+    token: { type: String, trim: true },
+    companyId: { type: String, trim: true },
+    wabaPhoneNumberId: { type: String, trim: true }, // Dedicated WhatsApp Phone ID if applicable
+    receiveCalls: { type: Boolean, default: true }
+  },
+  isAvailableForCalls: {
+    type: Boolean,
+    default: true
+  },
   status: {
     type: String,
     default: 'prospect'
@@ -253,7 +269,7 @@ const userSchema = new mongoose.Schema({
     timestamp: { type: String },
     type: {
       type: String,
-      enum: ['general', 'call', 'meeting', 'followup', 'quote', 'issue'],
+      enum: ['general', 'call', 'meeting', 'followup', 'quote', 'issue', 'call_disposition'],
       default: 'general'
     },
     priority: {
@@ -306,7 +322,6 @@ const userSchema = new mongoose.Schema({
 // Performance Indexes for fast Admin Panel Lead & Dealer filtering
 userSchema.index({ role: 1, kycStatus: 1, isDeleted: 1 });
 userSchema.index({ assignedAgent: 1, isDeleted: 1 });
-userSchema.index({ phoneNumber: 1 });
 userSchema.index({ createdAt: -1 });
 
 const User = mongoose.model('User', userSchema);

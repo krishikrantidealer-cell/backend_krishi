@@ -47,7 +47,7 @@ class MyOperatorService {
   /**
    * Send WhatsApp Message via MyOperator WABA Public API (/chat/messages)
    */
-  async sendMessage({ phone, countryCode = '91', type = 'Text', textBody = '', templateName = '', languageCode = 'en', bodyValues = [], mediaUrl = '', mediaType = 'Image' }) {
+  async sendMessage({ agentId, phone, countryCode = '91', type = 'Text', textBody = '', templateName = '', languageCode = 'en', bodyValues = [], mediaUrl = '', mediaType = 'Image' }) {
     if (!this.wabaKey) {
       console.warn('[MyOperator WABA] API Key missing. Check MYOPERATOR_WABA_KEY env var.');
       return null;
@@ -55,10 +55,17 @@ class MyOperatorService {
 
     try {
       const cleanPhone = phone.replace(/\D/g, '').replace(/^91/, '');
-      const phoneNumId = await this.getPhoneNumberId();
+      
+      // Check if the agent has a dedicated WhatsApp phone number or custom sub-account
+      let agentUser = null;
+      if (agentId) {
+        agentUser = await User.findById(agentId);
+      }
+      const agentConfig = agentUser?.myoperatorConfig || {};
+      const customPhoneNumId = agentConfig.wabaPhoneNumberId || (await this.getPhoneNumberId());
 
       let payload = {
-        phone_number_id: phoneNumId || undefined,
+        phone_number_id: customPhoneNumId || undefined,
         customer_country_code: countryCode,
         customer_number: cleanPhone,
         data: {}
@@ -117,11 +124,18 @@ class MyOperatorService {
         }
       }
 
-      console.log(`[MyOperator WABA] Dispatching to +${countryCode}${cleanPhone}:`, JSON.stringify(payload));
+      console.log(`[MyOperator WABA] Dispatching to +${countryCode}${cleanPhone} from Agent (${agentUser?.firstName || 'Main'} PhoneId: ${customPhoneNumId}):`, JSON.stringify(payload));
 
-      const response = await axios.post(`${this.baseUrl}/chat/messages`, payload, {
-        headers: this.getHeaders()
-      });
+      const headers = this.getHeaders();
+      const customWabaKey = agentConfig.wabaKey || agentConfig.apiKey;
+      if (customWabaKey) {
+        headers['Authorization'] = `Bearer ${customWabaKey}`;
+      }
+      if (agentConfig.companyId) {
+        headers['X-MYOP-COMPANY-ID'] = agentConfig.companyId;
+      }
+
+      const response = await axios.post(`${this.baseUrl}/chat/messages`, payload, { headers });
 
       return response.data;
     } catch (error) {
@@ -137,13 +151,75 @@ class MyOperatorService {
   async getTemplates() {
     if (!this.wabaKey) return [];
     try {
-      const response = await axios.get(`${this.baseUrl}/chat/templates`, {
+      const response = await axios.get(`${this.baseUrl}/chat/templates?waba_template_status=approved&limit=50&offset=0`, {
         headers: this.getHeaders()
       });
       return response.data?.data?.results || response.data?.data || response.data || [];
     } catch (error) {
       console.error('[MyOperator WABA Templates Error]:', error.response?.data || error.message);
       return [];
+    }
+  }
+
+  /**
+   * Upload Media (Image/Video/PDF Document) to MyOperator to obtain media_id
+   */
+  async uploadMedia({ fileBuffer, fileName, mimeType }) {
+    if (!this.wabaKey) {
+      throw new Error('MYOPERATOR_WABA_KEY is required to upload media.');
+    }
+
+    try {
+      const FormData = require('form-data');
+      const form = new FormData();
+      form.append('file', fileBuffer, { filename: fileName, contentType: mimeType });
+
+      const headers = {
+        ...this.getHeaders(),
+        ...form.getHeaders()
+      };
+
+      const response = await axios.post(`${this.baseUrl}/chat/media/upload`, form, { headers });
+      return response.data?.data || response.data;
+    } catch (error) {
+      console.error('[MyOperator WABA Media Upload Error]:', error.response?.data || error.message);
+      throw new Error(error.response?.data?.message || error.message || 'Failed to upload media to MyOperator');
+    }
+  }
+
+  /**
+   * Create a new WhatsApp Template at Meta via MyOperator API
+   */
+  async createTemplate(templatePayload) {
+    if (!this.wabaKey) {
+      throw new Error('MYOPERATOR_WABA_KEY is required to create templates.');
+    }
+
+    try {
+      const response = await axios.post(`${this.baseUrl}/chat/templates`, templatePayload, {
+        headers: this.getHeaders()
+      });
+      return response.data;
+    } catch (error) {
+      console.error('[MyOperator Create Template Error]:', error.response?.data || error.message);
+      throw new Error(error.response?.data?.message || error.message || 'Failed to create template');
+    }
+  }
+
+  /**
+   * Delete a WhatsApp Template from MyOperator
+   */
+  async deleteTemplate(templateId) {
+    if (!this.wabaKey || !templateId) return false;
+
+    try {
+      const response = await axios.delete(`${this.baseUrl}/chat/templates/${templateId}`, {
+        headers: this.getHeaders()
+      });
+      return response.data?.status === 'success' || response.status === 200;
+    } catch (error) {
+      console.error('[MyOperator Delete Template Error]:', error.response?.data || error.message);
+      return false;
     }
   }
 

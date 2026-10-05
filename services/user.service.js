@@ -137,6 +137,8 @@ class UserService {
       'leadStatus',
       'leadNotes',
       'monthlyTarget',
+      'myoperatorConfig',
+      'isAvailableForCalls',
       'notesHistory',
       'noteType',
       'notePriority'

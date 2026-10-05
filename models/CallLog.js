@@ -116,6 +116,7 @@ const callLogSchema = new mongoose.Schema({
 callLogSchema.index({ customerPhone: 1, createdAt: -1 });
 callLogSchema.index({ agentId: 1, createdAt: -1 });
 callLogSchema.index({ direction: 1, status: 1, createdAt: -1 });
+callLogSchema.index({ status: 1, createdAt: -1 });
 callLogSchema.index({ contactId: 1, createdAt: -1 });
 
 module.exports = mongoose.model('CallLog', callLogSchema);

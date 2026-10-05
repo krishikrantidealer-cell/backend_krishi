@@ -87,6 +87,7 @@ app.use('/api', webhookRoutes);
 app.use('/api', conversationRoutes);
 app.use('/api/retargeting', retargetingRoutes);
 app.use('/api/calls', callRoutes);
+app.use('/api/call', callRoutes);
 app.use('/api/banners', bannerRoutes);
 app.use('/api/marketing/push-campaigns', marketingCampaignRoutes);
 app.use('/api/timeline', timelineRoutes);

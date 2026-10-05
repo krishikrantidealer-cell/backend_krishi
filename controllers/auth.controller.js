@@ -48,7 +48,11 @@ class AuthController {
           isVerified: user.isVerified,
           isProfileComplete: user.isProfileComplete,
           isKycComplete: user.isKycComplete,
-          role: user.role
+          role: user.role,
+          monthlyTarget: user.monthlyTarget,
+          permissions: user.permissions,
+          myoperatorConfig: user.myoperatorConfig,
+          isAvailableForCalls: user.isAvailableForCalls
         },
         ...tokens
       });

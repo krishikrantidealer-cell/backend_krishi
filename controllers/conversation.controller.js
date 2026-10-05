@@ -3,6 +3,8 @@ const Message = require('../models/Message');
 const Contact = require('../models/Contact');
 const Note = require('../models/Note');
 const User = require('../models/User');
+const CannedResponse = require('../models/CannedResponse');
+const WhatsAppTemplate = require('../models/WhatsAppTemplate');
 const myoperatorService = require('../services/myoperator.service');
 const wsService = require('../services/websocket.service');
 
@@ -10,21 +12,34 @@ const wsService = require('../services/websocket.service');
 const getConversations = async (req, res) => {
   try {
     const { page = 1, limit = 20, search = '', status = 'open' } = req.query;
-    const skip = (page - 1) * limit;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
 
-    const query = { status };
+    const query = {};
 
-    // Role-based security filters: sales agents only see their own assigned leads
+    if (status && status !== 'all' && status.trim() !== '') {
+      query.status = status;
+    }
+
+    // Role-based security filters: sales agents see their assigned leads or unassigned leads
     if (req.user.role === 'sales') {
-      query.assignedTo = req.user.id;
+      const assignedContactIds = await Contact.find({ assignedTo: req.user.id }).distinct('_id');
+      query.$or = [
+        { assignedTo: req.user.id },
+        ...(assignedContactIds.length > 0 ? [{ contactId: { $in: assignedContactIds } }] : [])
+      ];
     }
 
     // Apply Search Filters by customer name or phone number
-    if (search) {
+    if (search && search.trim() !== '') {
+      const cleanSearch = search.trim();
+      const cleanPhone = cleanSearch.replace(/\D/g, '').replace(/^91/, '');
       const matchingContacts = await Contact.find({
         $or: [
-          { name: { $regex: search, $options: 'i' } },
-          { phone: { $regex: search } }
+          { name: { $regex: cleanSearch, $options: 'i' } },
+          ...(cleanPhone ? [
+            { phone: { $regex: cleanPhone } },
+            { phone: { $regex: `91${cleanPhone}` } }
+          ] : [])
         ]
       }).select('_id');
       const contactIds = matchingContacts.map(c => c._id);
@@ -33,7 +48,7 @@ const getConversations = async (req, res) => {
 
     const conversations = await Conversation.find(query)
       .populate('contactId')
-      .populate('assignedTo', 'firstName lastName email')
+      .populate('assignedTo', 'firstName lastName email phoneNumber')
       .sort({ lastMessageAt: -1 })
       .skip(skip)
       .limit(parseInt(limit));
@@ -43,7 +58,7 @@ const getConversations = async (req, res) => {
     res.json({
       success: true,
       data: conversations,
-      pagination: { total, page: parseInt(page), pages: Math.ceil(total / limit) }
+      pagination: { total, page: parseInt(page), pages: Math.ceil(total / parseInt(limit)) }
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -103,8 +118,9 @@ const sendConversationMessage = async (req, res) => {
 
     const selectedLang = languageCode || conversation.contactId?.preferredLanguage || 'en';
 
-    // Dispatches message to MyOperator WABA API
+    // Dispatches message to MyOperator WABA API with dedicated agent credentials
     const myopResponse = await myoperatorService.sendMessage({
+      agentId: req.user.id,
       phone: conversation.contactId.phone,
       type,
       textBody: content,
@@ -445,6 +461,330 @@ const updateConversationLanguage = async (req, res) => {
   }
 };
 
+/**
+ * Fetch WhatsApp Templates (Merges DB records & MyOperator live API)
+ */
+const getTemplates = async (req, res) => {
+  try {
+    const dbTemplates = await WhatsAppTemplate.find().sort({ createdAt: -1 }).lean();
+    let providerTemplates = [];
+    try {
+      providerTemplates = await myoperatorService.getTemplates();
+    } catch (pErr) {
+      console.warn('[MyOperator] Could not load live templates from provider:', pErr.message);
+    }
+
+    // Default Seed Templates if database is completely empty
+    if (dbTemplates.length === 0 && (!providerTemplates || providerTemplates.length === 0)) {
+      const defaultSeeds = [
+        {
+          name: 'krishi_order_dispatch',
+          category: 'UTILITY',
+          language: 'en',
+          headerType: 'NONE',
+          body: 'Namaste {{1}}, your Krishi Kranti order #{{2}} has been dispatched! Track your shipment: {{3}}',
+          footer: 'Krishi Kranti Organics',
+          sampleVariables: ['Farmer Rajesh', 'ORD-9842', 'https://track.krishikranti.com'],
+          status: 'APPROVED'
+        },
+        {
+          name: 'krishi_welcome_greeting',
+          category: 'MARKETING',
+          language: 'en',
+          headerType: 'NONE',
+          body: 'Hello {{1}}, welcome to Krishi Kranti Organics! We provide 100% certified bio-fertilizers and organic pest control solutions directly to your farm.',
+          footer: 'Empowering Sustainable Farming',
+          sampleVariables: ['Kisan Mitra'],
+          status: 'APPROVED'
+        },
+        {
+          name: 'krishi_payment_reminder',
+          category: 'UTILITY',
+          language: 'en',
+          headerType: 'NONE',
+          body: 'Dear {{1}}, a pending invoice of ₹{{2}} is due for order #{{3}}. Please complete the payment to avoid delivery delays.',
+          footer: 'Accounts Dept - Krishi Kranti',
+          sampleVariables: ['Vijay Kumar', '4,500', 'INV-5512'],
+          status: 'APPROVED'
+        }
+      ];
+
+      for (const s of defaultSeeds) {
+        await WhatsAppTemplate.create(s);
+      }
+      const seeded = await WhatsAppTemplate.find().sort({ createdAt: -1 }).lean();
+      return res.json({ success: true, data: seeded });
+    }
+
+    // Merge & format response
+    const combined = [...dbTemplates];
+    if (Array.isArray(providerTemplates)) {
+      for (const pt of providerTemplates) {
+        const name = pt.name || pt.element_name;
+        if (name && !combined.some(c => c.name === name)) {
+          combined.push({
+            name,
+            category: pt.category || 'UTILITY',
+            language: pt.language || 'en',
+            body: pt.body || pt.data?.body || (pt.components?.find(c => c.type === 'BODY')?.text) || name,
+            status: pt.status || 'APPROVED',
+            providerTemplateId: pt.id || pt.uuid,
+            buttons: pt.buttons || []
+          });
+        }
+      }
+    }
+
+    res.json({ success: true, data: combined });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * Create a new WhatsApp Template and submit to MyOperator / Meta for approval
+ */
+const createTemplate = async (req, res) => {
+  try {
+    const {
+      name,
+      category = 'UTILITY',
+      language = 'en',
+      headerType = 'NONE',
+      headerText = '',
+      body,
+      footer = '',
+      buttons = [],
+      sampleVariables = []
+    } = req.body;
+
+    if (!name || !body) {
+      return res.status(400).json({ success: false, message: 'Template name and body are required' });
+    }
+
+    const cleanName = name.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_');
+
+    // Build standard Meta / WABA component payload
+    const components = [];
+    if (headerType === 'TEXT' && headerText) {
+      components.push({ type: 'HEADER', format: 'TEXT', text: headerText });
+    } else if (headerType === 'IMAGE') {
+      components.push({ type: 'HEADER', format: 'IMAGE' });
+    } else if (headerType === 'DOCUMENT') {
+      components.push({ type: 'HEADER', format: 'DOCUMENT' });
+    }
+
+    components.push({ type: 'BODY', text: body });
+
+    if (footer && footer.trim()) {
+      components.push({ type: 'FOOTER', text: footer.trim() });
+    }
+
+    if (Array.isArray(buttons) && buttons.length > 0) {
+      components.push({
+        type: 'BUTTONS',
+        buttons: buttons.map(b => ({
+          type: b.type || 'QUICK_REPLY',
+          text: b.text,
+          ...(b.url && { url: b.url }),
+          ...(b.phoneNumber && { phone_number: b.phoneNumber })
+        }))
+      });
+    }
+
+    const providerPayload = {
+      name: cleanName,
+      category: category.toUpperCase(),
+      language,
+      components
+    };
+
+    let providerResponse = null;
+    let initialStatus = 'PENDING_APPROVAL';
+
+    try {
+      providerResponse = await myoperatorService.createTemplate(providerPayload);
+      if (providerResponse?.status === 'APPROVED' || providerResponse?.status === 'approved') {
+        initialStatus = 'APPROVED';
+      }
+    } catch (provErr) {
+      console.warn('[MyOperator] Template submission queued or provider error:', provErr.message);
+    }
+
+    const templateDoc = await WhatsAppTemplate.create({
+      name: cleanName,
+      category: category.toUpperCase(),
+      language,
+      headerType,
+      headerText,
+      body,
+      footer,
+      buttons,
+      sampleVariables,
+      status: initialStatus,
+      providerTemplateId: providerResponse?.id || providerResponse?.template_id || null,
+      createdBy: req.user.id
+    });
+
+    res.json({
+      success: true,
+      message: 'Template submitted successfully and is awaiting approval',
+      data: templateDoc
+    });
+  } catch (error) {
+    console.error('[Create WhatsApp Template Error]:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * Delete a WhatsApp Template
+ */
+const deleteTemplate = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const template = await WhatsAppTemplate.findById(id);
+    
+    if (template?.providerTemplateId) {
+      try {
+        await myoperatorService.deleteTemplate(template.providerTemplateId);
+      } catch (_) {}
+    }
+
+    await WhatsAppTemplate.findByIdAndDelete(id);
+    res.json({ success: true, message: 'Template removed successfully' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * Get Canned Responses / Quick Replies
+ */
+const getCannedResponses = async (req, res) => {
+  try {
+    let canned = await CannedResponse.find().sort({ title: 1 }).lean();
+
+    // Default Seed Canned Replies if none exist
+    if (canned.length === 0) {
+      const defaultCanned = [
+        {
+          title: 'Welcome & Greeting',
+          shortcut: '/greeting',
+          category: 'Sales',
+          message: 'Namaste! Thank you for reaching out to Krishi Kranti Organics. How can we help you boost your crop yield today?'
+        },
+        {
+          title: 'Bank Account & UPI Details',
+          shortcut: '/bank',
+          category: 'Finance',
+          message: 'Here are our official payment details:\nBank: HDFC Bank\nA/C Name: Krishi Kranti Organics Pvt Ltd\nA/C No: 50200084729103\nIFSC: HDFC0001234\nUPI ID: krishikranti@hdfcbank'
+        },
+        {
+          title: 'Order Dispatch Timeline',
+          shortcut: '/dispatch',
+          category: 'Logistics',
+          message: 'Orders placed before 2:00 PM are dispatched on the same day via Delhivery / SafeExpress. Standard delivery takes 2–4 business days.'
+        },
+        {
+          title: 'Organic Product Catalog',
+          shortcut: '/catalog',
+          category: 'Sales',
+          message: 'You can explore our complete certified organic bio-fertilizer and micronutrient catalog at: https://krishikranti.com/catalog'
+        },
+        {
+          title: 'Bulk Dealer Discount Inquiry',
+          shortcut: '/dealer',
+          category: 'Sales',
+          message: 'For bulk dealership or wholesale inquiries (50+ bags), our regional sales manager will call you shortly with wholesale slab pricing.'
+        }
+      ];
+
+      for (const d of defaultCanned) {
+        await CannedResponse.create(d);
+      }
+      canned = await CannedResponse.find().sort({ title: 1 }).lean();
+    }
+
+    res.json({ success: true, data: canned });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * Create a new Canned Response
+ */
+const createCannedResponse = async (req, res) => {
+  try {
+    const { title, shortcut, message, category = 'General', tags = [] } = req.body;
+    if (!title || !shortcut || !message) {
+      return res.status(400).json({ success: false, message: 'Title, shortcut, and message are required' });
+    }
+
+    const cleanShortcut = shortcut.startsWith('/') ? shortcut.trim().toLowerCase() : `/${shortcut.trim().toLowerCase()}`;
+
+    const existing = await CannedResponse.findOne({ shortcut: cleanShortcut });
+    if (existing) {
+      return res.status(400).json({ success: false, message: `Shortcut ${cleanShortcut} already exists` });
+    }
+
+    const item = await CannedResponse.create({
+      title: title.trim(),
+      shortcut: cleanShortcut,
+      message: message.trim(),
+      category,
+      tags,
+      createdBy: req.user.id
+    });
+
+    res.json({ success: true, message: 'Canned response created successfully', data: item });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * Update an existing Canned Response
+ */
+const updateCannedResponse = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title, shortcut, message, category, tags } = req.body;
+
+    const updateFields = {};
+    if (title) updateFields.title = title.trim();
+    if (shortcut) {
+      updateFields.shortcut = shortcut.startsWith('/') ? shortcut.trim().toLowerCase() : `/${shortcut.trim().toLowerCase()}`;
+    }
+    if (message) updateFields.message = message.trim();
+    if (category) updateFields.category = category;
+    if (tags) updateFields.tags = tags;
+
+    const updated = await CannedResponse.findByIdAndUpdate(id, updateFields, { new: true });
+    if (!updated) {
+      return res.status(404).json({ success: false, message: 'Canned response not found' });
+    }
+
+    res.json({ success: true, message: 'Canned response updated', data: updated });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * Delete a Canned Response
+ */
+const deleteCannedResponse = async (req, res) => {
+  try {
+    const { id } = req.params;
+    await CannedResponse.findByIdAndDelete(id);
+    res.json({ success: true, message: 'Canned response deleted' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 module.exports = {
   getConversations,
   getMessages,
@@ -453,5 +793,12 @@ module.exports = {
   addNote,
   startConversation,
   updateConversationStatus,
-  updateConversationLanguage
+  updateConversationLanguage,
+  getTemplates,
+  createTemplate,
+  deleteTemplate,
+  getCannedResponses,
+  createCannedResponse,
+  updateCannedResponse,
+  deleteCannedResponse
 };
