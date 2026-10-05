@@ -234,6 +234,9 @@ const userSchema = new mongoose.Schema({
     did: { type: String, trim: true, index: true }, // Dedicated Inward/Outward Number (e.g. 9112345678)
     vid: { type: String, trim: true, index: true }, // Virtual ID / Extension (e.g. 101, 102)
     extension: { type: String, trim: true },
+    uuid: { type: String, trim: true },
+    userId: { type: String, trim: true },
+    publicIvrId: { type: String, trim: true },
     apiKey: { type: String, trim: true },
     secretKey: { type: String, trim: true },
     token: { type: String, trim: true },

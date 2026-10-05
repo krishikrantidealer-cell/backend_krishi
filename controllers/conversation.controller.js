@@ -474,49 +474,7 @@ const getTemplates = async (req, res) => {
       console.warn('[MyOperator] Could not load live templates from provider:', pErr.message);
     }
 
-    // Default Seed Templates if database is completely empty
-    if (dbTemplates.length === 0 && (!providerTemplates || providerTemplates.length === 0)) {
-      const defaultSeeds = [
-        {
-          name: 'krishi_order_dispatch',
-          category: 'UTILITY',
-          language: 'en',
-          headerType: 'NONE',
-          body: 'Namaste {{1}}, your Krishi Kranti order #{{2}} has been dispatched! Track your shipment: {{3}}',
-          footer: 'Krishi Kranti Organics',
-          sampleVariables: ['Farmer Rajesh', 'ORD-9842', 'https://track.krishikranti.com'],
-          status: 'APPROVED'
-        },
-        {
-          name: 'krishi_welcome_greeting',
-          category: 'MARKETING',
-          language: 'en',
-          headerType: 'NONE',
-          body: 'Hello {{1}}, welcome to Krishi Kranti Organics! We provide 100% certified bio-fertilizers and organic pest control solutions directly to your farm.',
-          footer: 'Empowering Sustainable Farming',
-          sampleVariables: ['Kisan Mitra'],
-          status: 'APPROVED'
-        },
-        {
-          name: 'krishi_payment_reminder',
-          category: 'UTILITY',
-          language: 'en',
-          headerType: 'NONE',
-          body: 'Dear {{1}}, a pending invoice of ₹{{2}} is due for order #{{3}}. Please complete the payment to avoid delivery delays.',
-          footer: 'Accounts Dept - Krishi Kranti',
-          sampleVariables: ['Vijay Kumar', '4,500', 'INV-5512'],
-          status: 'APPROVED'
-        }
-      ];
-
-      for (const s of defaultSeeds) {
-        await WhatsAppTemplate.create(s);
-      }
-      const seeded = await WhatsAppTemplate.find().sort({ createdAt: -1 }).lean();
-      return res.json({ success: true, data: seeded });
-    }
-
-    // Merge & format response
+    // Merge real database templates & live provider templates (no dummy mock data)
     const combined = [...dbTemplates];
     if (Array.isArray(providerTemplates)) {
       for (const pt of providerTemplates) {
@@ -663,49 +621,7 @@ const deleteTemplate = async (req, res) => {
  */
 const getCannedResponses = async (req, res) => {
   try {
-    let canned = await CannedResponse.find().sort({ title: 1 }).lean();
-
-    // Default Seed Canned Replies if none exist
-    if (canned.length === 0) {
-      const defaultCanned = [
-        {
-          title: 'Welcome & Greeting',
-          shortcut: '/greeting',
-          category: 'Sales',
-          message: 'Namaste! Thank you for reaching out to Krishi Kranti Organics. How can we help you boost your crop yield today?'
-        },
-        {
-          title: 'Bank Account & UPI Details',
-          shortcut: '/bank',
-          category: 'Finance',
-          message: 'Here are our official payment details:\nBank: HDFC Bank\nA/C Name: Krishi Kranti Organics Pvt Ltd\nA/C No: 50200084729103\nIFSC: HDFC0001234\nUPI ID: krishikranti@hdfcbank'
-        },
-        {
-          title: 'Order Dispatch Timeline',
-          shortcut: '/dispatch',
-          category: 'Logistics',
-          message: 'Orders placed before 2:00 PM are dispatched on the same day via Delhivery / SafeExpress. Standard delivery takes 2–4 business days.'
-        },
-        {
-          title: 'Organic Product Catalog',
-          shortcut: '/catalog',
-          category: 'Sales',
-          message: 'You can explore our complete certified organic bio-fertilizer and micronutrient catalog at: https://krishikranti.com/catalog'
-        },
-        {
-          title: 'Bulk Dealer Discount Inquiry',
-          shortcut: '/dealer',
-          category: 'Sales',
-          message: 'For bulk dealership or wholesale inquiries (50+ bags), our regional sales manager will call you shortly with wholesale slab pricing.'
-        }
-      ];
-
-      for (const d of defaultCanned) {
-        await CannedResponse.create(d);
-      }
-      canned = await CannedResponse.find().sort({ title: 1 }).lean();
-    }
-
+    const canned = await CannedResponse.find().sort({ title: 1 }).lean();
     res.json({ success: true, data: canned });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

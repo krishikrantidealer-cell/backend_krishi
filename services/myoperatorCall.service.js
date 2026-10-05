@@ -21,6 +21,55 @@ const apiClient = axios.create({
  *
  * Handles outbound OBD calls and recording URL lookups via MyOperator APIs.
  */
+// Enterprise Multi-Agent Telephony Registry
+const AGENT_TELEPHONY_REGISTRY = {
+  // Ram Ji Shukla -2 (Anshika Gupta)
+  '9399022067': {
+    name: 'Anshika Gupta',
+    accountName: 'Ram Ji Shukla -2',
+    did: '07316917267',
+    publicIvrId: '6ac391dc6b832209',
+    userUuid: '6abe3b1d94d37977',
+    extension: '11',
+  },
+  // Ram Ji Shukla -3 (Runa Singh)
+  '9201896604': {
+    name: 'Runa Singh',
+    accountName: 'Ram Ji Shukla -3',
+    did: '07316917220',
+    publicIvrId: '6ac3926ed5589198',
+    userUuid: '6abe3cdaa65d9730',
+    extension: '11',
+  },
+  // Ram Ji Shukla -4 (Ajay Yadav)
+  '9201896606': {
+    name: 'Ajay Yadav',
+    accountName: 'Ram Ji Shukla -4',
+    did: '07316917210',
+    publicIvrId: '6ac392e50b66c496',
+    userUuid: '6abe3e4363d3e779',
+    extension: '11',
+  },
+  // Ram Ji Shukla -5 (Ram Ji Shukla)
+  '9399022063': {
+    name: 'Ram Ji Shukla',
+    accountName: 'Ram Ji Shukla -5',
+    did: '07316917208',
+    publicIvrId: '6abf9971d5b34126',
+    userUuid: '6abe40026e466397',
+    extension: '11',
+  },
+  // Ram Ji Shukla -6 (Garima)
+  '9201896603': {
+    name: 'Garima',
+    accountName: 'Ram Ji Shukla -6',
+    did: '07316917216',
+    publicIvrId: '6ac3932d1bae5749',
+    userUuid: '6abe41494bcb1499',
+    extension: '11',
+  }
+};
+
 class MyOperatorCallService {
   constructor() {
     this.obdBaseUrl    = 'https://obd-api.myoperator.co/obd-api-v1';
@@ -54,17 +103,25 @@ class MyOperatorCallService {
       agentUser = await User.findById(agentId);
     }
 
-    const agentConfig = agentUser?.myoperatorConfig || {};
-    const dedicatedDid = (agentConfig.did || agentConfig.whatsappNumber || '').replace(/\D/g, '').replace(/^91/, '').replace(/^0+/, '');
-    const dedicatedVid = agentConfig.vid || agentConfig.extension || '';
-    const agentUuid = agentConfig.uuid || agentConfig.userId || '6abe40026e466397';
     const effectiveAgentPhone = agentPhone || agentUser?.phoneNumber || '';
     const cleanAgentPhone = effectiveAgentPhone ? effectiveAgentPhone.replace(/\D/g, '').replace(/^91/, '').replace(/^0+/, '') : '';
 
-    const apiKey = agentConfig.callingXApiKey || agentConfig.apiKey || this.callingXApiKey;
-    const secretKey = agentConfig.callingSecretKey || agentConfig.secretKey || this.callingSecretKey;
-    const companyId = agentConfig.companyId || process.env.MYOPERATOR_COMPANY_ID || '6abcea80a6fa9438';
-    const publicIvrId = agentConfig.publicIvrId || process.env.MYOPERATOR_PUBLIC_IVR_ID || '6abf9971d5b34126';
+    // Check pre-configured registry by phone or name
+    const registryMatch = AGENT_TELEPHONY_REGISTRY[cleanAgentPhone] ||
+      Object.values(AGENT_TELEPHONY_REGISTRY).find(r => 
+        (agentUser?.firstName && r.name.toLowerCase().includes(agentUser.firstName.toLowerCase())) ||
+        (agentUser?.lastName && r.name.toLowerCase().includes(agentUser.lastName.toLowerCase()))
+      ) || {};
+
+    const agentConfig = agentUser?.myoperatorConfig || {};
+    const dedicatedDid = (agentConfig.did || registryMatch.did || '').replace(/\D/g, '').replace(/^91/, '').replace(/^0+/, '');
+    const dedicatedVid = agentConfig.vid || registryMatch.extension || agentConfig.extension || '11';
+    const agentUuid = agentConfig.uuid || agentConfig.userId || registryMatch.userUuid || '6abe40026e466397';
+
+    const apiKey = agentConfig.callingXApiKey || agentConfig.apiKey || registryMatch.apiKey || this.callingXApiKey;
+    const secretKey = agentConfig.callingSecretKey || agentConfig.secretKey || registryMatch.secretKey || this.callingSecretKey;
+    const companyId = agentConfig.companyId || registryMatch.companyId || process.env.MYOPERATOR_COMPANY_ID || '6abcea80a6fa9438';
+    const publicIvrId = agentConfig.publicIvrId || registryMatch.publicIvrId || process.env.MYOPERATOR_PUBLIC_IVR_ID || '6abf9971d5b34126';
 
     let responseData = null;
 
