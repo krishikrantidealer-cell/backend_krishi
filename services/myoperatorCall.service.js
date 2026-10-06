@@ -23,47 +23,80 @@ const apiClient = axios.create({
  */
 // Enterprise Multi-Agent Telephony Registry
 const AGENT_TELEPHONY_REGISTRY = {
-  // Ram Ji Shukla -2 (Anshika Gupta)
+  // Ram Ji Shukla - 2 (Anshika Gupta)
   '9399022067': {
     name: 'Anshika Gupta',
-    accountName: 'Ram Ji Shukla -2',
+    accountName: 'Ram Ji Shukla - 2',
     did: '07316917267',
+    companyId: '6abcea24dbd6a999',
+    callingXApiKey: 'oomfKA3I2K6TCJYistHyb7sDf0l0F6c8AZro5DJh',
+    callingSecretKey: 'd8c9d2cb1c38f37082854758817405502e724f0c462253722f7d63142a4120cd',
+    callingToken: 'e7789ae6f3a1472f9466913203f6f968',
     publicIvrId: '6ac391dc6b832209',
     userUuid: '6abe3b1d94d37977',
     extension: '11',
   },
-  // Ram Ji Shukla -3 (Runa Singh)
+  // Ram Ji Shukla - 3 (Runa Singh)
   '9201896604': {
     name: 'Runa Singh',
-    accountName: 'Ram Ji Shukla -3',
+    accountName: 'Ram Ji Shukla - 3',
     did: '07316917220',
+    companyId: '6abcea4e66e65852',
+    callingXApiKey: 'oomfKA3I2K6TCJYistHyb7sDf0l0F6c8AZro5DJh',
+    callingSecretKey: '9cfb8784ad14c00ba9917e3d387d9fd5662e8da18c560eeee04d5a5b7153bd0b',
+    callingToken: '94f9842c4ae8e739dbce7382dededf53',
     publicIvrId: '6ac3926ed5589198',
     userUuid: '6abe3cdaa65d9730',
     extension: '11',
   },
-  // Ram Ji Shukla -4 (Ajay Yadav)
+  // Ram Ji Shukla - 4 (Ajay Yadav)
   '9201896606': {
     name: 'Ajay Yadav',
-    accountName: 'Ram Ji Shukla -4',
+    accountName: 'Ram Ji Shukla - 4',
     did: '07316917210',
+    companyId: '6abcea68a9843790',
+    callingXApiKey: 'oomfKA3I2K6TCJYistHyb7sDf0l0F6c8AZro5DJh',
+    callingSecretKey: '26cc2fcf309e2e3cb4fed04673df930661eeac9febb9c960df98e2c506497cc0',
+    callingToken: '775acb38ba13d6833011994c74e356cd',
     publicIvrId: '6ac392e50b66c496',
     userUuid: '6abe3e4363d3e779',
     extension: '11',
   },
-  // Ram Ji Shukla -5 (Ram Ji Shukla)
+  // Ram Ji Shukla - 5 (Yogesh Nandwanshi / Ram Ji Shukla)
   '9399022063': {
-    name: 'Ram Ji Shukla',
-    accountName: 'Ram Ji Shukla -5',
+    name: 'Yogesh Nandwanshi',
+    accountName: 'Ram Ji Shukla - 5',
     did: '07316917208',
+    companyId: '6abcea80a6fa9438',
+    callingXApiKey: 'oomfKA3I2K6TCJYistHyb7sDf0l0F6c8AZro5DJh',
+    callingSecretKey: 'e4703ff3d78eda3f7016cedb5e8ef313eb2aa851149c164ff9791f85b2261da5',
+    callingToken: '817c3545b32f7df16784c2416d467a9b',
     publicIvrId: '6abf9971d5b34126',
     userUuid: '6abe40026e466397',
     extension: '11',
   },
-  // Ram Ji Shukla -6 (Garima)
+  // Ram Ji Shukla - 6 (Garima)
   '9201896603': {
     name: 'Garima',
-    accountName: 'Ram Ji Shukla -6',
+    accountName: 'Ram Ji Shukla - 6',
     did: '07316917216',
+    companyId: '6abceacb44b44323',
+    callingXApiKey: 'oomfKA3I2K6TCJYistHyb7sDf0l0F6c8AZro5DJh',
+    callingSecretKey: 'fb3c759e39ad53a6b3e811e0f203fa5ca53db295225f9d33c140c0f5eab80760',
+    callingToken: '55182190d578a476bc2b813ac804a294',
+    publicIvrId: '6ac3932d1bae5749',
+    userUuid: '6abe41494bcb1499',
+    extension: '11',
+  },
+  // Ram Ji Shukla - 6 (Eram Istiyaque)
+  '9201896608': {
+    name: 'Eram Istiyaque',
+    accountName: 'Ram Ji Shukla - 6',
+    did: '07316917216',
+    companyId: '6abceacb44b44323',
+    callingXApiKey: 'oomfKA3I2K6TCJYistHyb7sDf0l0F6c8AZro5DJh',
+    callingSecretKey: 'fb3c759e39ad53a6b3e811e0f203fa5ca53db295225f9d33c140c0f5eab80760',
+    callingToken: '55182190d578a476bc2b813ac804a294',
     publicIvrId: '6ac3932d1bae5749',
     userUuid: '6abe41494bcb1499',
     extension: '11',
@@ -118,8 +151,8 @@ class MyOperatorCallService {
     const dedicatedVid = agentConfig.vid || registryMatch.extension || agentConfig.extension || '11';
     const agentUuid = agentConfig.uuid || agentConfig.userId || registryMatch.userUuid || '6abe40026e466397';
 
-    const apiKey = agentConfig.callingXApiKey || agentConfig.apiKey || registryMatch.apiKey || this.callingXApiKey;
-    const secretKey = agentConfig.callingSecretKey || agentConfig.secretKey || registryMatch.secretKey || this.callingSecretKey;
+    const apiKey = agentConfig.callingXApiKey || agentConfig.apiKey || registryMatch.callingXApiKey || registryMatch.apiKey || this.callingXApiKey;
+    const secretKey = agentConfig.callingSecretKey || agentConfig.secretKey || registryMatch.callingSecretKey || registryMatch.secretKey || this.callingSecretKey;
     const companyId = agentConfig.companyId || registryMatch.companyId || process.env.MYOPERATOR_COMPANY_ID || '6abcea80a6fa9438';
     const publicIvrId = agentConfig.publicIvrId || registryMatch.publicIvrId || process.env.MYOPERATOR_PUBLIC_IVR_ID || '6abf9971d5b34126';
 
@@ -321,7 +354,15 @@ class MyOperatorCallService {
     const callLog = (typeof target === 'object' && target !== null) ? target : null;
     const filenameOrCallId = (typeof target === 'string') ? target : (callLog?.providerCallId || callLog?.callId || '');
     const phone = (callLog?.customerPhone || '').toString().replace(/\D/g, '').replace(/^91/, '');
-    const token = this.callingToken || process.env.MYOPERATOR_CALLING_TOKEN;
+    
+    let token = this.callingToken || process.env.MYOPERATOR_CALLING_TOKEN;
+    if (callLog?.agentPhone) {
+      const cleanAgent = String(callLog.agentPhone).replace(/\D/g, '').replace(/^91/, '');
+      const reg = AGENT_TELEPHONY_REGISTRY[cleanAgent];
+      if (reg?.callingToken) {
+        token = reg.callingToken;
+      }
+    }
 
     if (!token) {
       console.warn('[MyOperator] MYOPERATOR_CALLING_TOKEN is not configured.');
