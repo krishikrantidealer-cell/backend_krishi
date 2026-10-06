@@ -473,31 +473,47 @@ class MyOperatorCallService {
   /**
    * Instruct MyOperator telecom switch to disconnect / hang up an active PSTN/OBD call leg.
    */
-  async hangupCall({ providerCallId, callId, referenceId, apiKey, secretKey }) {
+  async hangupCall({ providerCallId, callId, referenceId, apiKey, secretKey, token, agentPhone, companyId }) {
     const key = apiKey || this.callingXApiKey;
     const secret = secretKey || this.callingSecretKey;
     const cid = providerCallId || callId || referenceId;
 
+    let effectiveToken = token || this.callingToken;
+    let effectiveCompanyId = companyId;
+    if (agentPhone) {
+      const cleanAgent = String(agentPhone).replace(/\D/g, '').replace(/^91/, '');
+      const reg = AGENT_TELEPHONY_REGISTRY[cleanAgent];
+      if (reg) {
+        if (reg.callingToken) effectiveToken = reg.callingToken;
+        if (reg.companyId) effectiveCompanyId = reg.companyId;
+      }
+    }
+
     if (!cid) return false;
 
-    console.log(`[MyOperator] Sending Hangup/Disconnect command to telecom gateway for Call ID: ${cid}`);
+    console.log(`[MyOperator] Sending Hangup/Disconnect command to telecom gateway for Call ID: ${cid} (Token: ${effectiveToken ? 'Provided' : 'Default'})`);
 
     const hangupEndpoints = [
       {
         url: `${this.callingBaseUrl}/call/hangup`,
         method: 'post',
-        data: { token: this.callingToken, call_id: cid, id: cid }
+        data: { token: effectiveToken, call_id: cid, id: cid, uid: cid }
+      },
+      {
+        url: `${this.callingBaseUrl}/search/calls/hangup`,
+        method: 'post',
+        data: { token: effectiveToken, call_id: cid, id: cid }
       },
       {
         url: `${this.obdBaseUrl}/stop`,
         method: 'post',
-        data: { secret_token: secret, call_id: cid, reference_id: referenceId || cid },
+        data: { secret_token: secret, call_id: cid, reference_id: referenceId || cid, ...(effectiveCompanyId && { company_id: effectiveCompanyId }) },
         headers: { 'x-api-key': key, 'secret-key': secret, 'Content-Type': 'application/json' }
       },
       {
         url: `${this.obdBaseUrl}/cancel`,
         method: 'post',
-        data: { secret_token: secret, call_id: cid, reference_id: referenceId || cid },
+        data: { secret_token: secret, call_id: cid, reference_id: referenceId || cid, ...(effectiveCompanyId && { company_id: effectiveCompanyId }) },
         headers: { 'x-api-key': key, 'secret-key': secret, 'Content-Type': 'application/json' }
       }
     ];

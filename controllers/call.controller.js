@@ -584,7 +584,10 @@ const endCall = async (req, res) => {
           callId: cid,
           referenceId: callLog.metadata?.reference_id,
           apiKey: agentConfig.callingXApiKey || agentConfig.apiKey,
-          secretKey: agentConfig.callingSecretKey || agentConfig.secretKey
+          secretKey: agentConfig.callingSecretKey || agentConfig.secretKey,
+          token: agentConfig.callingToken || agentConfig.token,
+          agentPhone: callLog.agentPhone,
+          companyId: agentConfig.companyId
         }).catch(err => console.error('[MyOperator Hangup Error]:', err.message));
       }
 
