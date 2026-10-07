@@ -58,7 +58,7 @@ const apiLimiter = rateLimit({
       return true;
     }
 
-    // Skip high-frequency heartbeat, health, cron, and token refresh endpoints
+    // Skip high-frequency heartbeat, health, cron, webhook, calls, admin, and token refresh endpoints
     const path = req.path || req.originalUrl || '';
     if (
       path.includes('/health') ||
@@ -66,7 +66,9 @@ const apiLimiter = rateLimit({
       path.includes('/heartbeat') ||
       path.includes('/webhook') ||
       path.includes('/auth/refresh') ||
-      path.includes('/events/batch')
+      path.includes('/events/batch') ||
+      path.includes('/calls') ||
+      path.includes('/admin')
     ) {
       return true;
     }

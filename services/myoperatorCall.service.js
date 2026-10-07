@@ -23,6 +23,17 @@ const apiClient = axios.create({
  */
 // Enterprise Multi-Agent Telephony Registry
 const AGENT_TELEPHONY_REGISTRY = {
+  // Main Account (Yashraj Singh - Admin)
+  '7316917246': {
+    name: 'Yashraj Singh (Admin)',
+    accountName: 'Main Account',
+    did: '07316917246',
+    companyId: '6ab0de5d51766538',
+    callingXApiKey: 'oomfKA3I2K6TCJYistHyb7sDf0l0F6c8AZro5DJh',
+    callingSecretKey: 'd1160ee08c6afe8984492e716ef062fbaf912e6f86cf851a94122c6a2aaaec25',
+    callingToken: '3b48e781de1440f4d5d8666f118204fb',
+    extension: '11',
+  },
   // Ram Ji Shukla - 2 (Anshika Gupta)
   '9399022067': {
     name: 'Anshika Gupta',
@@ -537,6 +548,376 @@ class MyOperatorCallService {
     }
 
     return false;
+  }
+
+  /**
+   * Proactively pulls recent CDR logs from MyOperator search API across all accounts.
+   * Ensures 100% data fidelity even if webhook deliveries are missed or delayed.
+   */
+  async syncRecentCallsFromMyOperator() {
+    const User = require('../models/User');
+    const wsService = require('./websocket.service');
+
+    const accounts = [
+      { name: 'Yashraj Singh (Admin)', email: 'admin@krishikranti.com', phone: '7316917246', token: '3b48e781de1440f4d5d8666f118204fb', companyId: '6ab0de5d51766538', did: '07316917246' },
+      { name: 'Anshika Gupta', email: 'ebsale08@gmail.com', phone: '9399022067', token: 'e7789ae6f3a1472f9466913203f6f968', companyId: '6abcea24dbd6a999', did: '07316917267' },
+      { name: 'Runa Singh', email: 'essentialsale14@gmail.com', phone: '9201896604', token: '94f9842c4ae8e739dbce7382dededf53', companyId: '6abcea4e66e65852', did: '07316917220' },
+      { name: 'Ajay Yadav', email: 'essentialsale8@gmail.com', phone: '9201896606', token: '775acb38ba13d6833011994c74e356cd', companyId: '6abcea68a9843790', did: '07316917210' },
+      { name: 'Yogesh Nandwanshi', email: 'sales3.essential@gmail.com', phone: '9399022063', token: '817c3545b32f7df16784c2416d467a9b', companyId: '6abcea80a6fa9438', did: '07316917208' },
+      { name: 'Garima Gokulpure', email: 'essentialbiosciences12@gmail.com', phone: '9201896603', token: '55182190d578a476bc2b813ac804a294', companyId: '6abceacb44b44323', did: '07316917216' },
+      { name: 'Eram Istiyaque', email: 'sales6.essential@gmail.com', phone: '9201896608', token: '55182190d578a476bc2b813ac804a294', companyId: '6abceacb44b44323', did: '07316917216' }
+    ];
+
+    const uniqueTokens = [...new Set(accounts.map(a => a.token).filter(Boolean))];
+    let syncedCount = 0;
+
+    for (const token of uniqueTokens) {
+      const matchedAccounts = accounts.filter(a => a.token === token);
+      const primaryAccount = matchedAccounts[0];
+
+      const allRecords = [];
+
+      // 1. Query POST https://developers.myoperator.co/search
+      try {
+        const res = await axios.post(`${this.callingBaseUrl}/search`, {
+          token,
+          limit: 100
+        }, {
+          headers: { 'Content-Type': 'application/json' },
+          timeout: 8000
+        });
+
+        const hits = res.data?.data?.hits || res.data?.hits || [];
+        if (Array.isArray(hits) && hits.length > 0) {
+          for (const hit of hits) {
+            allRecords.push(hit._source || hit);
+          }
+        } else {
+          const rawData = res.data?.data || res.data?.records || res.data?.results || res.data;
+          const records = Array.isArray(rawData?.records) ? rawData.records : (Array.isArray(rawData) ? rawData : []);
+          if (records.length > 0) allRecords.push(...records);
+        }
+      } catch (err) {
+        console.warn(`[MyOperator Sync] POST /search failed for token ${token.slice(0, 6)}...:`, err.message);
+      }
+
+      // Deduplicate records by unique id
+      const uniqueRecordsMap = new Map();
+      for (const r of allRecords) {
+        const id = String(r.allcaller_id || r.uid || r.id || r.call_id || r.unique_id || r.reference_id || '');
+        if (id && !uniqueRecordsMap.has(id)) {
+          uniqueRecordsMap.set(id, r);
+        }
+      }
+
+      for (const r of uniqueRecordsMap.values()) {
+        const providerCallId = String(r.allcaller_id || r.uid || r.id || r.call_id || r.unique_id || r.reference_id || '');
+        if (!providerCallId) continue;
+
+        const typeLower = String(r.type || r.call_type || '').trim().toLowerCase();
+        const dirLower = String(r.direction || '').trim().toLowerCase();
+        const eventLower = String(r.event || '').trim().toLowerCase();
+
+        const uniqueIdFromAddParams = Array.isArray(r.additional_parameters)
+          ? r.additional_parameters.find(p => p.ky === 'unique_id')?.vl
+          : null;
+
+        const isMyOperatorOutboundSession = Boolean(
+          (uniqueIdFromAddParams && String(uniqueIdFromAddParams).startsWith('i1.')) ||
+          (r.unique_id && String(r.unique_id).startsWith('i1.')) ||
+          (r.session_id && String(r.session_id).startsWith('i1.')) ||
+          (r.call_id && String(r.call_id).startsWith('i1.')) ||
+          (r.ref_id && String(r.ref_id).startsWith('i1.'))
+        );
+
+        const KNOWN_AGENT_PHONES = ['9201896606', '9399022063', '9201896603', '9201896608', '9201896604'];
+
+        const isExplicitOutbound = isMyOperatorOutboundSession ||
+                                   dirLower === 'outbound' ||
+                                   dirLower === 'outgoing' ||
+                                   dirLower === 'out' ||
+                                   dirLower === '2' ||
+                                   r.direction === 2 ||
+                                   typeLower === 'outbound' ||
+                                   typeLower === 'outgoing' ||
+                                   typeLower === 'obd' ||
+                                   typeLower === 'click2call' ||
+                                   typeLower === 'c2c' ||
+                                   typeLower === 'dialer' ||
+                                   typeLower === '2' ||
+                                   r.type === 2 ||
+                                   eventLower.startsWith('outbound') ||
+                                   eventLower.startsWith('outgoing') ||
+                                   eventLower.includes('obd') ||
+                                   eventLower.includes('c2c');
+
+        const isExplicitInbound = !isExplicitOutbound && (
+                                  dirLower === 'inbound' ||
+                                  dirLower === 'incoming' ||
+                                  dirLower === 'in' ||
+                                  dirLower === '1' ||
+                                  r.direction === 1 ||
+                                  typeLower === 'inbound' ||
+                                  typeLower === 'incoming' ||
+                                  typeLower === 'ivr' ||
+                                  typeLower === '1' ||
+                                  r.type === 1 ||
+                                  eventLower.startsWith('inbound') ||
+                                  eventLower === 'incoming'
+        );
+
+        const isInbound = isExplicitInbound || (!isExplicitOutbound && !r.destination_number && !r.to);
+        const direction = isInbound ? 'inbound' : 'outbound';
+
+        let rawCustomerPhone = '';
+        let rawAgentPhone = '';
+        if (isInbound) {
+          rawCustomerPhone = r.caller_number_raw || r.cli || r.caller_id || r.caller_number || r.customer_number || r.client_number || r.from || r.source || r.caller || r.number || r.phone || '';
+          rawAgentPhone = r.log_details?.[0]?.received_by?.[0]?.contact_number_raw || r.log_details?.[0]?.transfer_to || r.log_details?.[0]?.agent_number || r.agent_number || r.user_number || r.receiver_number || r.agent_contact || r.transfer_to || r.legs?.[0]?.phone_number || r.agent?.contact || primaryAccount.phone;
+        } else {
+          rawCustomerPhone = r.customer_number || r.destination_number || r.client_number || r.number || r.phone || r.to || r.caller_number || '';
+          rawAgentPhone = r.log_details?.[0]?.received_by?.[0]?.contact_number_raw || r.agent_number || r.user_number || r.caller || r.from || r.agent?.contact || primaryAccount.phone;
+        }
+        let customerPhone = String(rawCustomerPhone).replace(/\D/g, '').replace(/^91/, '').replace(/^0+/, '');
+        let agentPhone = String(rawAgentPhone).replace(/\D/g, '').replace(/^91/, '').replace(/^0+/, '');
+
+        // Inversion check: if customerPhone is an agent, flip
+        if (KNOWN_AGENT_PHONES.includes(customerPhone) && !agentPhone) {
+          agentPhone = customerPhone;
+          customerPhone = '';
+        } else if (KNOWN_AGENT_PHONES.includes(customerPhone) && agentPhone && !KNOWN_AGENT_PHONES.includes(agentPhone)) {
+          const temp = customerPhone;
+          customerPhone = agentPhone;
+          agentPhone = temp;
+        }
+        if (!customerPhone) continue;
+
+        // Parse duration (e.g., "00:00:21" or number of seconds)
+        let durationSeconds = 0;
+        if (typeof r.duration === 'string' && r.duration.includes(':')) {
+          const parts = r.duration.split(':').map(Number);
+          if (parts.length === 3) durationSeconds = parts[0] * 3600 + parts[1] * 60 + parts[2];
+          else if (parts.length === 2) durationSeconds = parts[0] * 60 + parts[1];
+        } else {
+          durationSeconds = parseInt(r.duration || r.talk_time || r.billsec || r.call_duration || 0, 10) || 0;
+        }
+
+        // Determine accurate status based on log_details and user status
+        const logDetails = Array.isArray(r.log_details) ? r.log_details : [];
+        const isReceived = logDetails.some(l => l.action === 'received' || l._ds === 'ANSWER') || (Array.isArray(r._us) && r._us.some(u => u.vl === 'received'));
+        const isMissed = logDetails.some(l => l.action === 'missed' || l._ds === 'BUSY' || l._ds === 'CANCEL') || (Array.isArray(r._us) && r._us.some(u => u.vl === 'missed')) || String(r.state || '').toLowerCase().includes('miss');
+
+        let status = 'initiated';
+        if (isReceived) {
+          status = 'answered';
+        } else if (isMissed) {
+          status = 'missed';
+        } else if (durationSeconds > 0) {
+          status = 'answered';
+        } else {
+          const rawStatus = (r.call_status || r.status || r.state || '').toLowerCase();
+          status = this._normalizeStatus(rawStatus) || (rawStatus.includes('miss') ? 'missed' : 'ended');
+        }
+        
+        let recordingUrl = r.fileurl || r.recording_url || r.recording || r.audio_url || r.file_url || r.download_url || r.url || r.recordings?.[0]?.url || r.recordings?.[0]?.filename || r.filename || null;
+        if (recordingUrl && !recordingUrl.startsWith('http://') && !recordingUrl.startsWith('https://')) {
+          recordingUrl = String(recordingUrl);
+        }
+
+        // Agent matching: check matched account by agent number, DID, user name tag, or primaryAccount
+        let matchedAcc = null;
+        const cleanAgentPhone = String(rawAgentPhone || '').replace(/\D/g, '').replace(/^91/, '').replace(/^0+/, '');
+        if (cleanAgentPhone) {
+          matchedAcc = accounts.find(a => a.phone === cleanAgentPhone || cleanAgentPhone.endsWith(a.phone) || a.phone.endsWith(cleanAgentPhone));
+        }
+
+        const agentNameFromUs = Array.isArray(r._us) && r._us[0]?.nm;
+        if (!matchedAcc && agentNameFromUs) {
+          matchedAcc = accounts.find(a => a.name.toLowerCase().includes(agentNameFromUs.toLowerCase()) || agentNameFromUs.toLowerCase().includes(a.name.toLowerCase()));
+        }
+
+        const rawRecordDid = String(r.received_on || r.did || r.virtual_number || '').replace(/\D/g, '').replace(/^0+/, '');
+        if (!matchedAcc && rawRecordDid) {
+          matchedAcc = accounts.find(a => {
+            const cleanAccDid = a.did.replace(/\D/g, '').replace(/^0+/, '');
+            return cleanAccDid === rawRecordDid || rawRecordDid.endsWith(cleanAccDid) || cleanAccDid.endsWith(rawRecordDid);
+          });
+        }
+        if (!matchedAcc) {
+          matchedAcc = primaryAccount;
+        }
+
+        let agentUser = await User.findOne({
+          $or: [
+            { email: matchedAcc.email.toLowerCase() },
+            { phoneNumber: { $regex: matchedAcc.phone } }
+          ]
+        });
+        const agentId = agentUser ? agentUser._id : null;
+        const resolvedAgentPhone = agentUser?.phoneNumber || matchedAcc.phone || agentPhone;
+
+        // Contact matching / creation
+        let contact = await Contact.findOne({
+          $or: [
+            { phone: customerPhone },
+            { phone: `91${customerPhone}` },
+            { phone: `+91${customerPhone}` },
+            { phone: `0${customerPhone}` }
+          ]
+        });
+
+        if (!contact && customerPhone.length >= 10) {
+          try {
+            contact = await Contact.create({
+              name: `Caller +91 ${customerPhone}`,
+              phone: `+91${customerPhone}`,
+              assignedTo: agentId
+            });
+          } catch (_) {
+            contact = await Contact.findOne({
+              $or: [{ phone: customerPhone }, { phone: `+91${customerPhone}` }]
+            });
+          }
+        }
+
+        let callTime = new Date();
+        if (r.start_time) {
+          const num = Number(r.start_time);
+          if (!isNaN(num)) {
+            callTime = new Date(num > 1e11 ? num : num * 1000);
+          } else {
+            callTime = new Date(r.start_time);
+          }
+        } else if (r.created_at || r.date_time) {
+          callTime = new Date(r.created_at || r.date_time);
+        }
+
+        // Industrial Sync Cutoff: Ignore carrier CDRs older than configured watermark
+        const syncCutoff = process.env.MYOPERATOR_SYNC_START_DATE ? new Date(process.env.MYOPERATOR_SYNC_START_DATE) : new Date('2026-10-07T00:00:00.000Z');
+        if (callTime < syncCutoff) {
+          continue;
+        }
+
+        const candidateIds = [
+          providerCallId,
+          uniqueIdFromAddParams,
+          r.allcaller_id,
+          r.uid,
+          r.id,
+          r.call_id,
+          r.unique_id,
+          r.reference_id,
+          r.ref_id,
+          r.session_id
+        ].filter(Boolean).map(String);
+
+        let existingLog = await CallLog.findOne({
+          $or: [
+            { providerCallId: { $in: candidateIds } },
+            { callId: { $in: candidateIds } },
+            { 'metadata.allcaller_id': { $in: candidateIds } },
+            { 'metadata.unique_id': { $in: candidateIds } },
+            { 'metadata.session_id': { $in: candidateIds } },
+            { 'metadata.uid': { $in: candidateIds } },
+            { 'metadata.id': { $in: candidateIds } },
+            { 'metadata.additional_parameters.vl': { $in: candidateIds } },
+            { 'metadata.additional_parameters': { $elemMatch: { ky: 'unique_id', vl: { $in: candidateIds } } } }
+          ]
+        });
+
+        // Proximity deduplication: match by customer & agent phone within 180s window
+        if (!existingLog && customerPhone) {
+          const windowStart = new Date(callTime.getTime() - 180 * 1000);
+          const windowEnd = new Date(callTime.getTime() + 180 * 1000);
+          existingLog = await CallLog.findOne({
+            customerPhone,
+            createdAt: { $gte: windowStart, $lte: windowEnd }
+          });
+        }
+
+        // Respect soft-deletion: If user previously deleted this call, do not un-delete
+        if (existingLog && existingLog.isDeleted) {
+          continue;
+        }
+
+        if (existingLog) {
+          let changed = false;
+          if (!existingLog.direction) {
+            existingLog.direction = direction;
+            changed = true;
+          } else if (isExplicitOutbound && existingLog.direction !== 'outbound') {
+            existingLog.direction = 'outbound';
+            changed = true;
+          } else if (existingLog.direction === 'outbound') {
+            // NEVER downgrade an outbound call to inbound from CDR
+          } else if (isExplicitInbound && existingLog.direction !== 'inbound' && existingLog.direction !== 'outbound') {
+            existingLog.direction = 'inbound';
+            changed = true;
+          }
+          if (status && existingLog.status !== status) {
+            existingLog.status = status;
+            changed = true;
+          }
+          if (durationSeconds > 0 && (!existingLog.durationSeconds || existingLog.durationSeconds === 0)) {
+            existingLog.durationSeconds = durationSeconds;
+            changed = true;
+          }
+          if (recordingUrl && (!existingLog.recordingUrl || existingLog.recordingUrl !== recordingUrl)) {
+            existingLog.recordingUrl = recordingUrl;
+            changed = true;
+          }
+          if (!existingLog.agentId && agentId) {
+            existingLog.agentId = agentId;
+            changed = true;
+          }
+          if (changed) {
+            await existingLog.save();
+            syncedCount++;
+
+            const populated = await CallLog.findById(existingLog._id)
+              .populate('agentId', 'firstName lastName email phoneNumber')
+              .populate('contactId', 'name phone preferredLanguage');
+            const broadcastPayload = {
+              type: 'CALL_UPDATE',
+              data: populated || existingLog.toObject()
+            };
+            if (agentId) wsService.sendToUser(agentId.toString(), broadcastPayload);
+            wsService.broadcastToRoles(['admin', 'sales'], broadcastPayload);
+          }
+        } else {
+          const newLog = new CallLog({
+            providerCallId,
+            callId: providerCallId,
+            direction,
+            customerPhone,
+            agentPhone: resolvedAgentPhone,
+            agentId,
+            contactId: contact?._id || null,
+            status,
+            durationSeconds,
+            recordingUrl,
+            callSummary: isInbound ? (status === 'missed' ? 'Missed Inbound Call' : 'Inbound Call') : 'Outbound Call',
+            metadata: { ...r, syncedFromApi: true },
+            createdAt: callTime
+          });
+          await newLog.save();
+          syncedCount++;
+
+          // Broadcast newly found call to panels immediately
+          const populated = await CallLog.findById(newLog._id)
+            .populate('agentId', 'firstName lastName email phoneNumber')
+            .populate('contactId', 'name phone preferredLanguage');
+          const broadcastPayload = {
+            type: 'CALL_UPDATE',
+            data: populated || newLog.toObject()
+          };
+          if (agentId) wsService.sendToUser(agentId.toString(), broadcastPayload);
+          wsService.broadcastToRoles(['admin', 'sales'], broadcastPayload);
+        }
+      }
+    }
+
+    return syncedCount;
   }
 
   /**

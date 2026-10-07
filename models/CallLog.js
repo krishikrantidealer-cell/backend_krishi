@@ -103,6 +103,27 @@ const callLogSchema = new mongoose.Schema({
     default: []
   },
 
+  // ── Soft Deletion & Archival Lifecycle ──────────────────────────────────────
+  isDeleted: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
+  deletedAt: {
+    type: Date,
+    default: null
+  },
+  deletedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
+  },
+  isArchived: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
+
   // ── Extra provider data (raw webhook payload subset) ─────────────────────────
   metadata: {
     type: Object,
@@ -113,10 +134,11 @@ const callLogSchema = new mongoose.Schema({
 });
 
 // ── Compound Indexes for CRM queries ─────────────────────────────────────────
-callLogSchema.index({ customerPhone: 1, createdAt: -1 });
-callLogSchema.index({ agentId: 1, createdAt: -1 });
-callLogSchema.index({ direction: 1, status: 1, createdAt: -1 });
-callLogSchema.index({ status: 1, createdAt: -1 });
-callLogSchema.index({ contactId: 1, createdAt: -1 });
+callLogSchema.index({ customerPhone: 1, isDeleted: 1, createdAt: -1 });
+callLogSchema.index({ agentId: 1, isDeleted: 1, createdAt: -1 });
+callLogSchema.index({ direction: 1, status: 1, isDeleted: 1, createdAt: -1 });
+callLogSchema.index({ status: 1, isDeleted: 1, createdAt: -1 });
+callLogSchema.index({ contactId: 1, isDeleted: 1, createdAt: -1 });
+callLogSchema.index({ isDeleted: 1, createdAt: -1 });
 
 module.exports = mongoose.model('CallLog', callLogSchema);

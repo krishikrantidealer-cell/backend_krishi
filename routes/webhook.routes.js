@@ -13,14 +13,38 @@ router.post('/webhooks/meta-lead', handleMetaLeadWebhook);
 // Universal MyOperator Webhook Handler (Auto-dispatches Call Events vs WhatsApp Messages)
 const dispatchMyOperatorWebhook = (req, res) => {
   const payload = req.body || {};
-  const data = payload.data || payload.details || {};
-  const isCall = (payload.event_type && String(payload.event_type).toLowerCase().includes('call')) ||
-                 (payload.event && String(payload.event).toLowerCase().includes('call')) ||
-                 (payload.type && String(payload.type).toLowerCase().includes('call')) ||
-                 !!payload.call_id || !!data.call_id ||
-                 !!payload.customer_number || !!data.customer_number ||
-                 payload.duration !== undefined || data.duration !== undefined ||
-                 !!payload.recording_url || !!data.recording_url;
+  const query = req.query || {};
+  const merged = { ...query, ...payload, ...(payload.data || payload.details || payload.payload || {}) };
+
+  const eventStr = String(merged.event_type || merged.event || merged.type || merged.action || '').toLowerCase();
+  const isWhatsApp = Boolean(merged.entry || merged.messages || merged.statuses || eventStr.includes('message') || eventStr.includes('whatsapp') || eventStr.includes('template'));
+
+  const isCall = !isWhatsApp && (
+    eventStr.includes('call') ||
+    eventStr.includes('ring') ||
+    eventStr.includes('dial') ||
+    eventStr.includes('answer') ||
+    eventStr.includes('hang') ||
+    eventStr.includes('connect') ||
+    eventStr.includes('miss') ||
+    eventStr.includes('inbound') ||
+    eventStr.includes('incoming') ||
+    eventStr.includes('outbound') ||
+    eventStr.includes('ivr') ||
+    merged.cli != null ||
+    merged.received_on != null ||
+    merged.virtual_number != null ||
+    merged.did != null ||
+    merged.call_id != null ||
+    merged.uid != null ||
+    merged.unique_id != null ||
+    merged.ref_id != null ||
+    merged.client_ref_id != null ||
+    merged.session_id != null ||
+    merged.duration != null ||
+    merged.recording_url != null ||
+    merged.legs != null
+  );
 
   if (isCall) {
     return callController.handleCallWebhook(req, res);

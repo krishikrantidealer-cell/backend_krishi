@@ -25,8 +25,10 @@ const localBroadcastToRoles = (roles, data) => {
   if (!wss) return;
   const message = typeof data === 'string' ? data : JSON.stringify(data);
   wss.clients.forEach(client => {
-    if (client.readyState === WebSocket.OPEN && roles.includes(client.userRole)) {
-      client.send(message);
+    if (client.readyState === WebSocket.OPEN) {
+      if (!roles || roles.length === 0 || roles.includes(client.userRole) || client.userRole === 'admin') {
+        client.send(message);
+      }
     }
   });
 };
@@ -89,9 +91,10 @@ const initWebSocket = (server) => {
     }
 
     let authenticatedUserId;
+    let decoded;
     try {
       const { verifyAccessToken } = require('../utils/jwt');
-      const decoded = verifyAccessToken(token);
+      decoded = verifyAccessToken(token);
       if (!decoded) {
         console.warn(`[WS] Connection rejected: Invalid or expired token for user: ${claimedUserId || 'unknown'}`);
         ws.close(4001, 'Unauthorized: Invalid token');
@@ -112,18 +115,19 @@ const initWebSocket = (server) => {
 
     const userId = authenticatedUserId;
     ws.userId = userId;
+    ws.userRole = decoded?.role || decoded?.userRole || 'admin';
 
-      // Fetch user info for targeted broadcasts and better display
-      try {
-        const user = await User.findById(userId).select('role firstName lastName shopName phoneNumber');
-        if (user) {
-          ws.userRole = user.role;
-          ws.userName = `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.shopName;
-          ws.userPhone = user.phoneNumber;
-        }
-      } catch (err) {
-        console.error(`[WS] Failed to fetch info for user ${userId}:`, err.message);
+    // Fetch full user info for targeted broadcasts and better display
+    try {
+      const user = await User.findById(userId).select('role firstName lastName shopName phoneNumber');
+      if (user) {
+        ws.userRole = user.role || ws.userRole;
+        ws.userName = `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.shopName;
+        ws.userPhone = user.phoneNumber;
       }
+    } catch (err) {
+      console.error(`[WS] Failed to fetch info for user ${userId}:`, err.message);
+    }
 
       if (!clients.has(userId)) {
         clients.set(userId, new Set());

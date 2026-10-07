@@ -7,10 +7,6 @@ const PORT = process.env.PORT || 8080;
 
 const startServer = async () => {
   try {
-    // 1. Connect to DB first so models and queries are immediately ready
-    await connectDB();
-
-    // 2. Initialize App & Server
     const app = require('./app');
     const http = require('http');
     const server = http.createServer(app);
@@ -18,12 +14,17 @@ const startServer = async () => {
 
     initWebSocket(server);
 
-    // Listen on PORT
-    server.listen(PORT, () => {
-      console.log(`Server running in ${process.env.NODE_ENV || 'production'} mode on port ${PORT}`);
+    // Listen on PORT on 0.0.0.0 immediately so Cloud Run health check passes instantly
+    server.listen(PORT, '0.0.0.0', () => {
+      console.log(`Server running in ${process.env.NODE_ENV || 'production'} mode on http://0.0.0.0:${PORT}`);
 
-      // 3. Run background tasks & migrations AFTER server starts listening
+      // Run background DB connections, Redis, and migrations asynchronously
       (async () => {
+        try {
+          await connectDB();
+        } catch (dbErr) {
+          console.error('⚠️ DB connection failed:', dbErr.message);
+        }
 
         try {
           await connectRedis();

@@ -162,8 +162,8 @@ router.delete('/:userId/permanent', authorizeRoles('admin', 'sales'), userContro
 // Assign Sales Agent (Admin only)
 router.put('/:userId/assign-agent', authorizeRoles('admin', 'sales'), userController.adminAssignAgent);
 
-// Toggle Block User (Admin only)
-router.put('/:userId/block', authorizeRoles('admin'), userController.adminToggleBlockUser);
+// Toggle Block User (Admin and Sales)
+router.put('/:userId/block', authorizeRoles('admin', 'sales'), userController.adminToggleBlockUser);
 
 // Create Sales Agent (Admin only)
 router.post('/sales', authorizeRoles('admin'), userController.adminCreateSalesAgent);

@@ -38,7 +38,23 @@ router.post('/hangup', controller.endCall);
 router.post('/disposition', controller.saveCallDisposition);
 router.patch('/:callId/disposition', controller.saveCallDisposition);
 router.get('/webrtc/session', controller.getWebRTCSession);
+router.get('/agents', controller.getTelephonyAgents);
+router.get('/telephony-agents', controller.getTelephonyAgents);
+router.post('/sync', controller.syncCallLogs);
+router.get('/sync', controller.syncCallLogs);
 router.get('/recordings/:callId/url', controller.getRecordingPlaybackUrl);
 router.put('/agent/status', controller.setAgentStatus);
+
+// Soft Delete, Restore & Cleanup Routes
+router.delete('/clear', controller.clearAllCallLogs);
+router.post('/clear', controller.clearAllCallLogs);
+router.delete('/all', controller.clearAllCallLogs);
+router.post('/all', controller.clearAllCallLogs);
+router.post('/clear-all', controller.clearAllCallLogs);
+router.post('/bulk-delete', controller.bulkDeleteCallLogs);
+router.delete('/bulk', controller.bulkDeleteCallLogs);
+router.delete('/:id', controller.deleteCallLog);
+router.post('/:id/delete', controller.deleteCallLog);
+router.patch('/:id/restore', controller.restoreCallLog);
 
 module.exports = router;

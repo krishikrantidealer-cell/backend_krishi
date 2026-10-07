@@ -28,6 +28,26 @@ function isDuplicateWebhook(key) {
   return false;
 }
 
+// ── Background Auto-Sync with MyOperator REST APIs (Every 10s) ───────────────
+let lastApiSyncTime = 0;
+const API_SYNC_THROTTLE_MS = 6 * 1000;
+
+function triggerBackgroundSync() {
+  if (mongoose.connection.readyState !== 1) return;
+  const now = Date.now();
+  if (now - lastApiSyncTime > API_SYNC_THROTTLE_MS) {
+    lastApiSyncTime = now;
+    myoperatorCallService.syncRecentCallsFromMyOperator().catch(err => {
+      console.warn('[MyOperator API Sync Warning]:', err.message);
+    });
+  }
+}
+
+// Background auto-sync worker
+setInterval(() => {
+  triggerBackgroundSync();
+}, 10 * 1000);
+
 /**
  * 1-Click Outbound Click-to-Call Trigger
  */
@@ -59,14 +79,39 @@ const triggerOutboundCall = async (req, res) => {
 };
 
 /**
+ * Manual / Triggered MyOperator API Sync
+ */
+const syncCallLogs = async (req, res) => {
+  try {
+    const syncedCount = await myoperatorCallService.syncRecentCallsFromMyOperator();
+    res.json({
+      success: true,
+      message: `Successfully synced ${syncedCount} calls from MyOperator accounts`,
+      syncedCount
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
  * Fetch Call Logs with Aggregated Telephony Metrics & Leaderboards
  */
 const getCallLogs = async (req, res) => {
   try {
-    const { search, customerPhone, agentId, type, status, page = 1, limit = 25 } = req.query;
+    // Proactively kick off sync in background
+    triggerBackgroundSync();
+    const { search, customerPhone, agentId, type, status, view, includeDeleted, page = 1, limit = 25 } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
     const query = {};
+
+    // ── Industrial Soft Delete Filter ──────────────────────────────────────────
+    if (view === 'trash' || view === 'deleted') {
+      query.isDeleted = true;
+    } else if (includeDeleted !== 'true') {
+      query.isDeleted = { $ne: true };
+    }
 
     // ── Multi-Field Search (Phone, Customer Name, Disposition, Notes) ────────
     const searchTerm = (search || customerPhone || '').trim();
@@ -107,7 +152,14 @@ const getCallLogs = async (req, res) => {
     }
 
     if (status && status !== 'all' && status.trim() !== '') {
-      query.status = status.toLowerCase();
+      const s = status.toLowerCase();
+      if (s === 'missed') {
+        query.status = { $in: ['missed', 'no-answer'] };
+      } else if (s === 'answered') {
+        query.$or = [{ status: 'answered' }, { durationSeconds: { $gt: 0 } }];
+      } else {
+        query.status = s;
+      }
     }
 
     // Role Security: Sales agents see calls they made/received OR calls with contacts assigned to them
@@ -129,38 +181,22 @@ const getCallLogs = async (req, res) => {
       });
     }
 
-    const callLogs = await CallLog.find(query)
-      .populate('agentId', 'firstName lastName email phoneNumber')
-      .populate('contactId', 'name phone preferredLanguage')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit));
+    // Parallelize Primary Query, Count, KPI Metrics & Leaderboard
+    const metricsMatch = req.user.role === 'sales'
+      ? { agentId: new mongoose.Types.ObjectId(req.user.id), isDeleted: { $ne: true } }
+      : { isDeleted: { $ne: true } };
 
-    const total = await CallLog.countDocuments(query);
+    const [callLogs, total, summaryResult, leaderboardResult] = await Promise.all([
+      CallLog.find(query)
+        .populate('agentId', 'firstName lastName email phoneNumber')
+        .populate('contactId', 'name phone preferredLanguage')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean(),
 
-    // Enrich logs with contact lookup if contactId was unlinked
-    const enrichedLogs = await Promise.all(callLogs.map(async (log) => {
-      const logObj = log.toObject();
-      if (!logObj.contactId && logObj.customerPhone) {
-        const cleanPhone = logObj.customerPhone.replace(/\D/g, '').replace(/^91/, '');
-        const contact = await Contact.findOne({
-          $or: [
-            { phone: cleanPhone },
-            { phone: `91${cleanPhone}` },
-            { phone: `+91${cleanPhone}` }
-          ]
-        }).select('name phone preferredLanguage').lean();
-        if (contact) {
-          logObj.contactId = contact;
-        }
-      }
-      return logObj;
-    }));
+      CallLog.countDocuments(query),
 
-    // Compute metrics for Leaderboard & Telephony KPIs via high-performance MongoDB Aggregation
-    const metricsMatch = req.user.role === 'sales' ? { agentId: new mongoose.Types.ObjectId(req.user.id) } : {};
-
-    const [summaryResult, leaderboardResult] = await Promise.all([
       CallLog.aggregate([
         { $match: metricsMatch },
         {
@@ -194,6 +230,7 @@ const getCallLogs = async (req, res) => {
           }
         }
       ]),
+
       CallLog.aggregate([
         { $match: { ...metricsMatch, agentId: { $ne: null } } },
         {
@@ -238,6 +275,41 @@ const getCallLogs = async (req, res) => {
         { $limit: 25 }
       ])
     ]);
+
+    // High-performance single-batch Contact enrichment for unlinked logs
+    const unlinkedPhones = Array.from(new Set(
+      callLogs
+        .filter(l => !l.contactId && l.customerPhone)
+        .map(l => l.customerPhone.replace(/\D/g, '').replace(/^91/, ''))
+        .filter(p => p.length >= 7)
+    ));
+
+    let contactMap = {};
+    if (unlinkedPhones.length > 0) {
+      const allPhoneVariants = [
+        ...unlinkedPhones,
+        ...unlinkedPhones.map(p => `91${p}`),
+        ...unlinkedPhones.map(p => `+91${p}`)
+      ];
+      const foundContacts = await Contact.find({
+        phone: { $in: allPhoneVariants }
+      }).select('name phone preferredLanguage').lean();
+
+      foundContacts.forEach(c => {
+        const clean = (c.phone || '').replace(/\D/g, '').replace(/^91/, '');
+        if (clean) contactMap[clean] = c;
+      });
+    }
+
+    const enrichedLogs = callLogs.map(log => {
+      if (!log.contactId && log.customerPhone) {
+        const cleanPhone = log.customerPhone.replace(/\D/g, '').replace(/^91/, '');
+        if (contactMap[cleanPhone]) {
+          log.contactId = contactMap[cleanPhone];
+        }
+      }
+      return log;
+    });
 
     const metricsSummary = summaryResult[0] || {
       totalCalls: 0,
@@ -288,10 +360,12 @@ const saveCallDisposition = async (req, res) => {
 
     await callLog.save();
 
-    // Also sync notes to User profile if contact phone is known
-    if (callLog.customerPhone && (notes || userDisposition)) {
+    // ── Sync to CRM Contact & User Profile ──────────────────────────────────
+    if (callLog.customerPhone && (notes || userDisposition || followUpNote)) {
+      const cleanPhone = callLog.customerPhone.replace(/\D/g, '').replace(/^91/, '');
+      
+      // 1. Sync note and follow-up to User model (Dealer/Customer profile)
       try {
-        const cleanPhone = callLog.customerPhone.replace(/\D/g, '').replace(/^91/, '');
         const user = await User.findOne({
           $or: [
             { phoneNumber: cleanPhone },
@@ -321,6 +395,37 @@ const saveCallDisposition = async (req, res) => {
       } catch (userErr) {
         console.warn('[Call Disposition] Warning: Could not sync note to user profile:', userErr.message);
       }
+
+      // 2. Sync disposition tag and assignment to Contact model (WhatsApp CRM & Leads)
+      try {
+        const contact = await Contact.findOne({
+          $or: [
+            { phone: cleanPhone },
+            { phone: `91${cleanPhone}` },
+            { phone: `+91${cleanPhone}` }
+          ]
+        });
+
+        if (contact) {
+          if (!contact.assignedTo && callLog.agentId) {
+            contact.assignedTo = callLog.agentId;
+          }
+          if (userDisposition) {
+            contact.tags = contact.tags || [];
+            const tagLabel = `Disposition: ${userDisposition}`;
+            if (!contact.tags.includes(tagLabel)) {
+              contact.tags.push(tagLabel);
+            }
+          }
+          await contact.save();
+          if (!callLog.contactId) {
+            callLog.contactId = contact._id;
+            await callLog.save();
+          }
+        }
+      } catch (contactErr) {
+        console.warn('[Call Disposition] Warning: Could not sync to Contact model:', contactErr.message);
+      }
     }
 
     const populated = await CallLog.findById(callLog._id)
@@ -342,18 +447,96 @@ const saveCallDisposition = async (req, res) => {
   }
 };
 
+// ── Enterprise Telephony Accounts Registry (Exact MyOperator lines) ────────
+const TELEPHONY_ACCOUNTS = [
+  {
+    name: 'Yashraj Singh (Admin)',
+    email: 'admin@krishikranti.com',
+    role: 'admin',
+    accountName: 'Main Account (6ab0de5d51766538)',
+    companyId: '6ab0de5d51766538',
+    did: '07316917246',
+    outboundNumber: '+91 7316917246',
+    mobileNumber: '7316917246',
+    isAdmin: true
+  },
+  {
+    name: 'Anshika Gupta',
+    email: 'ebsale08@gmail.com',
+    role: 'sales',
+    accountName: 'Ram Ji Shukla - 2 (6abcea24dbd6a999)',
+    companyId: '6abcea24dbd6a999',
+    did: '07316917267',
+    outboundNumber: '+91 7316917267',
+    mobileNumber: '9399022067'
+  },
+  {
+    name: 'Runa Singh',
+    email: 'essentialsale14@gmail.com',
+    role: 'sales',
+    accountName: 'Ram Ji Shukla - 3 (6abcea4e66e65852)',
+    companyId: '6abcea4e66e65852',
+    did: '07316917220',
+    outboundNumber: '+91 7316917220',
+    mobileNumber: '9201896604'
+  },
+  {
+    name: 'Ajay Yadav',
+    email: 'essentialsale8@gmail.com',
+    role: 'sales',
+    accountName: 'Ram Ji Shukla - 4 (6abcea68a9843790)',
+    companyId: '6abcea68a9843790',
+    did: '07316917210',
+    outboundNumber: '+91 7316917210',
+    mobileNumber: '9201896606'
+  },
+  {
+    name: 'Yogesh Nandwanshi',
+    email: 'sales3.essential@gmail.com',
+    role: 'sales',
+    accountName: 'Ram Ji Shukla - 5 (6abcea80a6fa9438)',
+    companyId: '6abcea80a6fa9438',
+    did: '07316917208',
+    outboundNumber: '+91 7316917208',
+    mobileNumber: '9399022063'
+  },
+  {
+    name: 'Garima Gokulpure',
+    email: 'essentialbiosciences12@gmail.com',
+    role: 'sales',
+    accountName: 'Ram Ji Shukla - 6 (6abceacb44b44323)',
+    companyId: '6abceacb44b44323',
+    did: '07316917216',
+    outboundNumber: '+91 7316917216',
+    mobileNumber: '9201896603'
+  },
+  {
+    name: 'Eram Istiyaque',
+    email: 'sales6.essential@gmail.com',
+    role: 'sales',
+    accountName: 'Ram Ji Shukla - 6 (6abceacb44b44323)',
+    companyId: '6abceacb44b44323',
+    did: '07316917216',
+    outboundNumber: '+91 7316917216',
+    mobileNumber: '9201896608'
+  }
+];
+
 /**
- * Handle MyOperator Call Webhooks
+ * Handle MyOperator Call Webhooks (Inbound & Outbound)
  */
 const handleCallWebhook = async (req, res) => {
   try {
-    const payload = req.body || {};
+    const payload = { ...(req.query || {}), ...(req.body || {}) };
     console.log('[MyOperator Call Webhook Event]:', JSON.stringify(payload));
 
     const nestedData = payload.payload || payload.data || payload.details || {};
     const merged = { ...payload, ...nestedData };
 
-    const firstLeg = (merged.legs && Array.isArray(merged.legs) && merged.legs.length > 0) ? merged.legs[0] : null;
+    // Extract legs & leg information
+    const legs = Array.isArray(merged.legs) ? merged.legs : (Array.isArray(payload.legs) ? payload.legs : (Array.isArray(nestedData.legs) ? nestedData.legs : []));
+    const customerLeg = legs.find(l => l.type === 'customer' || (l.pickup_device === 'phone' && !l.agent && l.phone_number));
+    const agentLeg = legs.find(l => l.type === 'agent' || l.agent);
 
     const rawEvent = (payload.event_type || payload.event || payload.type || req.headers['x-event'] || '').toString().toLowerCase();
     const rawStatus = (merged.status || firstLeg?.dial_status || merged.call_status || merged.state || '').toString().toLowerCase();
@@ -371,19 +554,141 @@ const handleCallWebhook = async (req, res) => {
                    payload.session_id ||
                    payload.event_id;
 
-    const customerPhone = (merged.customer_number ||
-                           payload.customer_identifier ||
-                           merged.caller_number ||
-                           merged.client_number ||
-                           merged.destination_number ||
-                           merged.phone ||
-                           merged.number || '').replace(/\D/g, '').replace(/^91/, '').replace(/^0+/, '');
+    // Detect Inbound vs Outbound accurately
+    const uniqueIdFromAddParams = Array.isArray(merged.additional_parameters)
+      ? merged.additional_parameters.find(p => p.ky === 'unique_id')?.vl
+      : null;
 
-    const agentPhone = (merged.agent_number ||
-                        firstLeg?.phone_number ||
-                        firstLeg?.agent?.contact ||
-                        merged.receiver_number ||
-                        merged.user_number || '').replace(/\D/g, '').replace(/^91/, '').replace(/^0+/, '');
+    const isMyOperatorOutboundSession = Boolean(
+      (uniqueIdFromAddParams && String(uniqueIdFromAddParams).startsWith('i1.')) ||
+      (callId && String(callId).startsWith('i1.')) ||
+      (merged.unique_id && String(merged.unique_id).startsWith('i1.')) ||
+      (merged.session_id && String(merged.session_id).startsWith('i1.')) ||
+      (payload.session_id && String(payload.session_id).startsWith('i1.'))
+    );
+
+    const rawType = String(merged.type || merged.call_type || '').trim().toLowerCase();
+    const rawDirection = String(merged.direction || payload.direction || payload.event_type || '').trim().toLowerCase();
+    const eventString = String(merged.event || payload.event || rawEvent || '').trim().toLowerCase();
+
+    const isExplicitOutbound = isMyOperatorOutboundSession ||
+                               rawDirection === 'outbound' ||
+                               rawDirection === 'outgoing' ||
+                               rawDirection === 'out' ||
+                               rawDirection === '2' ||
+                               merged.direction === 2 ||
+                               rawType === 'outbound' ||
+                               rawType === 'outgoing' ||
+                               rawType === 'obd' ||
+                               rawType === 'click2call' ||
+                               rawType === 'c2c' ||
+                               rawType === 'dialer' ||
+                               rawType === '2' ||
+                               merged.type === 2 ||
+                               eventString.startsWith('outbound') ||
+                               eventString.startsWith('outgoing') ||
+                               eventString === 'call.outbound' ||
+                               eventString.includes('c2c') ||
+                               eventString.includes('obd') ||
+                               Boolean(agentLeg && customerLeg);
+
+    const isExplicitInbound = !isExplicitOutbound && (
+                              rawDirection === 'inbound' ||
+                              rawDirection === 'incoming' ||
+                              rawDirection === 'in' ||
+                              rawDirection === '1' ||
+                              merged.direction === 1 ||
+                              rawType === 'inbound' ||
+                              rawType === 'incoming' ||
+                              rawType === 'ivr' ||
+                              rawType === '1' ||
+                              merged.type === 1 ||
+                              eventString.startsWith('inbound') ||
+                              eventString === 'call.inbound' ||
+                              eventString === 'incoming'
+    );
+
+    const isInbound = isExplicitInbound || (!isExplicitOutbound && Boolean(merged.public_ivr_id && !merged.customer_number && !merged.destination_number && !customerLeg));
+
+    // Extract DID / Virtual line
+    const rawDid = String(
+      merged.did ||
+      merged.virtual_number ||
+      merged.received_on ||
+      merged.destination_number ||
+      merged.receiver_number ||
+      merged.company_number ||
+      ''
+    ).replace(/\D/g, '').replace(/^91/, '').replace(/^0+/, '');
+
+    // Extract Company ID (Account Identifier)
+    const companyId = String(
+      merged.company_id ||
+      merged.company_uuid ||
+      merged.companyId ||
+      merged.acc_id ||
+      payload.company_id ||
+      ''
+    ).trim();
+
+    // Known sales agent numbers to prevent inverted caller assignment
+    const KNOWN_AGENT_PHONES = ['9201896606', '9399022063', '9201896603', '9201896608', '9201896604'];
+
+    // Extract Customer Phone (Caller for Inbound, Callee for Outbound)
+    let rawCustomerPhone = '';
+    if (customerLeg?.phone_number) {
+      rawCustomerPhone = customerLeg.phone_number;
+    } else if (payload.customer_identifier) {
+      rawCustomerPhone = payload.customer_identifier;
+    } else if (merged.customer_number) {
+      rawCustomerPhone = merged.customer_number;
+    } else if (isInbound) {
+      rawCustomerPhone = merged.cli ||
+                         merged.caller_id ||
+                         merged.caller_number ||
+                         merged.from ||
+                         merged.caller ||
+                         merged.source ||
+                         merged.client_number ||
+                         merged.contact_number ||
+                         merged.phone ||
+                         merged.number || '';
+    } else {
+      rawCustomerPhone = merged.destination_number ||
+                         merged.client_number ||
+                         merged.number ||
+                         merged.phone ||
+                         merged.to ||
+                         merged.caller_number ||
+                         merged.caller_id || '';
+    }
+    let customerPhone = String(rawCustomerPhone).replace(/\D/g, '').replace(/^91/, '').replace(/^0+/, '');
+
+    // Extract Agent Phone
+    let rawAgentPhone = '';
+    if (agentLeg?.agent?.contact || agentLeg?.phone_number) {
+      rawAgentPhone = agentLeg.agent?.contact || agentLeg.phone_number;
+    } else {
+      rawAgentPhone = merged.agent_number ||
+                      merged.user_number ||
+                      firstLeg?.phone_number ||
+                      firstLeg?.agent?.contact ||
+                      merged.receiver_number ||
+                      merged.agent_contact ||
+                      merged.transfer_to ||
+                      '';
+    }
+    let agentPhone = String(rawAgentPhone).replace(/\D/g, '').replace(/^91/, '').replace(/^0+/, '');
+
+    // Safety check: If customerPhone matches a sales agent, invert to correct party
+    if (KNOWN_AGENT_PHONES.includes(customerPhone) && !agentPhone) {
+      agentPhone = customerPhone;
+      customerPhone = '';
+    } else if (KNOWN_AGENT_PHONES.includes(customerPhone) && agentPhone && !KNOWN_AGENT_PHONES.includes(agentPhone)) {
+      const temp = customerPhone;
+      customerPhone = agentPhone;
+      agentPhone = temp;
+    }
 
     const duration = parseInt(merged.duration || merged.call_duration || merged.talk_time || merged.billsec || firstLeg?.talk_duration || 0, 10);
     const recordingUrl = merged.recording_url ||
@@ -395,7 +700,7 @@ const handleCallWebhook = async (req, res) => {
                          merged.filename ||
                          merged.download_url ||
                          null;
-    const callSummary = merged.summary || merged.disposition || rawStatus || 'Call Ended';
+    const callSummary = merged.summary || merged.disposition || rawStatus || (isInbound ? 'Inbound Call' : 'Outbound Call');
 
     // Fast Idempotency Check: Drop duplicate webhook deliveries within 60s
     const idempotencyKey = `${callId || customerPhone}_${event}_${rawStatus}_${duration}`;
@@ -403,6 +708,41 @@ const handleCallWebhook = async (req, res) => {
       console.log(`[MyOperator Webhook] Dropping duplicate webhook event: ${idempotencyKey}`);
       return res.json({ success: true, message: 'Duplicate webhook dropped' });
     }
+
+    // Resolve Sales Agent from Telephony Registry
+    let matchedAccount = null;
+    if (companyId) {
+      matchedAccount = TELEPHONY_ACCOUNTS.find(acc => acc.companyId === companyId);
+    }
+    if (!matchedAccount && rawDid) {
+      matchedAccount = TELEPHONY_ACCOUNTS.find(acc => {
+        const cleanAccDid = acc.did.replace(/\D/g, '').replace(/^0+/, '');
+        return cleanAccDid === rawDid || rawDid.endsWith(cleanAccDid) || cleanAccDid.endsWith(rawDid);
+      });
+    }
+    if (!matchedAccount && agentPhone) {
+      matchedAccount = TELEPHONY_ACCOUNTS.find(acc => acc.mobileNumber.includes(agentPhone) || agentPhone.includes(acc.mobileNumber));
+    }
+
+    let agentUser = null;
+    if (matchedAccount) {
+      agentUser = await User.findOne({ email: matchedAccount.email.toLowerCase() });
+    }
+    if (!agentUser && agentPhone) {
+      agentUser = await User.findOne({ phoneNumber: { $regex: agentPhone } });
+    }
+    if (!agentUser && rawDid) {
+      agentUser = await User.findOne({
+        $or: [
+          { 'myoperatorConfig.did': rawDid },
+          { 'myoperatorConfig.did': `0${rawDid}` },
+          { 'myoperatorConfig.did': `91${rawDid}` }
+        ]
+      });
+    }
+
+    const resolvedAgentId = agentUser ? agentUser._id : null;
+    const resolvedAgentPhone = agentUser?.phoneNumber || matchedAccount?.mobileNumber || agentPhone;
 
     const isProgressOrRinging = ['initiated', 'ringing', 'dialing', 'progress', 'queued', 'connecting'].includes(rawStatus) ||
                                 event.includes('initiat') || event.includes('ring') || event.includes('dial') || event.includes('progress') ||
@@ -426,17 +766,22 @@ const handleCallWebhook = async (req, res) => {
     if (callId || customerPhone) {
       let callLog = null;
 
-      // 1. Try finding by call ID / providerCallId / reference_id / unique_id / ref_id
-      if (callId || merged.ref_id || merged.client_ref_id) {
-        const idsToMatch = [
-          callId,
-          merged.ref_id,
-          merged.client_ref_id,
-          payload.session_id,
-          merged.id,
-          merged.unique_id
-        ].filter(Boolean).map(String);
+      // 1. Try finding by call ID / providerCallId / reference_id / unique_id / ref_id / additional_parameters
+      const idsToMatch = [
+        callId,
+        uniqueIdFromAddParams,
+        merged.ref_id,
+        merged.client_ref_id,
+        payload.session_id,
+        merged.id,
+        merged.unique_id,
+        merged.allcaller_id,
+        merged.call_id,
+        merged.reference_id,
+        ...(Array.isArray(merged.additional_parameters) ? merged.additional_parameters.map(p => p.vl) : [])
+      ].filter(Boolean).map(String);
 
+      if (idsToMatch.length > 0) {
         callLog = await CallLog.findOne({
           $or: [
             { callId: { $in: idsToMatch } },
@@ -447,45 +792,97 @@ const handleCallWebhook = async (req, res) => {
             { 'metadata.client_ref_id': { $in: idsToMatch } },
             { 'metadata.reference_id': { $in: idsToMatch } },
             { 'metadata.session_id': { $in: idsToMatch } },
-            { 'metadata.call_id': { $in: idsToMatch } }
+            { 'metadata.call_id': { $in: idsToMatch } },
+            { 'metadata.allcaller_id': { $in: idsToMatch } },
+            { 'metadata.additional_parameters.vl': { $in: idsToMatch } },
+            { 'metadata.additional_parameters': { $elemMatch: { ky: 'unique_id', vl: { $in: idsToMatch } } } }
           ]
         }).sort({ createdAt: -1 });
       }
 
-      // 2. Fallback: match most recent call log for this customer phone within last 2 hours
+      // 2. Fallback: match most recent call log for this customer phone within 3 minutes
       if (!callLog && customerPhone) {
-        const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+        const threeMinAgo = new Date(Date.now() - 3 * 60 * 1000);
         callLog = await CallLog.findOne({
           customerPhone: { $regex: customerPhone },
-          createdAt: { $gte: twoHoursAgo }
+          createdAt: { $gte: threeMinAgo }
         }).sort({ createdAt: -1 });
       }
 
       if (!callLog) {
-        let agentId = null;
-        if (agentPhone) {
-          const agentUser = await User.findOne({ phoneNumber: { $regex: agentPhone } });
-          if (agentUser) agentId = agentUser._id;
-        }
-
         const contact = await Contact.findOne({
           $or: [
             { phone: customerPhone },
             { phone: `91${customerPhone}` },
-            { phone: `+91${customerPhone}` }
+            { phone: `+91${customerPhone}` },
+            { phone: `0${customerPhone}` }
           ]
         });
 
         callLog = new CallLog({
           callId: String(callId || `CALL_${Date.now()}`),
           providerCallId: String(callId || `CALL_${Date.now()}`),
-          direction: merged.direction === 'inbound' ? 'inbound' : 'outbound',
+          direction: isInbound ? 'inbound' : 'outbound',
           customerPhone: customerPhone || 'Unknown',
-          agentPhone,
-          agentId,
+          agentPhone: resolvedAgentPhone,
+          agentId: resolvedAgentId,
           contactId: contact?._id || null,
           status: 'initiated'
         });
+      }
+
+      // Correct customerPhone if previously assigned to an agent's phone
+      if (customerPhone && customerPhone !== 'Unknown' && (KNOWN_AGENT_PHONES.includes(callLog.customerPhone) || callLog.customerPhone === callLog.agentPhone || !callLog.customerPhone)) {
+        callLog.customerPhone = customerPhone;
+        callLog.contactId = null; // Reset to re-link to true customer contact
+      }
+
+      // Ensure agentId & agentPhone are populated
+      if ((!callLog.agentId || KNOWN_AGENT_PHONES.includes(callLog.customerPhone)) && resolvedAgentId) {
+        callLog.agentId = resolvedAgentId;
+      }
+      if ((!callLog.agentPhone || KNOWN_AGENT_PHONES.includes(callLog.customerPhone)) && resolvedAgentPhone) {
+        callLog.agentPhone = resolvedAgentPhone;
+      }
+      if (!callLog.direction) {
+        callLog.direction = isInbound ? 'inbound' : 'outbound';
+      } else if (isExplicitOutbound) {
+        callLog.direction = 'outbound';
+      } else if (isExplicitInbound && callLog.direction !== 'outbound') {
+        callLog.direction = 'inbound';
+      }
+
+      // Populate Contact details for real-time display & auto-linking
+      let contactObj = null;
+      if (callLog.contactId) {
+        contactObj = await Contact.findById(callLog.contactId).select('name phone preferredLanguage').lean();
+      } else if (customerPhone) {
+        contactObj = await Contact.findOne({
+          $or: [
+            { phone: customerPhone },
+            { phone: `91${customerPhone}` },
+            { phone: `+91${customerPhone}` },
+            { phone: `0${customerPhone}` }
+          ]
+        }).select('name phone preferredLanguage').lean();
+
+        // If contact doesn't exist yet, auto-create in CRM so it's immediately indexed
+        if (!contactObj && customerPhone && customerPhone.length >= 10) {
+          try {
+            const newContact = await Contact.create({
+              name: `Caller +91 ${customerPhone}`,
+              phone: `+91${customerPhone}`,
+              assignedTo: resolvedAgentId || null
+            });
+            contactObj = { _id: newContact._id, name: newContact.name, phone: newContact.phone };
+          } catch (_) {
+            contactObj = await Contact.findOne({
+              $or: [{ phone: customerPhone }, { phone: `+91${customerPhone}` }]
+            }).select('name phone preferredLanguage').lean();
+          }
+        }
+
+        if (contactObj) callLog.contactId = contactObj._id;
       }
 
       if (isProgressOrRinging) {
@@ -495,7 +892,7 @@ const handleCallWebhook = async (req, res) => {
       } else if (isAnsweredEvent) {
         callLog.status = 'answered';
       } else if (isEndEvent) {
-        callLog.status = duration > 0 ? 'answered' : (rawStatus === 'busy' ? 'busy' : (rawStatus === 'missed' ? 'missed' : 'ended'));
+        callLog.status = duration > 0 ? 'answered' : (rawStatus === 'busy' ? 'busy' : (rawStatus === 'missed' || rawStatus === 'no-answer' || rawStatus === 'not_answered' ? 'missed' : 'ended'));
         if (duration > 0 || !callLog.durationSeconds) callLog.durationSeconds = duration;
         if (recordingUrl) callLog.recordingUrl = recordingUrl;
         callLog.callSummary = callSummary;
@@ -503,11 +900,25 @@ const handleCallWebhook = async (req, res) => {
         callLog.status = rawStatus;
       }
 
-      callLog.metadata = { ...callLog.metadata, ...payload, ...nestedData };
+      callLog.metadata = { ...callLog.metadata, ...payload, ...nestedData, companyId, rawDid };
       if (recordingUrl && !callLog.recordingUrl) callLog.recordingUrl = recordingUrl;
 
       // Ultra-Fast Instant WebSocket Broadcast (< 1ms)
       const fastLogData = callLog.toObject();
+      if (contactObj) {
+        fastLogData.contactId = contactObj;
+        fastLogData.customerName = contactObj.name;
+      }
+      if (agentUser) {
+        fastLogData.agentId = {
+          _id: agentUser._id,
+          firstName: agentUser.firstName,
+          lastName: agentUser.lastName,
+          email: agentUser.email,
+          phoneNumber: agentUser.phoneNumber
+        };
+      }
+
       const broadcastPayload = {
         type: 'CALL_UPDATE',
         event: isEndEvent ? 'call.ended' : event,
@@ -709,13 +1120,246 @@ const setAgentStatus = async (req, res) => {
   }
 };
 
+/**
+ * Get Telephony Configured Agents List (Exact MyOperator lines)
+ */
+const getTelephonyAgents = async (req, res) => {
+  try {
+    const emails = TELEPHONY_ACCOUNTS.map(a => a.email.toLowerCase());
+    const phones = TELEPHONY_ACCOUNTS.map(a => a.mobileNumber);
+
+    const userDocs = await User.find({
+      $or: [
+        { email: { $in: emails } },
+        { phoneNumber: { $in: phones } }
+      ]
+    }).select('_id firstName lastName email phoneNumber role').lean();
+
+    const merged = TELEPHONY_ACCOUNTS.map(acc => {
+      const match = userDocs.find(u => 
+        (u.email && u.email.toLowerCase() === acc.email.toLowerCase()) ||
+        (u.phoneNumber && u.phoneNumber.includes(acc.mobileNumber))
+      );
+      return {
+        _id: match?._id ? match._id.toString() : null,
+        firstName: acc.name,
+        lastName: '',
+        name: acc.name,
+        email: acc.email,
+        phoneNumber: acc.outboundNumber,
+        mobileNumber: acc.mobileNumber,
+        accountName: acc.accountName,
+        companyId: acc.companyId,
+        did: acc.did,
+        role: acc.role,
+        isAdmin: !!acc.isAdmin
+      };
+    });
+
+    res.json({
+      success: true,
+      count: merged.length,
+      agents: merged,
+      data: merged
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+/**
+ * Delete a single call log (Soft or Permanent)
+ */
+const deleteCallLog = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const isPermanent = req.query.permanent === 'true' || req.body?.permanent === true;
+    let query = {};
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      query._id = id;
+    } else {
+      query.$or = [{ callId: id }, { providerCallId: id }];
+    }
+
+    const log = await CallLog.findOne(query);
+    if (!log) {
+      return res.status(404).json({ success: false, message: 'Call log not found' });
+    }
+
+    // Role check: Only admin or the assigned agent can delete
+    if (req.user.role !== 'admin' && log.agentId && log.agentId.toString() !== req.user.id) {
+      return res.status(403).json({ success: false, message: 'Not authorized to delete this call log' });
+    }
+
+    if (isPermanent && req.user.role === 'admin') {
+      await CallLog.deleteOne({ _id: log._id });
+    } else {
+      log.isDeleted = true;
+      log.deletedAt = new Date();
+      log.deletedBy = req.user.id;
+      await log.save();
+    }
+
+    // Broadcast deletion via WebSocket
+    wsService.broadcastToRoles(['admin', 'sales'], {
+      type: 'CALL_DELETED',
+      data: { id: log._id.toString() }
+    });
+
+    res.json({ success: true, message: isPermanent ? 'Call log permanently deleted' : 'Call log deleted successfully', id: log._id });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * Restore a soft-deleted call log
+ */
+const restoreCallLog = async (req, res) => {
+  try {
+    const { id } = req.params;
+    let query = {};
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      query._id = id;
+    } else {
+      query.$or = [{ callId: id }, { providerCallId: id }];
+    }
+
+    const log = await CallLog.findOne(query);
+    if (!log) {
+      return res.status(404).json({ success: false, message: 'Call log not found' });
+    }
+
+    log.isDeleted = false;
+    log.deletedAt = null;
+    log.deletedBy = null;
+    await log.save();
+
+    const populated = await CallLog.findById(log._id)
+      .populate('agentId', 'firstName lastName email phoneNumber')
+      .populate('contactId', 'name phone preferredLanguage');
+
+    wsService.broadcastToRoles(['admin', 'sales'], {
+      type: 'CALL_RESTORED',
+      data: populated || log.toObject()
+    });
+
+    res.json({ success: true, message: 'Call log restored successfully', data: log });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * Bulk delete call logs (Soft or Permanent)
+ */
+const bulkDeleteCallLogs = async (req, res) => {
+  try {
+    const rawIds = req.body.ids || req.body.callLogIds;
+    const isPermanent = req.query.permanent === 'true' || req.body?.permanent === true;
+    if (!Array.isArray(rawIds) || rawIds.length === 0) {
+      return res.status(400).json({ success: false, message: 'Array of call log ids is required' });
+    }
+    const ids = rawIds.map(String);
+    const objectIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
+    const filterQuery = {
+      $or: [
+        { _id: { $in: objectIds } },
+        { callId: { $in: ids } },
+        { providerCallId: { $in: ids } }
+      ]
+    };
+
+    let deletedCount = 0;
+    if (isPermanent && req.user.role === 'admin') {
+      const result = await CallLog.deleteMany(filterQuery);
+      deletedCount = result.deletedCount;
+    } else {
+      const result = await CallLog.updateMany(
+        filterQuery,
+        {
+          $set: {
+            isDeleted: true,
+            deletedAt: new Date(),
+            deletedBy: req.user.id
+          }
+        }
+      );
+      deletedCount = result.modifiedCount;
+    }
+
+    wsService.broadcastToRoles(['admin', 'sales'], {
+      type: 'CALLS_BULK_DELETED',
+      data: { ids, count: deletedCount }
+    });
+
+    res.json({
+      success: true,
+      message: `Successfully deleted ${deletedCount} call logs`,
+      deletedCount
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * Clear All Call Logs (Admin Only - Soft or Permanent)
+ */
+const clearAllCallLogs = async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Only Admins can clear all call logs' });
+    }
+
+    const isPermanent = req.query.permanent === 'true' || req.body?.permanent === true;
+    let deletedCount = 0;
+
+    if (isPermanent) {
+      const result = await CallLog.deleteMany({});
+      deletedCount = result.deletedCount;
+    } else {
+      const result = await CallLog.updateMany(
+        { isDeleted: { $ne: true } },
+        {
+          $set: {
+            isDeleted: true,
+            deletedAt: new Date(),
+            deletedBy: req.user.id
+          }
+        }
+      );
+      deletedCount = result.modifiedCount;
+    }
+
+    wsService.broadcastToRoles(['admin', 'sales'], {
+      type: 'CALLS_CLEARED',
+      data: { count: deletedCount }
+    });
+
+    res.json({
+      success: true,
+      message: `Successfully cleared ${deletedCount} call logs`,
+      deletedCount
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 module.exports = {
   triggerOutboundCall,
   getCallLogs,
+  syncCallLogs,
   saveCallDisposition,
   handleCallWebhook,
   endCall,
   getWebRTCSession,
   getRecordingPlaybackUrl,
-  setAgentStatus
+  setAgentStatus,
+  getTelephonyAgents,
+  deleteCallLog,
+  restoreCallLog,
+  bulkDeleteCallLogs,
+  clearAllCallLogs
 };
