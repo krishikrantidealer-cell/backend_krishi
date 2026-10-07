@@ -555,28 +555,34 @@ const handleCallWebhook = async (req, res) => {
                    payload.event_id;
 
     // Detect Inbound vs Outbound accurately
-    const uniqueIdFromAddParams = Array.isArray(merged.additional_parameters)
-      ? merged.additional_parameters.find(p => p.ky === 'unique_id')?.vl
-      : null;
-
-    const isMyOperatorOutboundSession = Boolean(
-      (uniqueIdFromAddParams && String(uniqueIdFromAddParams).startsWith('i1.')) ||
-      (callId && String(callId).startsWith('i1.')) ||
-      (merged.unique_id && String(merged.unique_id).startsWith('i1.')) ||
-      (merged.session_id && String(merged.session_id).startsWith('i1.')) ||
-      (payload.session_id && String(payload.session_id).startsWith('i1.'))
-    );
-
     const rawType = String(merged.type || merged.call_type || '').trim().toLowerCase();
     const rawDirection = String(merged.direction || payload.direction || payload.event_type || '').trim().toLowerCase();
     const eventString = String(merged.event || payload.event || rawEvent || '').trim().toLowerCase();
 
-    const isExplicitOutbound = isMyOperatorOutboundSession ||
-                               rawDirection === 'outbound' ||
+    const isExplicitInbound = rawDirection === 'incoming' ||
+                              rawDirection === 'inbound' ||
+                              rawDirection === 'in' ||
+                              rawDirection === '1' ||
+                              merged.direction === 1 ||
+                              payload.direction === 1 ||
+                              eventString === '1' ||
+                              eventString.startsWith('inbound') ||
+                              eventString === 'call.inbound' ||
+                              eventString === 'incoming';
+
+    const isExplicitOutbound = !isExplicitInbound && (
                                rawDirection === 'outgoing' ||
+                               rawDirection === 'outbound' ||
                                rawDirection === 'out' ||
                                rawDirection === '2' ||
                                merged.direction === 2 ||
+                               payload.direction === 2 ||
+                               eventString === '2' ||
+                               eventString.startsWith('outbound') ||
+                               eventString.startsWith('outgoing') ||
+                               eventString === 'call.outbound' ||
+                               eventString.includes('c2c') ||
+                               eventString.includes('obd') ||
                                rawType === 'outbound' ||
                                rawType === 'outgoing' ||
                                rawType === 'obd' ||
@@ -584,28 +590,7 @@ const handleCallWebhook = async (req, res) => {
                                rawType === 'c2c' ||
                                rawType === 'dialer' ||
                                rawType === '2' ||
-                               merged.type === 2 ||
-                               eventString.startsWith('outbound') ||
-                               eventString.startsWith('outgoing') ||
-                               eventString === 'call.outbound' ||
-                               eventString.includes('c2c') ||
-                               eventString.includes('obd') ||
-                               Boolean(agentLeg && customerLeg);
-
-    const isExplicitInbound = !isExplicitOutbound && (
-                              rawDirection === 'inbound' ||
-                              rawDirection === 'incoming' ||
-                              rawDirection === 'in' ||
-                              rawDirection === '1' ||
-                              merged.direction === 1 ||
-                              rawType === 'inbound' ||
-                              rawType === 'incoming' ||
-                              rawType === 'ivr' ||
-                              rawType === '1' ||
-                              merged.type === 1 ||
-                              eventString.startsWith('inbound') ||
-                              eventString === 'call.inbound' ||
-                              eventString === 'incoming'
+                               merged.type === 2
     );
 
     const isInbound = isExplicitInbound || (!isExplicitOutbound && Boolean(merged.public_ivr_id && !merged.customer_number && !merged.destination_number && !customerLeg));
@@ -763,6 +748,10 @@ const handleCallWebhook = async (req, res) => {
       !!recordingUrl
     );
 
+    const uniqueIdFromAddParams = Array.isArray(merged.additional_parameters)
+      ? merged.additional_parameters.find(p => p.ky === 'unique_id')?.vl
+      : null;
+
     if (callId || customerPhone) {
       let callLog = null;
 
@@ -800,12 +789,13 @@ const handleCallWebhook = async (req, res) => {
         }).sort({ createdAt: -1 });
       }
 
-      // 2. Fallback: match most recent call log for this customer phone within 3 minutes
+      // 2. Fallback: match most recent call log for this customer phone & direction within 2 minutes
       if (!callLog && customerPhone) {
-        const threeMinAgo = new Date(Date.now() - 3 * 60 * 1000);
+        const twoMinAgo = new Date(Date.now() - 2 * 60 * 1000);
         callLog = await CallLog.findOne({
           customerPhone: { $regex: customerPhone },
-          createdAt: { $gte: threeMinAgo }
+          direction: isInbound ? 'inbound' : 'outbound',
+          createdAt: { $gte: twoMinAgo }
         }).sort({ createdAt: -1 });
       }
 

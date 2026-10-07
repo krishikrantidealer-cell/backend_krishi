@@ -622,22 +622,33 @@ class MyOperatorCallService {
           ? r.additional_parameters.find(p => p.ky === 'unique_id')?.vl
           : null;
 
-        const isMyOperatorOutboundSession = Boolean(
-          (uniqueIdFromAddParams && String(uniqueIdFromAddParams).startsWith('i1.')) ||
-          (r.unique_id && String(r.unique_id).startsWith('i1.')) ||
-          (r.session_id && String(r.session_id).startsWith('i1.')) ||
-          (r.call_id && String(r.call_id).startsWith('i1.')) ||
-          (r.ref_id && String(r.ref_id).startsWith('i1.'))
-        );
-
         const KNOWN_AGENT_PHONES = ['9201896606', '9399022063', '9201896603', '9201896608', '9201896604'];
 
-        const isExplicitOutbound = isMyOperatorOutboundSession ||
-                                   dirLower === 'outbound' ||
+        // MyOperator Direction Detection:
+        // event === 1 or direction === 'incoming'/'inbound' => INBOUND
+        // event === 2 or direction === 'outgoing'/'outbound' or type === 2/'obd'/'click2call' => OUTBOUND
+        const isExplicitInbound = dirLower === 'incoming' ||
+                                  dirLower === 'inbound' ||
+                                  dirLower === 'in' ||
+                                  dirLower === '1' ||
+                                  r.direction === 1 ||
+                                  eventLower === '1' ||
+                                  eventLower.startsWith('inbound') ||
+                                  eventLower === 'incoming' ||
+                                  eventLower === 'call.inbound';
+
+        const isExplicitOutbound = !isExplicitInbound && (
                                    dirLower === 'outgoing' ||
+                                   dirLower === 'outbound' ||
                                    dirLower === 'out' ||
                                    dirLower === '2' ||
                                    r.direction === 2 ||
+                                   eventLower === '2' ||
+                                   eventLower.startsWith('outbound') ||
+                                   eventLower.startsWith('outgoing') ||
+                                   eventLower === 'call.outbound' ||
+                                   eventLower.includes('obd') ||
+                                   eventLower.includes('c2c') ||
                                    typeLower === 'outbound' ||
                                    typeLower === 'outgoing' ||
                                    typeLower === 'obd' ||
@@ -645,25 +656,7 @@ class MyOperatorCallService {
                                    typeLower === 'c2c' ||
                                    typeLower === 'dialer' ||
                                    typeLower === '2' ||
-                                   r.type === 2 ||
-                                   eventLower.startsWith('outbound') ||
-                                   eventLower.startsWith('outgoing') ||
-                                   eventLower.includes('obd') ||
-                                   eventLower.includes('c2c');
-
-        const isExplicitInbound = !isExplicitOutbound && (
-                                  dirLower === 'inbound' ||
-                                  dirLower === 'incoming' ||
-                                  dirLower === 'in' ||
-                                  dirLower === '1' ||
-                                  r.direction === 1 ||
-                                  typeLower === 'inbound' ||
-                                  typeLower === 'incoming' ||
-                                  typeLower === 'ivr' ||
-                                  typeLower === '1' ||
-                                  r.type === 1 ||
-                                  eventLower.startsWith('inbound') ||
-                                  eventLower === 'incoming'
+                                   r.type === 2
         );
 
         const isInbound = isExplicitInbound || (!isExplicitOutbound && !r.destination_number && !r.to);
@@ -825,12 +818,13 @@ class MyOperatorCallService {
           ]
         });
 
-        // Proximity deduplication: match by customer & agent phone within 180s window
+        // Proximity deduplication: match by customer phone & direction within 180s window
         if (!existingLog && customerPhone) {
           const windowStart = new Date(callTime.getTime() - 180 * 1000);
           const windowEnd = new Date(callTime.getTime() + 180 * 1000);
           existingLog = await CallLog.findOne({
             customerPhone,
+            direction,
             createdAt: { $gte: windowStart, $lte: windowEnd }
           });
         }
@@ -842,16 +836,9 @@ class MyOperatorCallService {
 
         if (existingLog) {
           let changed = false;
-          if (!existingLog.direction) {
+          if (direction && existingLog.direction !== direction) {
             existingLog.direction = direction;
-            changed = true;
-          } else if (isExplicitOutbound && existingLog.direction !== 'outbound') {
-            existingLog.direction = 'outbound';
-            changed = true;
-          } else if (existingLog.direction === 'outbound') {
-            // NEVER downgrade an outbound call to inbound from CDR
-          } else if (isExplicitInbound && existingLog.direction !== 'inbound' && existingLog.direction !== 'outbound') {
-            existingLog.direction = 'inbound';
+            existingLog.callSummary = isInbound ? (existingLog.status === 'missed' ? 'Missed Inbound Call' : 'Inbound Call') : 'Outbound Call';
             changed = true;
           }
           if (status && existingLog.status !== status) {
