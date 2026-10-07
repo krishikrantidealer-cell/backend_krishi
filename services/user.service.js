@@ -1,5 +1,6 @@
 const User = require('../models/User');
 const notificationService = require('./notification.service');
+const contactSyncService = require('./contactSync.service');
 
 class UserService {
   async getAllUsers(filters = {}) {
@@ -401,6 +402,14 @@ class UserService {
     }
 
     await user.save();
+
+    // Automatically sync Lead/Dealer to unified WhatsApp Contact & Conversation thread
+    try {
+      await contactSyncService.syncUserToContactAndConversation(user, { broadcastWs: true });
+    } catch (syncErr) {
+      console.error('[UserService] Failed to sync contact on agent assignment:', syncErr.message);
+    }
+
     return await User.findById(userId).populate('assignedAgent', 'firstName lastName phoneNumber email');
   }
 

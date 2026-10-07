@@ -7,12 +7,26 @@ const CannedResponse = require('../models/CannedResponse');
 const WhatsAppTemplate = require('../models/WhatsAppTemplate');
 const myoperatorService = require('../services/myoperator.service');
 const wsService = require('../services/websocket.service');
+const contactSyncService = require('../services/contactSync.service');
 
-// Get all conversations with pagination and role checks
+// Get all conversations with pagination, role checks, and tab filtering
 const getConversations = async (req, res) => {
   try {
-    const { page = 1, limit = 20, search = '', status = 'open' } = req.query;
+    const { page = 1, limit = 500, search = '', status = 'open', tab = 'all', agentId } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    // Auto-sync leads and dealers on page 1 load
+    if (parseInt(page) === 1) {
+      if (req.user.role === 'admin') {
+        contactSyncService.syncAllUsers().catch(err => {
+          console.error('[GetConversations] Lazy admin roster sync warning:', err.message);
+        });
+      } else if (req.user.role === 'sales') {
+        contactSyncService.syncAllAssignedUsersForAgent(req.user.id).catch(err => {
+          console.error('[GetConversations] Lazy agent roster sync warning:', err.message);
+        });
+      }
+    }
 
     const query = {};
 
@@ -20,22 +34,47 @@ const getConversations = async (req, res) => {
       query.status = status;
     }
 
-    // Role-based security filters: sales agents see their assigned leads or unassigned leads
+    // Role-based security filters: sales agents see only their assigned contacts/conversations
     if (req.user.role === 'sales') {
       const assignedContactIds = await Contact.find({ assignedTo: req.user.id }).distinct('_id');
       query.$or = [
         { assignedTo: req.user.id },
         ...(assignedContactIds.length > 0 ? [{ contactId: { $in: assignedContactIds } }] : [])
       ];
+    } else if (req.user.role === 'admin' && agentId) {
+      // Admin filtering by specific sales agent
+      const assignedContactIds = await Contact.find({ assignedTo: agentId }).distinct('_id');
+      query.$or = [
+        { assignedTo: agentId },
+        ...(assignedContactIds.length > 0 ? [{ contactId: { $in: assignedContactIds } }] : [])
+      ];
     }
 
-    // Apply Search Filters by customer name or phone number
+    // Tab-based filtering: 'all', 'active', 'leads', 'dealers', 'unread'
+    if (tab === 'active') {
+      query['lastMessage.content'] = { $exists: true, $ne: '' };
+    } else if (tab === 'leads') {
+      const leadContactIds = await Contact.find({
+        tags: { $in: ['Lead', 'New Lead', /^Lead/i] }
+      }).distinct('_id');
+      query.contactId = { $in: leadContactIds };
+    } else if (tab === 'dealers') {
+      const dealerContactIds = await Contact.find({
+        tags: { $in: ['Dealer', 'Verified Retailer', /^Dealer/i] }
+      }).distinct('_id');
+      query.contactId = { $in: dealerContactIds };
+    } else if (tab === 'unread') {
+      query.unreadCount = { $gt: 0 };
+    }
+
+    // Apply Search Filters by customer name, phone number, or shop name
     if (search && search.trim() !== '') {
       const cleanSearch = search.trim();
       const cleanPhone = cleanSearch.replace(/\D/g, '').replace(/^91/, '');
       const matchingContacts = await Contact.find({
         $or: [
           { name: { $regex: cleanSearch, $options: 'i' } },
+          { tags: { $regex: cleanSearch, $options: 'i' } },
           ...(cleanPhone ? [
             { phone: { $regex: cleanPhone } },
             { phone: { $regex: `91${cleanPhone}` } }
@@ -43,7 +82,14 @@ const getConversations = async (req, res) => {
         ]
       }).select('_id');
       const contactIds = matchingContacts.map(c => c._id);
-      query.contactId = { $in: contactIds };
+      
+      if (query.contactId && query.contactId.$in) {
+        // Intersect contact IDs
+        const existingIds = new Set(query.contactId.$in.map(String));
+        query.contactId = { $in: contactIds.filter(id => existingIds.has(String(id))) };
+      } else {
+        query.contactId = { $in: contactIds };
+      }
     }
 
     const conversations = await Conversation.find(query)
@@ -55,10 +101,77 @@ const getConversations = async (req, res) => {
 
     const total = await Conversation.countDocuments(query);
 
+    // Compute live tab summary counts
+    const baseQuery = {};
+    if (status && status !== 'all' && status.trim() !== '') {
+      baseQuery.status = status;
+    }
+    if (req.user.role === 'sales') {
+      const assignedContactIds = await Contact.find({ assignedTo: req.user.id }).distinct('_id');
+      baseQuery.$or = [
+        { assignedTo: req.user.id },
+        ...(assignedContactIds.length > 0 ? [{ contactId: { $in: assignedContactIds } }] : [])
+      ];
+    } else if (req.user.role === 'admin' && agentId) {
+      const assignedContactIds = await Contact.find({ assignedTo: agentId }).distinct('_id');
+      baseQuery.$or = [
+        { assignedTo: agentId },
+        ...(assignedContactIds.length > 0 ? [{ contactId: { $in: assignedContactIds } }] : [])
+      ];
+    }
+
+    const allLeadContactIds = await Contact.find({
+      tags: { $in: ['Lead', 'New Lead', /^Lead/i] }
+    }).distinct('_id');
+    const allDealerContactIds = await Contact.find({
+      tags: { $in: ['Dealer', 'Verified Retailer', /^Dealer/i] }
+    }).distinct('_id');
+
+    const [allCount, leadsCount, dealersCount, activeCount, unreadCount] = await Promise.all([
+      Conversation.countDocuments(baseQuery),
+      Conversation.countDocuments({ ...baseQuery, contactId: { $in: allLeadContactIds } }),
+      Conversation.countDocuments({ ...baseQuery, contactId: { $in: allDealerContactIds } }),
+      Conversation.countDocuments({ ...baseQuery, 'lastMessage.content': { $exists: true, $ne: '' } }),
+      Conversation.countDocuments({ ...baseQuery, unreadCount: { $gt: 0 } })
+    ]);
+
     res.json({
       success: true,
       data: conversations,
-      pagination: { total, page: parseInt(page), pages: Math.ceil(total / parseInt(limit)) }
+      pagination: { total, page: parseInt(page), pages: Math.ceil(total / parseInt(limit)) },
+      counts: {
+        all: allCount,
+        leads: leadsCount,
+        dealers: dealersCount,
+        active: activeCount,
+        unread: unreadCount
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * On-demand Roster Sync Endpoint (Syncs all leads/dealers in CRM)
+ */
+const syncRoster = async (req, res) => {
+  try {
+    let result;
+    if (req.user.role === 'sales') {
+      result = await contactSyncService.syncAllAssignedUsersForAgent(req.user.id);
+    } else {
+      const targetAgentId = req.query.agentId || req.body.agentId;
+      if (targetAgentId) {
+        result = await contactSyncService.syncAllAssignedUsersForAgent(targetAgentId);
+      } else {
+        result = await contactSyncService.syncAllUsers();
+      }
+    }
+    res.json({
+      success: true,
+      message: `Roster sync completed: ${result.synced || 0} contacts synchronized`,
+      data: result
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -703,6 +816,7 @@ const deleteCannedResponse = async (req, res) => {
 
 module.exports = {
   getConversations,
+  syncRoster,
   getMessages,
   sendConversationMessage,
   assignConversation,

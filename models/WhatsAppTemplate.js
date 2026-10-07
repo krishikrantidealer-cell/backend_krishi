@@ -7,14 +7,20 @@ const whatsAppTemplateSchema = new mongoose.Schema({
     trim: true,
     index: true
   },
+  title: {
+    type: String,
+    trim: true,
+    default: ''
+  },
   category: {
     type: String,
     enum: ['MARKETING', 'UTILITY', 'AUTHENTICATION'],
-    default: 'UTILITY'
+    default: 'UTILITY',
+    index: true
   },
   language: {
     type: String,
-    default: 'en'
+    default: 'hi'
   },
   headerType: {
     type: String,
@@ -22,6 +28,10 @@ const whatsAppTemplateSchema = new mongoose.Schema({
     default: 'NONE'
   },
   headerText: {
+    type: String,
+    default: ''
+  },
+  headerMediaUrl: {
     type: String,
     default: ''
   },
@@ -49,8 +59,27 @@ const whatsAppTemplateSchema = new mongoose.Schema({
   status: {
     type: String,
     enum: ['PENDING_APPROVAL', 'APPROVED', 'REJECTED', 'PAUSED'],
-    default: 'PENDING_APPROVAL',
+    default: 'APPROVED',
     index: true
+  },
+  // Multi-Agent Telephony Scoping
+  isGlobal: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
+  agentId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    index: true
+  },
+  agentPhone: {
+    type: String,
+    default: ''
+  },
+  companyId: {
+    type: String,
+    default: ''
   },
   providerTemplateId: {
     type: String,
@@ -65,5 +94,8 @@ const whatsAppTemplateSchema = new mongoose.Schema({
     ref: 'User'
   }
 }, { timestamps: true });
+
+// Compound index to ensure uniqueness per agent/WABA account and language
+whatsAppTemplateSchema.index({ name: 1, language: 1, agentId: 1 });
 
 module.exports = mongoose.model('WhatsAppTemplate', whatsAppTemplateSchema);

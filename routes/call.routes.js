@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const controller = require('../controllers/call.controller');
-const { protect } = require('../middlewares/auth.middleware');
+const { protect, authorizeRoles } = require('../middlewares/auth.middleware');
 
 // Public Webhook Endpoints for MyOperator Calls (No Auth required)
 router.post('/webhook', controller.handleCallWebhook);
@@ -45,16 +45,16 @@ router.get('/sync', controller.syncCallLogs);
 router.get('/recordings/:callId/url', controller.getRecordingPlaybackUrl);
 router.put('/agent/status', controller.setAgentStatus);
 
-// Soft Delete, Restore & Cleanup Routes
-router.delete('/clear', controller.clearAllCallLogs);
-router.post('/clear', controller.clearAllCallLogs);
-router.delete('/all', controller.clearAllCallLogs);
-router.post('/all', controller.clearAllCallLogs);
-router.post('/clear-all', controller.clearAllCallLogs);
-router.post('/bulk-delete', controller.bulkDeleteCallLogs);
-router.delete('/bulk', controller.bulkDeleteCallLogs);
-router.delete('/:id', controller.deleteCallLog);
-router.post('/:id/delete', controller.deleteCallLog);
-router.patch('/:id/restore', controller.restoreCallLog);
+// Admin-Only Soft Delete, Restore & Cleanup Routes
+router.delete('/clear', authorizeRoles('admin'), controller.clearAllCallLogs);
+router.post('/clear', authorizeRoles('admin'), controller.clearAllCallLogs);
+router.delete('/all', authorizeRoles('admin'), controller.clearAllCallLogs);
+router.post('/all', authorizeRoles('admin'), controller.clearAllCallLogs);
+router.post('/clear-all', authorizeRoles('admin'), controller.clearAllCallLogs);
+router.post('/bulk-delete', authorizeRoles('admin'), controller.bulkDeleteCallLogs);
+router.delete('/bulk', authorizeRoles('admin'), controller.bulkDeleteCallLogs);
+router.delete('/:id', authorizeRoles('admin'), controller.deleteCallLog);
+router.post('/:id/delete', authorizeRoles('admin'), controller.deleteCallLog);
+router.patch('/:id/restore', authorizeRoles('admin'), controller.restoreCallLog);
 
 module.exports = router;

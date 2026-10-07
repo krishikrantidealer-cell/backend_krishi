@@ -1158,10 +1158,17 @@ const getTelephonyAgents = async (req, res) => {
 };
 
 /**
- * Delete a single call log (Soft or Permanent)
+ * Delete a single call log (Admin Only - Soft or Permanent)
  */
 const deleteCallLog = async (req, res) => {
   try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Access Denied: Only Administrators have permission to delete call logs.'
+      });
+    }
+
     const { id } = req.params;
     const isPermanent = req.query.permanent === 'true' || req.body?.permanent === true;
     let query = {};
@@ -1176,12 +1183,7 @@ const deleteCallLog = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Call log not found' });
     }
 
-    // Role check: Only admin or the assigned agent can delete
-    if (req.user.role !== 'admin' && log.agentId && log.agentId.toString() !== req.user.id) {
-      return res.status(403).json({ success: false, message: 'Not authorized to delete this call log' });
-    }
-
-    if (isPermanent && req.user.role === 'admin') {
+    if (isPermanent) {
       await CallLog.deleteOne({ _id: log._id });
     } else {
       log.isDeleted = true;
@@ -1203,10 +1205,17 @@ const deleteCallLog = async (req, res) => {
 };
 
 /**
- * Restore a soft-deleted call log
+ * Restore a soft-deleted call log (Admin Only)
  */
 const restoreCallLog = async (req, res) => {
   try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Access Denied: Only Administrators have permission to restore call logs.'
+      });
+    }
+
     const { id } = req.params;
     let query = {};
     if (mongoose.Types.ObjectId.isValid(id)) {
@@ -1241,10 +1250,17 @@ const restoreCallLog = async (req, res) => {
 };
 
 /**
- * Bulk delete call logs (Soft or Permanent)
+ * Bulk delete call logs (Admin Only - Soft or Permanent)
  */
 const bulkDeleteCallLogs = async (req, res) => {
   try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Access Denied: Only Administrators have permission to delete call logs.'
+      });
+    }
+
     const rawIds = req.body.ids || req.body.callLogIds;
     const isPermanent = req.query.permanent === 'true' || req.body?.permanent === true;
     if (!Array.isArray(rawIds) || rawIds.length === 0) {
@@ -1261,7 +1277,7 @@ const bulkDeleteCallLogs = async (req, res) => {
     };
 
     let deletedCount = 0;
-    if (isPermanent && req.user.role === 'admin') {
+    if (isPermanent) {
       const result = await CallLog.deleteMany(filterQuery);
       deletedCount = result.deletedCount;
     } else {
@@ -1299,7 +1315,10 @@ const bulkDeleteCallLogs = async (req, res) => {
 const clearAllCallLogs = async (req, res) => {
   try {
     if (req.user.role !== 'admin') {
-      return res.status(403).json({ success: false, message: 'Only Admins can clear all call logs' });
+      return res.status(403).json({
+        success: false,
+        message: 'Access Denied: Only Administrators have permission to clear call logs.'
+      });
     }
 
     const isPermanent = req.query.permanent === 'true' || req.body?.permanent === true;

@@ -5,6 +5,7 @@ const { protect, authorizeRoles } = require('../middlewares/auth.middleware');
 
 // Conversational Endpoints (Protected)
 router.get('/conversations', protect, controller.getConversations);
+router.post('/conversations/sync-roster', protect, controller.syncRoster);
 router.get('/conversations/:id/messages', protect, controller.getMessages);
 router.post('/conversations/start', protect, controller.startConversation);
 router.post('/messages/send', protect, controller.sendConversationMessage);
