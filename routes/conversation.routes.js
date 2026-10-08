@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const controller = require('../controllers/conversation.controller');
 const { protect, authorizeRoles } = require('../middlewares/auth.middleware');
+const upload = require('../middlewares/upload.middleware');
 
 // Conversational Endpoints (Protected)
 router.get('/conversations', protect, controller.getConversations);
@@ -9,6 +10,7 @@ router.post('/conversations/sync-roster', protect, controller.syncRoster);
 router.get('/conversations/:id/messages', protect, controller.getMessages);
 router.post('/conversations/start', protect, controller.startConversation);
 router.post('/messages/send', protect, controller.sendConversationMessage);
+router.post('/conversations/media/upload', protect, upload.single('file'), controller.uploadMedia);
 router.post('/conversations/assign', protect, authorizeRoles('admin'), controller.assignConversation);
 router.post('/notes', protect, controller.addNote);
 router.put('/conversations/:id/status', protect, controller.updateConversationStatus);

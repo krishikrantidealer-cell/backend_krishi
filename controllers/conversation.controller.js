@@ -1020,9 +1020,35 @@ const markAsUnread = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Conversation not found' });
     }
 
-    res.json({ success: true, data: conversation });
+/**
+ * Upload WhatsApp Media File (Image, PDF, Document) to Cloud Storage
+ */
+const uploadMedia = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'No media file provided' });
+    }
+
+    const { uploadToGCS } = require('../utils/gcs');
+    const path = require('path');
+    const ext = path.extname(req.file.originalname) || '';
+    const safeName = (req.file.originalname || 'file').replace(/[^a-zA-Z0-9._-]/g, '_');
+    const destination = `whatsapp-media/${Date.now()}-${safeName}`;
+
+    const mediaUrl = await uploadToGCS(req.file.buffer, destination, req.file.mimetype);
+
+    res.json({
+      success: true,
+      data: {
+        mediaUrl,
+        fileName: req.file.originalname,
+        mimeType: req.file.mimetype,
+        fileSize: req.file.size
+      }
+    });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    console.error('[uploadMedia Error]:', error);
+    res.status(500).json({ success: false, message: error.message || 'Failed to upload media file' });
   }
 };
 
@@ -1038,6 +1064,7 @@ module.exports = {
   updateConversationLanguage,
   markAsRead,
   markAsUnread,
+  uploadMedia,
   getTemplates,
   createTemplate,
   deleteTemplate,
