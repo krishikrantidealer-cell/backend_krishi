@@ -358,11 +358,21 @@ const runWhatsAppAutomation = async () => {
   }
 };
 
+// 7. MyOperator Live WhatsApp 2-Way Message Sync (Every 10 seconds)
+const runWhatsAppMessageSync = async () => {
+  try {
+    const myoperatorService = require('./myoperator.service');
+    await myoperatorService.syncAllMessagesFromMyOperator();
+  } catch (error) {
+    // Silent fail in background sync
+  }
+};
+
 /**
  * Initialize Fallback Interval-Based Cron Jobs (for local development/persistent server)
  */
 exports.initCronJobs = () => {
-  console.log('--- Background Services Initialized (Orders, Carts & 100% Dynamic Push Campaigns) ---');
+  console.log('--- Background Services Initialized (Orders, Carts, WhatsApp Live Sync & Push Campaigns) ---');
 
   // Execute on startup
   runOrderSync();
@@ -371,6 +381,7 @@ exports.initCronJobs = () => {
   runKycUrgencyCheck();
   runScheduledSegmentNotifications();
   runWhatsAppAutomation();
+  runWhatsAppMessageSync();
 
   // Set intervals
   setInterval(runOrderSync, 20 * 60 * 1000);
@@ -379,6 +390,7 @@ exports.initCronJobs = () => {
   setInterval(runKycUrgencyCheck, 30 * 60 * 1000);
   setInterval(() => runScheduledSegmentNotifications(), 10 * 1000);
   setInterval(runWhatsAppAutomation, 60 * 60 * 1000);
+  setInterval(runWhatsAppMessageSync, 10 * 1000); // 10s auto-sync loop
 };
 
 // Export individual tasks for router triggering
@@ -389,5 +401,6 @@ module.exports = {
   runAbandonedCheckoutCheck,
   runKycUrgencyCheck,
   runScheduledSegmentNotifications,
-  runWhatsAppAutomation
+  runWhatsAppAutomation,
+  runWhatsAppMessageSync
 };

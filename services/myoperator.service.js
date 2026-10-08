@@ -231,6 +231,137 @@ class MyOperatorService {
       return null;
     }
   }
+
+  /**
+   * Direct 2-Way Sync for all Conversations & Messages from MyOperator API
+   */
+  async syncAllMessagesFromMyOperator() {
+    if (!this.wabaKey) return { synced: 0 };
+    try {
+      const Conversation = require('../models/Conversation');
+      const Message = require('../models/Message');
+      const wsService = require('./websocket.service');
+
+      const res = await axios.get(`${this.baseUrl}/chat/conversations`, { headers: this.getHeaders() });
+      const convs = res.data?.data?.results || [];
+      if (!Array.isArray(convs) || convs.length === 0) return { synced: 0 };
+
+      let importedCount = 0;
+
+      for (const c of convs) {
+        const rawPhone = c.customer_contact;
+        if (!rawPhone) continue;
+        const cleanPhone = rawPhone.replace(/\D/g, '').replace(/^91/, '');
+        const customerName = c.customer_name || (`Customer ${cleanPhone.slice(-4)}`);
+
+        let contact = await Contact.findOne({
+          $or: [
+            { phone: cleanPhone },
+            { phone: `91${cleanPhone}` },
+            { phone: `+91${cleanPhone}` }
+          ]
+        });
+
+        if (!contact) {
+          const defaultAgent = await this.assignNextSalesAgent();
+          contact = new Contact({
+            name: customerName,
+            phone: cleanPhone,
+            assignedTo: defaultAgent,
+            tags: ['myoperator-lead']
+          });
+          await contact.save();
+        }
+
+        let conversation = await Conversation.findOne({ contactId: contact._id });
+        if (!conversation) {
+          conversation = new Conversation({
+            contactId: contact._id,
+            assignedTo: contact.assignedTo,
+            status: 'open'
+          });
+          await conversation.save();
+        }
+
+        try {
+          const msgRes = await axios.get(`${this.baseUrl}/chat/conversations/${c.id}/messages`, { headers: this.getHeaders() });
+          const myopMsgs = msgRes.data?.data?.results || [];
+
+          for (const m of myopMsgs) {
+            const myopMsgId = m.id || m.metadata?.waba_msg_id;
+            const direction = m.action === 'incoming' ? 'incoming' : 'outgoing';
+
+            let content = '';
+            if (m.data?.context?.body?.context) {
+              content = m.data.context.body.context;
+            } else if (m.data?.context?.body) {
+              content = typeof m.data.context.body === 'string' ? m.data.context.body : (m.data.context.body.context || JSON.stringify(m.data.context.body));
+            } else if (m.data?.context?.text) {
+              content = m.data.context.text;
+            } else if (m.data?.body) {
+              content = m.data.body;
+            } else if (m.data?.text) {
+              content = m.data.text;
+            }
+
+            const orConds = [];
+            if (myopMsgId) orConds.push({ myoperatorMessageId: myopMsgId.toString() });
+            if (content) orConds.push({ conversationId: conversation._id, content: content, direction: direction });
+
+            const existing = orConds.length > 0 ? await Message.findOne({ $or: orConds }) : null;
+
+            if (!existing && content) {
+              const msgType = m.data?.type === 'template' ? 'template' : (m.data?.type || 'text');
+              const newMsg = new Message({
+                conversationId: conversation._id,
+                contactId: contact._id,
+                direction: direction,
+                type: ['text', 'image', 'document', 'audio', 'video', 'template'].includes(msgType) ? msgType : 'text',
+                content: content,
+                myoperatorMessageId: myopMsgId ? myopMsgId.toString() : undefined,
+                status: m.status === 'read' ? 'read' : (m.status === 'delivered' ? 'delivered' : (direction === 'incoming' ? 'delivered' : 'sent')),
+                createdAt: m.created ? new Date(m.created) : new Date()
+              });
+              await newMsg.save();
+              importedCount++;
+
+              conversation.lastMessage = {
+                type: newMsg.type,
+                content: newMsg.content
+              };
+              conversation.lastMessageAt = newMsg.createdAt;
+              if (direction === 'incoming') {
+                conversation.unreadCount = (conversation.unreadCount || 0) + 1;
+              }
+
+              // Broadcast real-time message to panel
+              const populatedMessage = await Message.findById(newMsg._id).populate('sentBy', 'firstName lastName');
+              const populatedConversation = await Conversation.findById(conversation._id).populate(['contactId', 'assignedTo']);
+
+              const broadcastPayload = {
+                type: 'NEW_MESSAGE',
+                data: {
+                  conversation: populatedConversation,
+                  message: populatedMessage
+                }
+              };
+              if (contact.assignedTo) {
+                wsService.sendToUser(contact.assignedTo.toString(), broadcastPayload);
+              }
+              wsService.broadcastToRoles(['admin', 'sales'], broadcastPayload);
+            }
+          }
+          await conversation.save();
+        } catch (msgErr) {
+          console.warn(`[MyOperator Sync] Failed to fetch messages for conv ${c.id}:`, msgErr.message);
+        }
+      }
+      return { synced: importedCount, totalConversations: convs.length };
+    } catch (err) {
+      console.error('[MyOperator Sync Conversations Error]:', err.message);
+      return { synced: 0, error: err.message };
+    }
+  }
 }
 
 module.exports = new MyOperatorService();

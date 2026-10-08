@@ -218,7 +218,7 @@ const getConversations = async (req, res) => {
 };
 
 /**
- * On-demand Roster Sync Endpoint (Syncs all leads/dealers in CRM)
+ * On-demand Roster Sync Endpoint (Syncs all leads/dealers and WhatsApp messages in CRM)
  */
 const syncRoster = async (req, res) => {
   try {
@@ -233,6 +233,12 @@ const syncRoster = async (req, res) => {
         result = await contactSyncService.syncAllUsers(true);
       }
     }
+
+    // Also pull latest WhatsApp messages from MyOperator
+    try {
+      await myoperatorService.syncAllMessagesFromMyOperator();
+    } catch (_) {}
+
     res.json({
       success: true,
       message: `Roster sync completed: ${result.synced || 0} contacts synchronized`,
