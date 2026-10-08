@@ -386,6 +386,7 @@ async function processIncomingMessage({ phone, name, messageObj, phoneNumberId, 
     wsService.sendToUser(contact.assignedTo.toString(), broadcastPayload);
   }
   wsService.broadcastToRoles(['admin', 'sales'], broadcastPayload);
+  wsService.sendToAll(broadcastPayload);
   console.log(`[MyOperator Webhook] ✅ Broadcasted real-time NEW_MESSAGE for ${cleanPhone} to agent ${contact.assignedTo}`);
 }
 
@@ -420,6 +421,7 @@ async function processMessageStatusUpdate({ messageId, status }) {
       wsService.sendToUser(conversation.assignedTo.toString(), broadcastPayload);
     }
     wsService.broadcastToRoles(['admin', 'sales'], broadcastPayload);
+    wsService.sendToAll(broadcastPayload);
     console.log(`[MyOperator Webhook] ✅ Message ${messageId} status updated to ${status}`);
   }
 }
