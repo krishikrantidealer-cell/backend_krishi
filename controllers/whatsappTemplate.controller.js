@@ -4,6 +4,7 @@ const WhatsAppTemplate = require('../models/WhatsAppTemplate');
 const User = require('../models/User');
 const wsService = require('../services/websocket.service');
 const whatsappService = require('../services/whatsapp.service');
+const myoperatorService = require('../services/myoperator.service');
 
 /**
  * Enterprise Multi-Agent WhatsApp Template Controller
@@ -18,7 +19,74 @@ const whatsappService = require('../services/whatsapp.service');
  */
 const getTemplates = async (req, res) => {
   try {
-    const { category, status, scope, agentId, search, page = 1, limit = 50 } = req.query;
+    const { category, status, scope, agentId, search, sync, page = 1, limit = 50 } = req.query;
+
+    // ── 0. Live Sync from MyOperator Provider (On-demand or Force) ────────────
+    if (sync === 'true' || sync === true) {
+      try {
+        const providerTemplates = await myoperatorService.getTemplates();
+        if (Array.isArray(providerTemplates) && providerTemplates.length > 0) {
+          for (const pt of providerTemplates) {
+            const name = pt.name || pt.element_name;
+            if (!name) continue;
+            const rawCat = (pt.category || "UTILITY").toUpperCase();
+            const validCategory = ["MARKETING", "UTILITY", "AUTHENTICATION"].includes(rawCat) ? rawCat : "UTILITY";
+            const language = pt.language || "en";
+            const components = Array.isArray(pt.components) ? pt.components : [];
+
+            let headerType = "NONE";
+            let headerText = "";
+            const headerComp = components.find(c => (c.type || "").toUpperCase() === "HEADER");
+            if (headerComp) {
+              headerType = (headerComp.format || "TEXT").toUpperCase();
+              headerText = headerComp.text || "";
+            }
+
+            let body = pt.body || pt.data?.body || "";
+            const bodyComp = components.find(c => (c.type || "").toUpperCase() === "BODY");
+            if (bodyComp && bodyComp.text) {
+              body = bodyComp.text;
+            }
+            if (!body) body = name;
+
+            let footer = "";
+            const footerComp = components.find(c => (c.type || "").toUpperCase() === "FOOTER");
+            if (footerComp && footerComp.text) footer = footerComp.text;
+
+            let ptStatus = "APPROVED";
+            const rawStatus = (pt.waba_template_status || pt.status || "").toUpperCase();
+            if (rawStatus.includes("REJECT")) ptStatus = "REJECTED";
+            else if (rawStatus.includes("PEND")) ptStatus = "PENDING_APPROVAL";
+
+            await WhatsAppTemplate.findOneAndUpdate(
+              { name, language, isGlobal: true },
+              {
+                $set: {
+                  name,
+                  title: name.replace(/_/g, " ").replace(/\b\w/g, l => l.toUpperCase()),
+                  category: validCategory,
+                  language,
+                  headerType: ["NONE", "TEXT", "IMAGE", "DOCUMENT", "VIDEO"].includes(headerType) ? headerType : "NONE",
+                  headerText,
+                  body,
+                  footer,
+                  status: ptStatus,
+                  isGlobal: true,
+                  providerTemplateId: pt.waba_template_id || pt.id
+                },
+                $setOnInsert: {
+                  createdBy: req.user.id
+                }
+              },
+              { upsert: true, returnDocument: 'after' }
+            );
+          }
+        }
+      } catch (syncErr) {
+        console.warn('[MyOperator Template Sync Note]:', syncErr.message);
+      }
+    }
+
     const query = {};
 
     // ── 1. Multi-Agent Scoping ──────────────────────────────────────────────
@@ -218,11 +286,11 @@ const createTemplate = async (req, res) => {
       metaComponents.push({ type: 'BUTTONS', buttons: metaButtons });
     }
 
-    let initialStatus = 'APPROVED'; // Default approved for direct CRM sending
+    let initialStatus = 'PENDING_APPROVAL';
     let providerTemplateId = null;
     let metaRejectionReason = null;
 
-    // Optional Meta Cloud API submission
+    // 1. Meta Cloud API Submission
     const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
     const wabaId = process.env.WHATSAPP_WABA_ID || process.env.WHATSAPP_BUSINESS_ACCOUNT_ID;
 
@@ -248,6 +316,23 @@ const createTemplate = async (req, res) => {
       } catch (metaErr) {
         console.warn('[WhatsApp Template Meta Submission Note]:', metaErr.response?.data?.error?.message || metaErr.message);
         metaRejectionReason = metaErr.response?.data?.error?.message || null;
+      }
+    } else if (myoperatorService.wabaKey) {
+      // 2. MyOperator WABA Submission
+      try {
+        const myopRes = await myoperatorService.createTemplate({
+          name: formattedName,
+          category: category.toUpperCase(),
+          language,
+          components: metaComponents
+        });
+        if (myopRes?.id || myopRes?.template_id) {
+          providerTemplateId = myopRes.id || myopRes.template_id;
+          initialStatus = (myopRes.status || 'PENDING_APPROVAL').toUpperCase();
+        }
+      } catch (myopErr) {
+        console.warn('[WhatsApp Template MyOperator Submission Note]:', myopErr.message);
+        metaRejectionReason = myopErr.message;
       }
     }
 

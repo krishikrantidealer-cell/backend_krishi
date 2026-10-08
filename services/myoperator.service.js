@@ -72,27 +72,10 @@ class MyOperatorService {
       };
 
       if (type === 'Template' || templateName) {
-        payload.data = {
-          type: 'template',
-          template: {
-            name: templateName,
-            language: {
-              code: languageCode
-            },
-            components: [
-              {
-                type: 'body',
-                parameters: bodyValues.map(val => ({
-                  type: 'text',
-                  text: String(val)
-                }))
-              }
-            ]
-          }
-        };
+        const components = [];
 
         if (mediaUrl) {
-          payload.data.template.components.unshift({
+          components.push({
             type: 'header',
             parameters: [
               {
@@ -104,6 +87,31 @@ class MyOperatorService {
             ]
           });
         }
+
+        const validBodyParams = Array.isArray(bodyValues)
+          ? bodyValues.filter(v => v !== null && v !== undefined && String(v).trim() !== '')
+          : [];
+
+        if (validBodyParams.length > 0) {
+          components.push({
+            type: 'body',
+            parameters: validBodyParams.map(val => ({
+              type: 'text',
+              text: String(val)
+            }))
+          });
+        }
+
+        payload.data = {
+          type: 'template',
+          template: {
+            name: templateName,
+            language: {
+              code: languageCode
+            },
+            ...(components.length > 0 ? { components } : {})
+          }
+        };
       } else {
         // Freeform Session Message
         payload.data = {
@@ -151,7 +159,7 @@ class MyOperatorService {
   async getTemplates() {
     if (!this.wabaKey) return [];
     try {
-      const response = await axios.get(`${this.baseUrl}/chat/templates?waba_template_status=approved&limit=50&offset=0`, {
+      const response = await axios.get(`${this.baseUrl}/chat/templates?limit=100&offset=0`, {
         headers: this.getHeaders()
       });
       return response.data?.data?.results || response.data?.data || response.data || [];
