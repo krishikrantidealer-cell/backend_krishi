@@ -250,14 +250,19 @@ const getMessages = async (req, res) => {
     const { page = 1, limit = 30 } = req.query;
     const skip = (page - 1) * limit;
 
-    const conversation = await Conversation.findById(id);
+    const conversation = await Conversation.findById(id).populate('contactId');
     if (!conversation) {
       return res.status(404).json({ success: false, message: 'Conversation not found' });
     }
 
-    // Role Security: Sales agents can ONLY view messages for leads/dealers assigned to them
-    if (req.user.role === 'sales' && String(conversation.assignedTo) !== String(req.user.id)) {
-      return res.status(403).json({ success: false, message: 'Access Denied: You can only view chats assigned to you.' });
+    // Role Security: Sales agents can ONLY view messages for leads/dealers assigned to them or unassigned
+    if (req.user.role === 'sales') {
+      const isAssignedConv = conversation.assignedTo && String(conversation.assignedTo) === String(req.user.id);
+      const isAssignedContact = conversation.contactId?.assignedTo && String(conversation.contactId.assignedTo) === String(req.user.id);
+      const isUnassigned = !conversation.assignedTo && !conversation.contactId?.assignedTo;
+      if (!isAssignedConv && !isAssignedContact && !isUnassigned) {
+        return res.status(403).json({ success: false, message: 'Access Denied: You can only view chats assigned to you.' });
+      }
     }
 
     // Clean unread count on reading conversation
@@ -289,9 +294,21 @@ const sendConversationMessage = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Conversation not found' });
     }
 
-    // Role Security: Sales agents can ONLY send messages to leads/dealers assigned to them
-    if (req.user.role === 'sales' && String(conversation.assignedTo) !== String(req.user.id)) {
-      return res.status(403).json({ success: false, message: 'Access Denied: You can only chat with leads assigned to you.' });
+    // Role Security: Sales agents can ONLY send messages to leads/dealers assigned to them or unassigned
+    if (req.user.role === 'sales') {
+      const isAssignedConv = conversation.assignedTo && String(conversation.assignedTo) === String(req.user.id);
+      const isAssignedContact = conversation.contactId?.assignedTo && String(conversation.contactId.assignedTo) === String(req.user.id);
+      const isUnassigned = !conversation.assignedTo && !conversation.contactId?.assignedTo;
+
+      if (!isAssignedConv && !isAssignedContact && !isUnassigned) {
+        return res.status(403).json({ success: false, message: 'Access Denied: You can only chat with leads assigned to you.' });
+      }
+
+      // Auto-assign conversation to this sales agent if it was unassigned or only assigned on contact
+      if (!isAssignedConv) {
+        conversation.assignedTo = req.user.id;
+        await conversation.save();
+      }
     }
 
     const selectedLang = languageCode || conversation.contactId?.preferredLanguage || 'en';
@@ -446,8 +463,13 @@ const addNote = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Conversation not found' });
     }
 
-    if (req.user.role === 'sales' && String(conversation.assignedTo) !== String(req.user.id)) {
-      return res.status(403).json({ success: false, message: 'Access Denied: You can only add notes to leads assigned to you.' });
+    if (req.user.role === 'sales') {
+      const isAssignedConv = conversation.assignedTo && String(conversation.assignedTo) === String(req.user.id);
+      const isAssignedContact = conversation.contactId?.assignedTo && String(conversation.contactId.assignedTo) === String(req.user.id);
+      const isUnassigned = !conversation.assignedTo && !conversation.contactId?.assignedTo;
+      if (!isAssignedConv && !isAssignedContact && !isUnassigned) {
+        return res.status(403).json({ success: false, message: 'Access Denied: You can only add notes to leads assigned to you.' });
+      }
     }
 
     const newNote = new Note({

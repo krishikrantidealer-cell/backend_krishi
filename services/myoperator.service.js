@@ -119,11 +119,11 @@ class MyOperatorService {
 
       const headers = this.getHeaders();
       const customWabaKey = agentConfig.wabaKey || agentConfig.apiKey;
-      if (customWabaKey) {
-        headers['Authorization'] = `Bearer ${customWabaKey}`;
+      if (customWabaKey && typeof customWabaKey === 'string' && customWabaKey.trim() !== '') {
+        headers['Authorization'] = `Bearer ${customWabaKey.trim()}`;
       }
-      if (agentConfig.companyId) {
-        headers['X-MYOP-COMPANY-ID'] = agentConfig.companyId;
+      if (agentConfig.companyId && typeof agentConfig.companyId === 'string' && agentConfig.companyId.trim() !== '') {
+        headers['X-MYOP-COMPANY-ID'] = agentConfig.companyId.trim();
       }
 
       const response = await axios.post(`${this.baseUrl}/chat/messages`, payload, { headers });

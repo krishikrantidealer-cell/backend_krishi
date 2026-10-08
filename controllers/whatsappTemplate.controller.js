@@ -462,11 +462,22 @@ const sendTemplate = async (req, res) => {
     const sent = await whatsappService.sendTemplateMessage(customerPhone, resolvedName, resolvedLang, variables);
 
     if (sent) {
-      res.json({
+      return res.json({
         success: true,
         message: `Template "${resolvedName}" sent successfully to ${customerPhone}`,
         data: { customerPhone, templateName: resolvedName }
       });
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: `Failed to dispatch template "${resolvedName}" via WhatsApp provider.`
+      });
+    }
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 /**
  * Update Template (Edit text or toggle status APPROVED/REJECTED/PENDING_APPROVAL)
  */
