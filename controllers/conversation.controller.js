@@ -982,6 +982,13 @@ const deleteCannedResponse = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Not authorized to delete this canned response' });
     }
 
+    await CannedResponse.findByIdAndDelete(id);
+    res.json({ success: true, message: 'Canned response deleted' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 /**
  * Mark a conversation as read (resets unreadCount to 0)
  */
@@ -1019,6 +1026,12 @@ const markAsUnread = async (req, res) => {
     if (!conversation) {
       return res.status(404).json({ success: false, message: 'Conversation not found' });
     }
+
+    res.json({ success: true, data: conversation });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
 
 /**
  * Upload WhatsApp Media File (Image, PDF, Document) to Cloud Storage
