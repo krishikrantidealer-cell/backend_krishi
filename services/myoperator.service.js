@@ -56,16 +56,17 @@ class MyOperatorService {
     try {
       const cleanPhone = phone.replace(/\D/g, '').replace(/^91/, '');
       
-      // Check if the agent has a dedicated WhatsApp phone number or custom sub-account
+      // Check agent identity
       let agentUser = null;
       if (agentId) {
         agentUser = await User.findById(agentId);
       }
-      const agentConfig = agentUser?.myoperatorConfig || {};
-      const customPhoneNumId = agentConfig.wabaPhoneNumberId || (await this.getPhoneNumberId()) || this.phoneNumberId || '1307352865799863';
+      
+      // Always use verified master WABA phone number ID for WhatsApp messaging
+      const targetPhoneNumId = (await this.getPhoneNumberId()) || this.phoneNumberId || '1307352865799863';
 
       let payload = {
-        phone_number_id: customPhoneNumId,
+        phone_number_id: targetPhoneNumId,
         customer_country_code: countryCode,
         customer_number: cleanPhone,
         data: {}
@@ -115,17 +116,9 @@ class MyOperatorService {
         }
       }
 
-      console.log(`[MyOperator WABA] Dispatching to +${countryCode}${cleanPhone} from Agent (${agentUser?.firstName || 'Main'} PhoneId: ${customPhoneNumId}):`, JSON.stringify(payload));
+      console.log(`[MyOperator WABA] Dispatching to +${countryCode}${cleanPhone} on behalf of Agent (${agentUser?.firstName || 'System'} PhoneId: ${targetPhoneNumId}):`, JSON.stringify(payload));
 
       const headers = this.getHeaders();
-      const customWabaKey = agentConfig.wabaKey || agentConfig.apiKey;
-      if (customWabaKey && typeof customWabaKey === 'string' && customWabaKey.trim() !== '') {
-        headers['Authorization'] = `Bearer ${customWabaKey.trim()}`;
-      }
-      if (agentConfig.companyId && typeof agentConfig.companyId === 'string' && agentConfig.companyId.trim() !== '') {
-        headers['X-MYOP-COMPANY-ID'] = agentConfig.companyId.trim();
-      }
-
       const response = await axios.post(`${this.baseUrl}/chat/messages`, payload, { headers });
 
       return response.data;
