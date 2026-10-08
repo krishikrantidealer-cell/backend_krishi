@@ -264,9 +264,16 @@ const createTemplate = async (req, res) => {
       metaComponents.push(headerComp);
     }
 
+    // Auto-generate sampleVariables if body has {{1}}, {{2}}...
+    const varMatches = [...body.matchAll(/\{\{(\d+)\}\}/g)];
+    let effectiveSampleVars = Array.isArray(sampleVariables) && sampleVariables.length > 0 ? sampleVariables : [];
+    if (effectiveSampleVars.length === 0 && varMatches.length > 0) {
+      effectiveSampleVars = varMatches.map((m, idx) => `Sample_${idx + 1}`);
+    }
+
     const bodyComp = { type: 'BODY', text: body };
-    if (sampleVariables && sampleVariables.length > 0) {
-      bodyComp.example = { body_text: [sampleVariables] };
+    if (effectiveSampleVars.length > 0) {
+      bodyComp.example = { body_text: [effectiveSampleVars] };
     }
     metaComponents.push(bodyComp);
 
@@ -290,11 +297,30 @@ const createTemplate = async (req, res) => {
     let providerTemplateId = null;
     let metaRejectionReason = null;
 
-    // 1. Meta Cloud API Submission
+    // 1. Submit directly via MyOperator WABA Provider API
+    if (myoperatorService.wabaKey) {
+      try {
+        const myopRes = await myoperatorService.createTemplate({
+          name: formattedName,
+          category: category.toUpperCase(),
+          language,
+          components: metaComponents
+        });
+        if (myopRes?.id || myopRes?.template_id || myopRes?.data?.id) {
+          providerTemplateId = myopRes.id || myopRes.template_id || myopRes.data?.id;
+          initialStatus = (myopRes.status || myopRes.data?.status || 'PENDING_APPROVAL').toUpperCase();
+        }
+      } catch (myopErr) {
+        console.warn('[WhatsApp Template MyOperator Submission Note]:', myopErr.message);
+        metaRejectionReason = myopErr.message;
+      }
+    }
+
+    // 2. Fallback to Meta Cloud API if direct credentials exist
     const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
     const wabaId = process.env.WHATSAPP_WABA_ID || process.env.WHATSAPP_BUSINESS_ACCOUNT_ID;
 
-    if (accessToken && wabaId) {
+    if (!providerTemplateId && accessToken && wabaId) {
       try {
         const metaRes = await axios.post(`https://graph.facebook.com/v18.0/${wabaId}/message_templates`, {
           name: formattedName,
@@ -315,24 +341,7 @@ const createTemplate = async (req, res) => {
         }
       } catch (metaErr) {
         console.warn('[WhatsApp Template Meta Submission Note]:', metaErr.response?.data?.error?.message || metaErr.message);
-        metaRejectionReason = metaErr.response?.data?.error?.message || null;
-      }
-    } else if (myoperatorService.wabaKey) {
-      // 2. MyOperator WABA Submission
-      try {
-        const myopRes = await myoperatorService.createTemplate({
-          name: formattedName,
-          category: category.toUpperCase(),
-          language,
-          components: metaComponents
-        });
-        if (myopRes?.id || myopRes?.template_id) {
-          providerTemplateId = myopRes.id || myopRes.template_id;
-          initialStatus = (myopRes.status || 'PENDING_APPROVAL').toUpperCase();
-        }
-      } catch (myopErr) {
-        console.warn('[WhatsApp Template MyOperator Submission Note]:', myopErr.message);
-        metaRejectionReason = myopErr.message;
+        if (!metaRejectionReason) metaRejectionReason = metaErr.response?.data?.error?.message || null;
       }
     }
 
