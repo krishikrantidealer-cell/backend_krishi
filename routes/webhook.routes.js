@@ -46,6 +46,8 @@ const dispatchMyOperatorWebhook = (req, res) => {
     merged.legs != null
   );
 
+  req.body = merged;
+
   if (isCall) {
     return callController.handleCallWebhook(req, res);
   }

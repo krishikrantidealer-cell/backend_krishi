@@ -16,11 +16,19 @@ const handleWebhook = async (req, res) => {
     // Acknowledge receipt immediately (required by MyOperator & Meta within 3 seconds)
     res.status(200).json({ success: true, message: 'Webhook received' });
 
-    // Determine event type
-    const eventType = (
+    console.log('[MyOperator Webhook Payload]:', JSON.stringify(payload));
+
+    // Determine event type from all possible top-level and nested fields
+    const eventType = String(
       payload.event ||
+      payload.event_type ||
       payload.type ||
       payload.action ||
+      payload.data?.event ||
+      payload.data?.event_type ||
+      payload.data?.type ||
+      payload.details?.event ||
+      payload.details?.event_type ||
       (payload.entry ? 'meta_entry' : '') ||
       ''
     ).toLowerCase();
@@ -63,47 +71,76 @@ const handleWebhook = async (req, res) => {
     }
 
     // ─── Case 2: MyOperator WhatsApp Webhook Inbound Message ──────────────────
-    const isIncomingMessage =
+    const customerData = payload.customer || payload.data?.customer || payload.details?.customer || {};
+    const messageData = payload.message || payload.data?.message || payload.details?.message || payload.data || payload.details || payload;
+
+    const rawPhone =
+      payload.sender ||
+      payload.from ||
+      payload.phone ||
+      payload.mobile ||
+      payload.customer_number ||
+      payload.wa_id ||
+      payload.data?.sender ||
+      payload.data?.from ||
+      payload.data?.phone ||
+      payload.data?.mobile ||
+      payload.data?.customer_number ||
+      payload.details?.sender ||
+      payload.details?.from ||
+      payload.details?.phone ||
+      customerData.phoneNumber ||
+      customerData.phone_number ||
+      customerData.phone ||
+      customerData.mobile ||
+      messageData.phoneNumber ||
+      messageData.phone_number ||
+      messageData.from ||
+      messageData.sender ||
+      messageData.phone;
+
+    const isStatusUpdate =
+      eventType.includes('sent') ||
+      eventType.includes('delivered') ||
+      eventType.includes('read') ||
+      eventType.includes('failed') ||
+      eventType.startsWith('message_api_') ||
+      (payload.status && !rawPhone);
+
+    const isIncomingMessage = !isStatusUpdate && (
       eventType === 'message.received' ||
       eventType === 'message_received' ||
       eventType === 'customer_message_received' ||
       eventType === 'message_api_received' ||
       eventType === 'incoming_message' ||
-      (eventType.includes('message') && eventType.includes('received')) ||
-      payload.sender ||
-      payload.from;
+      (eventType.includes('message') && (eventType.includes('receive') || eventType.includes('inbound'))) ||
+      Boolean(rawPhone)
+    );
 
-    if (isIncomingMessage && (payload.message || payload.data?.message || payload.text || payload.body)) {
-      const customerData = payload.customer || payload.data?.customer || {};
-      const messageData = payload.message || payload.data?.message || payload.data || payload;
-
-      const rawPhone =
-        payload.sender ||
-        payload.from ||
-        customerData.phoneNumber ||
-        customerData.phone_number ||
-        customerData.phone ||
-        messageData.phoneNumber ||
-        messageData.phone_number ||
-        messageData.from;
-
+    if (isIncomingMessage && rawPhone) {
       const rawReceiver =
         payload.receiver ||
         payload.to ||
         payload.did ||
-        customerData.receiver ||
-        payload.data?.receiver;
+        payload.virtual_number ||
+        payload.data?.receiver ||
+        payload.data?.to ||
+        payload.details?.receiver ||
+        customerData.receiver;
 
       const rawPhoneId =
         payload.phone_number_id ||
         payload.phone_id ||
-        payload.data?.phone_number_id;
+        payload.data?.phone_number_id ||
+        payload.details?.phone_number_id;
 
       const customerName =
         customerData.name ||
         payload.name ||
+        payload.sender_name ||
         customerData.customer_name ||
-        payload.sender_name;
+        payload.data?.sender_name ||
+        payload.details?.sender_name;
 
       await processIncomingMessage({
         phone: rawPhone,
@@ -111,22 +148,13 @@ const handleWebhook = async (req, res) => {
         messageObj: messageData,
         phoneNumberId: rawPhoneId,
         receiver: rawReceiver,
-        messageId: messageData.id || messageData.message_id || payload.message_id
+        messageId: messageData.id || messageData.message_id || payload.message_id || payload.id
       });
       return;
     }
 
     // ─── Case 3: Outgoing Message Status Updates ──────────────────────────────
-    const isStatusUpdate =
-      eventType.includes('sent') ||
-      eventType.includes('delivered') ||
-      eventType.includes('read') ||
-      eventType.includes('failed') ||
-      eventType.startsWith('message_api_') ||
-      payload.status;
-
     if (isStatusUpdate) {
-      const messageData = payload.message || payload.data?.message || payload.data || payload;
       const myopMsgId =
         messageData.id ||
         messageData.message_id ||
@@ -356,7 +384,7 @@ async function processIncomingMessage({ phone, name, messageObj, phoneNumberId, 
   if (contact.assignedTo) {
     wsService.sendToUser(contact.assignedTo.toString(), broadcastPayload);
   }
-  wsService.broadcastToRoles(['admin'], broadcastPayload);
+  wsService.broadcastToRoles(['admin', 'sales'], broadcastPayload);
   console.log(`[MyOperator Webhook] ✅ Broadcasted real-time NEW_MESSAGE for ${cleanPhone} to agent ${contact.assignedTo}`);
 }
 
@@ -390,7 +418,7 @@ async function processMessageStatusUpdate({ messageId, status }) {
     if (conversation?.assignedTo) {
       wsService.sendToUser(conversation.assignedTo.toString(), broadcastPayload);
     }
-    wsService.broadcastToRoles(['admin'], broadcastPayload);
+    wsService.broadcastToRoles(['admin', 'sales'], broadcastPayload);
     console.log(`[MyOperator Webhook] ✅ Message ${messageId} status updated to ${status}`);
   }
 }
