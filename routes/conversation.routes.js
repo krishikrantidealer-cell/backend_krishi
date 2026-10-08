@@ -23,6 +23,6 @@ router.delete('/templates/:id', protect, authorizeRoles('admin'), controller.del
 router.get('/canned-responses', protect, controller.getCannedResponses);
 router.post('/canned-responses', protect, authorizeRoles('admin', 'sales'), controller.createCannedResponse);
 router.put('/canned-responses/:id', protect, authorizeRoles('admin', 'sales'), controller.updateCannedResponse);
-router.delete('/canned-responses/:id', protect, authorizeRoles('admin'), controller.deleteCannedResponse);
+router.delete('/canned-responses/:id', protect, authorizeRoles('admin', 'sales'), controller.deleteCannedResponse);
 
 module.exports = router;

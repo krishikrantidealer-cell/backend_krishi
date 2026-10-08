@@ -851,7 +851,20 @@ const deleteTemplate = async (req, res) => {
  */
 const getCannedResponses = async (req, res) => {
   try {
-    const canned = await CannedResponse.find().sort({ title: 1 }).lean();
+    let query = {};
+    if (req.user.role === 'sales') {
+      // Sales agents see Global responses (created by Admin) + their own private ones
+      query = {
+        $or: [
+          { isGlobal: true },
+          { createdBy: req.user.id }
+        ]
+      };
+    }
+    const canned = await CannedResponse.find(query)
+      .populate('createdBy', 'firstName lastName email role')
+      .sort({ title: 1 })
+      .lean();
     res.json({ success: true, data: canned });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -869,10 +882,20 @@ const createCannedResponse = async (req, res) => {
     }
 
     const cleanShortcut = shortcut.startsWith('/') ? shortcut.trim().toLowerCase() : `/${shortcut.trim().toLowerCase()}`;
+    const isAdmin = req.user.role === 'admin';
+    const isGlobal = isAdmin;
 
-    const existing = await CannedResponse.findOne({ shortcut: cleanShortcut });
+    // Check duplicate shortcut within visible scope
+    const duplicateQuery = isAdmin
+      ? { shortcut: cleanShortcut }
+      : {
+          shortcut: cleanShortcut,
+          $or: [{ isGlobal: true }, { createdBy: req.user.id }]
+        };
+
+    const existing = await CannedResponse.findOne(duplicateQuery);
     if (existing) {
-      return res.status(400).json({ success: false, message: `Shortcut ${cleanShortcut} already exists` });
+      return res.status(400).json({ success: false, message: `Shortcut ${cleanShortcut} already exists in your workspace` });
     }
 
     const item = await CannedResponse.create({
@@ -881,10 +904,12 @@ const createCannedResponse = async (req, res) => {
       message: message.trim(),
       category,
       tags,
+      isGlobal,
       createdBy: req.user.id
     });
 
-    res.json({ success: true, message: 'Canned response created successfully', data: item });
+    const populated = await CannedResponse.findById(item._id).populate('createdBy', 'firstName lastName email role');
+    res.json({ success: true, message: 'Canned response created successfully', data: populated });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -898,6 +923,16 @@ const updateCannedResponse = async (req, res) => {
     const { id } = req.params;
     const { title, shortcut, message, category, tags } = req.body;
 
+    const existing = await CannedResponse.findById(id);
+    if (!existing) {
+      return res.status(404).json({ success: false, message: 'Canned response not found' });
+    }
+
+    // Role check: sales agents can only update their own responses
+    if (req.user.role === 'sales' && existing.createdBy && existing.createdBy.toString() !== req.user.id) {
+      return res.status(403).json({ success: false, message: 'Not authorized to edit this canned response' });
+    }
+
     const updateFields = {};
     if (title) updateFields.title = title.trim();
     if (shortcut) {
@@ -907,10 +942,8 @@ const updateCannedResponse = async (req, res) => {
     if (category) updateFields.category = category;
     if (tags) updateFields.tags = tags;
 
-    const updated = await CannedResponse.findByIdAndUpdate(id, updateFields, { new: true });
-    if (!updated) {
-      return res.status(404).json({ success: false, message: 'Canned response not found' });
-    }
+    const updated = await CannedResponse.findByIdAndUpdate(id, updateFields, { new: true })
+      .populate('createdBy', 'firstName lastName email role');
 
     res.json({ success: true, message: 'Canned response updated', data: updated });
   } catch (error) {
@@ -924,6 +957,16 @@ const updateCannedResponse = async (req, res) => {
 const deleteCannedResponse = async (req, res) => {
   try {
     const { id } = req.params;
+    const existing = await CannedResponse.findById(id);
+    if (!existing) {
+      return res.status(404).json({ success: false, message: 'Canned response not found' });
+    }
+
+    // Role check: sales agents can only delete their own responses
+    if (req.user.role === 'sales' && existing.createdBy && existing.createdBy.toString() !== req.user.id) {
+      return res.status(403).json({ success: false, message: 'Not authorized to delete this canned response' });
+    }
+
     await CannedResponse.findByIdAndDelete(id);
     res.json({ success: true, message: 'Canned response deleted' });
   } catch (error) {
