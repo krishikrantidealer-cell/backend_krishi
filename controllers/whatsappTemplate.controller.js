@@ -114,8 +114,12 @@ const getTemplates = async (req, res) => {
     if (category && category !== 'ALL') {
       query.category = category.toUpperCase();
     }
-    if (status && status !== 'ALL') {
-      query.status = status.toUpperCase();
+    if (status) {
+      if (status !== 'ALL') {
+        query.status = status.toUpperCase();
+      }
+    } else {
+      query.status = 'APPROVED';
     }
     if (search && search.trim() !== '') {
       const regex = { $regex: search.trim(), $options: 'i' };
