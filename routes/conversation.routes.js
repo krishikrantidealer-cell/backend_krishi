@@ -13,6 +13,8 @@ router.post('/conversations/assign', protect, authorizeRoles('admin'), controlle
 router.post('/notes', protect, controller.addNote);
 router.put('/conversations/:id/status', protect, controller.updateConversationStatus);
 router.put('/conversations/:id/language', protect, controller.updateConversationLanguage);
+router.put('/conversations/:id/read', protect, controller.markAsRead);
+router.put('/conversations/:id/unread', protect, controller.markAsUnread);
 
 // WhatsApp Templates (Protected)
 router.get('/templates', protect, controller.getTemplates);

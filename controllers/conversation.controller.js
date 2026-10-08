@@ -392,6 +392,7 @@ const sendConversationMessage = async (req, res) => {
     // Update conversation metadata
     conversation.lastMessage = { type: type.toLowerCase(), content: resolvedContent, mediaUrl };
     conversation.lastMessageAt = new Date();
+    conversation.unreadCount = 0;
     await conversation.save();
 
     // Broadcast new message update via Native WebSockets
@@ -981,8 +982,45 @@ const deleteCannedResponse = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Not authorized to delete this canned response' });
     }
 
-    await CannedResponse.findByIdAndDelete(id);
-    res.json({ success: true, message: 'Canned response deleted' });
+/**
+ * Mark a conversation as read (resets unreadCount to 0)
+ */
+const markAsRead = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const conversation = await Conversation.findByIdAndUpdate(
+      id,
+      { unreadCount: 0 },
+      { new: true }
+    ).populate(['contactId', 'assignedTo']);
+
+    if (!conversation) {
+      return res.status(404).json({ success: false, message: 'Conversation not found' });
+    }
+
+    res.json({ success: true, data: conversation });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * Mark a conversation as unread (manually sets unreadCount to 1)
+ */
+const markAsUnread = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const conversation = await Conversation.findByIdAndUpdate(
+      id,
+      { unreadCount: 1 },
+      { new: true }
+    ).populate(['contactId', 'assignedTo']);
+
+    if (!conversation) {
+      return res.status(404).json({ success: false, message: 'Conversation not found' });
+    }
+
+    res.json({ success: true, data: conversation });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -998,6 +1036,8 @@ module.exports = {
   startConversation,
   updateConversationStatus,
   updateConversationLanguage,
+  markAsRead,
+  markAsUnread,
   getTemplates,
   createTemplate,
   deleteTemplate,
