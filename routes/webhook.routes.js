@@ -17,7 +17,31 @@ const dispatchMyOperatorWebhook = (req, res) => {
   const merged = { ...query, ...payload, ...(payload.data || payload.details || payload.payload || {}) };
 
   const eventStr = String(merged.event_type || merged.event || merged.type || merged.action || '').toLowerCase();
-  const isWhatsApp = Boolean(merged.entry || merged.messages || merged.statuses || eventStr.includes('message') || eventStr.includes('whatsapp') || eventStr.includes('template'));
+  
+  const isWhatsApp = Boolean(
+    merged.entry ||
+    merged.messages ||
+    merged.statuses ||
+    merged.text != null ||
+    merged.body != null ||
+    merged.caption != null ||
+    merged.image != null ||
+    merged.document != null ||
+    merged.video != null ||
+    merged.audio != null ||
+    merged.voice != null ||
+    merged.button_reply != null ||
+    merged.list_reply != null ||
+    merged.interactive != null ||
+    merged.wa_id != null ||
+    ['text', 'image', 'document', 'audio', 'video', 'interactive', 'template', 'contacts', 'location'].includes(merged.type) ||
+    eventStr.includes('message') ||
+    eventStr.includes('whatsapp') ||
+    eventStr.includes('template') ||
+    eventStr.includes('chat') ||
+    eventStr.includes('waba') ||
+    ((merged.sender || merged.from || merged.mobile || merged.phone) && (merged.message != null || merged.text != null || merged.body != null))
+  );
 
   const isCall = !isWhatsApp && (
     eventStr.includes('call') ||
@@ -31,19 +55,13 @@ const dispatchMyOperatorWebhook = (req, res) => {
     eventStr.includes('incoming') ||
     eventStr.includes('outbound') ||
     eventStr.includes('ivr') ||
-    merged.cli != null ||
-    merged.received_on != null ||
-    merged.virtual_number != null ||
-    merged.did != null ||
     merged.call_id != null ||
-    merged.uid != null ||
-    merged.unique_id != null ||
-    merged.ref_id != null ||
-    merged.client_ref_id != null ||
-    merged.session_id != null ||
-    merged.duration != null ||
     merged.recording_url != null ||
-    merged.legs != null
+    merged.legs != null ||
+    merged.cli != null ||
+    merged.call_status != null ||
+    merged.dialstatus != null ||
+    merged.duration != null
   );
 
   req.body = merged;
@@ -54,18 +72,31 @@ const dispatchMyOperatorWebhook = (req, res) => {
   return handleMyOperatorWebhook(req, res);
 };
 
+// Universal Webhooks (Auto-routes WhatsApp vs Calls)
 router.post('/webhook', dispatchMyOperatorWebhook);
 router.post('/webhooks', dispatchMyOperatorWebhook);
 router.post('/webhook/myoperator', dispatchMyOperatorWebhook);
 router.post('/webhooks/myoperator', dispatchMyOperatorWebhook);
+
+// Explicit WhatsApp Webhooks
 router.post('/webhook/myoperator/whatsapp', handleMyOperatorWebhook);
 router.post('/webhooks/myoperator/whatsapp', handleMyOperatorWebhook);
 router.post('/conversations/webhook/myoperator', handleMyOperatorWebhook);
 router.post('/conversations/webhook/myoperator/whatsapp', handleMyOperatorWebhook);
+router.post('/whatsapp/webhook', handleMyOperatorWebhook);
+router.post('/whatsapp/webhooks', handleMyOperatorWebhook);
+router.post('/messages/webhook', handleMyOperatorWebhook);
+router.post('/messages/webhooks', handleMyOperatorWebhook);
 
+// Webhook Verifications (GET)
+router.get('/webhook', (req, res) => res.status(200).send(req.query['hub.challenge'] || 'OK'));
+router.get('/webhooks', (req, res) => res.status(200).send(req.query['hub.challenge'] || 'OK'));
 router.get('/webhook/myoperator/whatsapp', (req, res) => res.status(200).send(req.query['hub.challenge'] || 'OK'));
+router.get('/webhooks/myoperator/whatsapp', (req, res) => res.status(200).send(req.query['hub.challenge'] || 'OK'));
 router.get('/webhook/myoperator', (req, res) => res.status(200).send(req.query['hub.challenge'] || 'OK'));
+router.get('/webhooks/myoperator', (req, res) => res.status(200).send(req.query['hub.challenge'] || 'OK'));
 router.get('/conversations/webhook/myoperator', (req, res) => res.status(200).send(req.query['hub.challenge'] || 'OK'));
+router.get('/whatsapp/webhook', (req, res) => res.status(200).send(req.query['hub.challenge'] || 'OK'));
 
 // MyOperator Calling Webhook (supports /api/calls/webhook/myoperator, /api/webhooks/myoperator/calls, etc.)
 router.post('/calls/webhook/myoperator', callController.handleCallWebhook);
