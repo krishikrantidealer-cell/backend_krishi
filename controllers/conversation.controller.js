@@ -310,12 +310,42 @@ const sendConversationMessage = async (req, res) => {
 
     const messageId = myopResponse?.id || myopResponse?.data?.id || myopResponse?.message?.id || myopResponse?.message_id;
 
+    // Resolve actual message text if sending a template
+    let resolvedContent = content;
+    if ((type && type.toLowerCase() === 'template') || templateName) {
+      if (!resolvedContent || resolvedContent.startsWith('[Template]')) {
+        try {
+          const tpl = await WhatsAppTemplate.findOne({
+            name: templateName,
+            $or: [
+              { isGlobal: true },
+              { agentId: req.user.id }
+            ]
+          }).sort({ isGlobal: 1 });
+
+          if (tpl && tpl.body) {
+            let text = tpl.body;
+            if (Array.isArray(bodyValues)) {
+              bodyValues.forEach((val, idx) => {
+                text = text.replace(new RegExp(`\\{\\{${idx + 1}\\}\\}`, 'g'), String(val));
+              });
+            }
+            resolvedContent = text;
+          } else {
+            resolvedContent = content || `[Template] ${templateName}`;
+          }
+        } catch (_) {
+          resolvedContent = content || `[Template] ${templateName}`;
+        }
+      }
+    }
+
     const messageData = {
       conversationId: conversation._id,
       contactId: conversation.contactId._id,
       direction: 'outgoing',
       type: type.toLowerCase(),
-      content: content || `[Template] ${templateName}`,
+      content: resolvedContent || `[Template] ${templateName}`,
       mediaUrl,
       sentBy: req.user.id,
       status: 'sent'
@@ -329,7 +359,7 @@ const sendConversationMessage = async (req, res) => {
     await message.save();
 
     // Update conversation metadata
-    conversation.lastMessage = { type: type.toLowerCase(), content, mediaUrl };
+    conversation.lastMessage = { type: type.toLowerCase(), content: resolvedContent, mediaUrl };
     conversation.lastMessageAt = new Date();
     await conversation.save();
 
