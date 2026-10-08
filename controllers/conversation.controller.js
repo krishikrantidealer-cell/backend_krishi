@@ -249,6 +249,35 @@ const syncRoster = async (req, res) => {
   }
 };
 
+/**
+ * Sends read receipts to Meta/MyOperator for incoming unread messages
+ * so the customer sees the blue double checkmarks on WhatsApp
+ */
+const sendReadReceiptsForConversation = async (conversationId) => {
+  try {
+    const unreadIncoming = await Message.find({
+      conversationId,
+      direction: 'incoming',
+      status: { $ne: 'read' }
+    }).select('_id myoperatorMessageId');
+
+    if (unreadIncoming && unreadIncoming.length > 0) {
+      await Message.updateMany(
+        { _id: { $in: unreadIncoming.map(m => m._id) } },
+        { status: 'read' }
+      );
+
+      for (const msg of unreadIncoming) {
+        if (msg.myoperatorMessageId) {
+          myoperatorService.markMessageAsRead(msg.myoperatorMessageId).catch(() => {});
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[Read Receipt Helper Error]:', err.message);
+  }
+};
+
 // Retrieve Messages (Infinite scroll / Paginated)
 const getMessages = async (req, res) => {
   try {
@@ -271,8 +300,9 @@ const getMessages = async (req, res) => {
       }
     }
 
-    // Clean unread count on reading conversation
+    // Clean unread count and trigger blue tick read receipts on customer's WhatsApp
     await Conversation.findByIdAndUpdate(id, { unreadCount: 0 });
+    sendReadReceiptsForConversation(id).catch(() => {});
 
     const messages = await Message.find({ conversationId: id })
       .populate('sentBy', 'firstName lastName')
@@ -319,11 +349,17 @@ const sendConversationMessage = async (req, res) => {
 
     const selectedLang = languageCode || conversation.contactId?.preferredLanguage || 'en';
 
+    let normalizedType = (type || 'text').toLowerCase();
+    if (mediaUrl && (normalizedType === 'text' || !normalizedType)) {
+      normalizedType = 'image';
+    }
+
     // Dispatches message to MyOperator WABA API with dedicated agent credentials
     const myopResponse = await myoperatorService.sendMessage({
       agentId: req.user.id,
       phone: conversation.contactId.phone,
-      type,
+      type: normalizedType,
+      mediaType: normalizedType,
       textBody: content,
       mediaUrl,
       templateName,
@@ -1004,6 +1040,8 @@ const markAsRead = async (req, res) => {
     if (!conversation) {
       return res.status(404).json({ success: false, message: 'Conversation not found' });
     }
+
+    sendReadReceiptsForConversation(id).catch(() => {});
 
     res.json({ success: true, data: conversation });
   } catch (error) {

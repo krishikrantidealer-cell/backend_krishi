@@ -72,7 +72,9 @@ class MyOperatorService {
         data: {}
       };
 
-      if (type === 'Template' || templateName) {
+      const isTemplate = type?.toLowerCase() === 'template' || Boolean(templateName);
+
+      if (isTemplate) {
         const validBodyParams = Array.isArray(bodyValues)
           ? bodyValues.filter(v => v !== null && v !== undefined).map(v => String(v).trim())
           : [];
@@ -96,8 +98,44 @@ class MyOperatorService {
           type: 'template',
           context: contextObj
         };
+      } else if (mediaUrl && mediaUrl.toString().trim().length > 0) {
+        // Freeform Media Message (Image, Document, Audio, Video)
+        const rawType = (mediaType || type || 'image').toLowerCase();
+        let resolvedType = 'image';
+        if (rawType.includes('doc') || rawType.includes('pdf') || rawType.includes('xls') || rawType.includes('csv')) {
+          resolvedType = 'document';
+        } else if (rawType.includes('video') || rawType.includes('mp4')) {
+          resolvedType = 'video';
+        } else if (rawType.includes('audio') || rawType.includes('voice') || rawType.includes('mp3') || rawType.includes('ogg')) {
+          resolvedType = 'audio';
+        } else {
+          resolvedType = 'image';
+        }
+
+        const mediaObj = {
+          link: mediaUrl.toString().trim()
+        };
+
+        if (textBody && textBody.trim().length > 0 && resolvedType !== 'audio') {
+          mediaObj.caption = textBody.trim();
+        }
+
+        if (resolvedType === 'document') {
+          try {
+            const urlPath = new URL(mediaUrl).pathname;
+            const filename = urlPath.split('/').pop();
+            if (filename && filename.includes('.')) {
+              mediaObj.filename = decodeURIComponent(filename);
+            }
+          } catch (_) {}
+        }
+
+        payload.data = {
+          type: resolvedType,
+          [resolvedType]: mediaObj
+        };
       } else {
-        // Freeform Session Message
+        // Freeform Plain Text Message
         payload.data = {
           type: 'text',
           context: {
@@ -105,15 +143,6 @@ class MyOperatorService {
             preview_url: false
           }
         };
-
-        if (mediaUrl) {
-          const typeKey = mediaType.toLowerCase() === 'document' ? 'document' : 'image';
-          payload.data.type = typeKey;
-          payload.data[typeKey] = {
-            link: mediaUrl,
-            caption: textBody || ''
-          };
-        }
       }
 
       console.log(`[MyOperator WABA] Dispatching to +${countryCode}${cleanPhone} on behalf of Agent (${agentUser?.firstName || 'System'} PhoneId: ${targetPhoneNumId}):`, JSON.stringify(payload));
@@ -126,6 +155,34 @@ class MyOperatorService {
       const errorData = error.response?.data;
       console.error('[MyOperator WABA API Error]:', JSON.stringify(errorData || error.message));
       throw new Error(errorData?.message || errorData?.error?.message || (errorData?.errors ? JSON.stringify(errorData.errors) : error.message) || 'Failed to dispatch WhatsApp message via MyOperator');
+    }
+  }
+
+  /**
+   * Mark incoming WhatsApp Message as Read in Meta / MyOperator WABA
+   * Triggers the blue double checkmarks on customer's phone
+   */
+  async markMessageAsRead(messageId) {
+    if (!this.wabaKey || !messageId) return false;
+
+    try {
+      const targetPhoneNumId = (await this.getPhoneNumberId()) || this.phoneNumberId || '1307352865799863';
+      const headers = this.getHeaders();
+
+      // Meta Cloud API & MyOperator specification for marking messages as read
+      const payload = {
+        messaging_product: 'whatsapp',
+        phone_number_id: targetPhoneNumId,
+        status: 'read',
+        message_id: messageId.toString()
+      };
+
+      const response = await axios.post(`${this.baseUrl}/chat/messages`, payload, { headers });
+      console.log(`[MyOperator WABA] 👁️ Sent read receipt (blue tick) for message ${messageId}`);
+      return response.data?.status === 'success' || response.status === 200;
+    } catch (error) {
+      console.warn(`[MyOperator WABA Read Receipt Warning for ${messageId}]:`, error.response?.data?.message || error.message);
+      return false;
     }
   }
 
