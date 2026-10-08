@@ -293,7 +293,7 @@ const getMessages = async (req, res) => {
 // Send message via API (Text or Media)
 const sendConversationMessage = async (req, res) => {
   try {
-    const { conversationId, type, content, mediaUrl, templateName, bodyValues, languageCode } = req.body;
+    const { conversationId, type, content, mediaUrl, templateName, bodyValues, languageCode, replyTo } = req.body;
 
     const conversation = await Conversation.findById(conversationId).populate('contactId');
     if (!conversation) {
@@ -373,6 +373,14 @@ const sendConversationMessage = async (req, res) => {
       sentBy: req.user.id,
       status: 'sent'
     };
+
+    if (replyTo && replyTo.content) {
+      messageData.replyTo = {
+        messageId: replyTo.messageId,
+        senderName: replyTo.senderName || 'Lead',
+        content: replyTo.content
+      };
+    }
 
     if (messageId) {
       messageData.myoperatorMessageId = messageId.toString();
