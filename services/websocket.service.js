@@ -180,6 +180,29 @@ const initWebSocket = (server) => {
             });
           }
         }
+        if (data.type === 'TYPING_START' && ws.userId && data.conversationId) {
+          broadcastToRoles(['admin', 'sales'], {
+            type: 'AGENT_TYPING_START',
+            data: {
+              conversationId: data.conversationId,
+              agentId: ws.userId,
+              agentName: ws.userName || 'Agent',
+              timestamp: new Date().toISOString()
+            }
+          });
+          return;
+        }
+
+        if (data.type === 'TYPING_STOP' && ws.userId && data.conversationId) {
+          broadcastToRoles(['admin', 'sales'], {
+            type: 'AGENT_TYPING_STOP',
+            data: {
+              conversationId: data.conversationId,
+              agentId: ws.userId
+            }
+          });
+          return;
+        }
       } catch (err) {
         // Ignore non-JSON messages
       }
