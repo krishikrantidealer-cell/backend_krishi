@@ -89,28 +89,6 @@ const getTemplates = async (req, res) => {
 
     const query = {};
 
-    // ── 1. Multi-Agent Scoping ──────────────────────────────────────────────
-    if (req.user.role === 'sales') {
-      // Sales Agent sees: Global Company Templates + Their Own Private Templates
-      query.$or = [
-        { isGlobal: true },
-        { createdBy: req.user.id },
-        { agentId: req.user.id }
-      ];
-    } else if (req.user.role === 'admin') {
-      // Admin can filter by agent or scope
-      if (scope === 'global') {
-        query.isGlobal = true;
-      } else if (scope === 'agent' || agentId) {
-        if (agentId && mongoose.Types.ObjectId.isValid(agentId)) {
-          query.agentId = agentId;
-          query.isGlobal = false;
-        } else {
-          query.isGlobal = false;
-        }
-      }
-    }
-
     if (category && category !== 'ALL') {
       query.category = category.toUpperCase();
     }
@@ -123,19 +101,13 @@ const getTemplates = async (req, res) => {
     }
     if (search && search.trim() !== '') {
       const regex = { $regex: search.trim(), $options: 'i' };
-      const searchOr = [{ name: regex }, { title: regex }, { body: regex }, { headerText: regex }, { footer: regex }];
-      if (query.$or) {
-        query.$and = [{ $or: query.$or }, { $or: searchOr }];
-        delete query.$or;
-      } else {
-        query.$or = searchOr;
-      }
+      query.$or = [{ name: regex }, { title: regex }, { body: regex }, { headerText: regex }, { footer: regex }];
     }
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const [templates, total] = await Promise.all([
       WhatsAppTemplate.find(query)
-        .sort({ isGlobal: -1, createdAt: -1 })
+        .sort({ createdAt: -1 })
         .skip(skip)
         .limit(parseInt(limit))
         .populate('agentId', 'firstName lastName email phoneNumber')
@@ -168,15 +140,6 @@ const getTemplateById = async (req, res) => {
 
     if (!template) {
       return res.status(404).json({ success: false, message: 'Template not found' });
-    }
-
-    // Role check: Sales agent can only view global templates or their own
-    if (req.user.role === 'sales' && !template.isGlobal) {
-      const isOwner = (template.createdBy && template.createdBy._id.toString() === req.user.id) ||
-                      (template.agentId && template.agentId._id.toString() === req.user.id);
-      if (!isOwner) {
-        return res.status(403).json({ success: false, message: 'Not authorized to view this private template' });
-      }
     }
 
     res.json({ success: true, data: template });
