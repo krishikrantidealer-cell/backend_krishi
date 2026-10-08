@@ -34,6 +34,11 @@ const conversationSchema = new mongoose.Schema({
     default: Date.now,
     index: true
   },
+  lastIncomingMessageAt: {
+    type: Date,
+    default: null,
+    index: true
+  },
   contactType: {
     type: String,
     enum: ['lead', 'dealer', 'customer'],

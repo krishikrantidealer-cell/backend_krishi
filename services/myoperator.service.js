@@ -237,6 +237,10 @@ class MyOperatorService {
    */
   async syncAllMessagesFromMyOperator() {
     if (!this.wabaKey) return { synced: 0 };
+    if (this._isSyncing) {
+      return { synced: 0, status: 'in_progress' };
+    }
+    this._isSyncing = true;
     try {
       const Conversation = require('../models/Conversation');
       const Message = require('../models/Message');
@@ -244,7 +248,10 @@ class MyOperatorService {
 
       const res = await axios.get(`${this.baseUrl}/chat/conversations`, { headers: this.getHeaders() });
       const convs = res.data?.data?.results || [];
-      if (!Array.isArray(convs) || convs.length === 0) return { synced: 0 };
+      if (!Array.isArray(convs) || convs.length === 0) {
+        this._isSyncing = false;
+        return { synced: 0 };
+      }
 
       let importedCount = 0;
 
@@ -362,6 +369,7 @@ class MyOperatorService {
               conversation.lastMessageAt = newMsg.createdAt;
               if (direction === 'incoming') {
                 conversation.unreadCount = (conversation.unreadCount || 0) + 1;
+                conversation.lastIncomingMessageAt = newMsg.createdAt;
               }
 
               // Broadcast real-time message to panel
@@ -390,6 +398,8 @@ class MyOperatorService {
     } catch (err) {
       console.error('[MyOperator Sync Conversations Error]:', err.message);
       return { synced: 0, error: err.message };
+    } finally {
+      this._isSyncing = false;
     }
   }
 }

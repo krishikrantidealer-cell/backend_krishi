@@ -354,6 +354,7 @@ async function processIncomingMessage({ phone, name, messageObj, phoneNumberId, 
     mediaUrl
   };
   conversation.lastMessageAt = new Date();
+  conversation.lastIncomingMessageAt = new Date();
   await conversation.save();
 
   // 5. Save Message Record
