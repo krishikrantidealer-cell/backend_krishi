@@ -9,62 +9,68 @@ const myoperatorService = require('../services/myoperator.service');
 const wsService = require('../services/websocket.service');
 const contactSyncService = require('../services/contactSync.service');
 
+// Run fast one-time DB backfill check asynchronously on startup
+contactSyncService.ensureContactTypesBackfilled().catch(err => {
+  console.error('[ConversationController] Startup backfill error:', err.message);
+});
+
 // Get all conversations with pagination, role checks, and tab filtering
 const getConversations = async (req, res) => {
   try {
     const { page = 1, limit = 500, search = '', status = 'open', tab = 'all', agentId } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
-    // Auto-sync leads and dealers on page 1 load
-    if (parseInt(page) === 1) {
-      if (req.user.role === 'admin') {
-        contactSyncService.syncAllUsers().catch(err => {
-          console.error('[GetConversations] Lazy admin roster sync warning:', err.message);
-        });
-      } else if (req.user.role === 'sales') {
-        contactSyncService.syncAllAssignedUsersForAgent(req.user.id).catch(err => {
-          console.error('[GetConversations] Lazy agent roster sync warning:', err.message);
-        });
-      }
-    }
-
-    const query = {};
+    const conditions = [];
 
     if (status && status !== 'all' && status.trim() !== '') {
-      query.status = status;
+      if (status === 'open') {
+        conditions.push({
+          $or: [
+            { status: 'open' },
+            { status: { $exists: false } },
+            { status: null }
+          ]
+        });
+      } else {
+        conditions.push({ status: status });
+      }
     }
 
     // Role-based security filters: sales agents see only their assigned contacts/conversations
     if (req.user.role === 'sales') {
       const assignedContactIds = await Contact.find({ assignedTo: req.user.id }).distinct('_id');
-      query.$or = [
-        { assignedTo: req.user.id },
-        ...(assignedContactIds.length > 0 ? [{ contactId: { $in: assignedContactIds } }] : [])
-      ];
+      conditions.push({
+        $or: [
+          { assignedTo: req.user.id },
+          ...(assignedContactIds.length > 0 ? [{ contactId: { $in: assignedContactIds } }] : [])
+        ]
+      });
     } else if (req.user.role === 'admin' && agentId) {
       // Admin filtering by specific sales agent
       const assignedContactIds = await Contact.find({ assignedTo: agentId }).distinct('_id');
-      query.$or = [
-        { assignedTo: agentId },
-        ...(assignedContactIds.length > 0 ? [{ contactId: { $in: assignedContactIds } }] : [])
-      ];
+      conditions.push({
+        $or: [
+          { assignedTo: agentId },
+          ...(assignedContactIds.length > 0 ? [{ contactId: { $in: assignedContactIds } }] : [])
+        ]
+      });
     }
 
     // Tab-based filtering: 'all', 'active', 'leads', 'dealers', 'unread'
     if (tab === 'active') {
-      query['lastMessage.content'] = { $exists: true, $ne: '' };
+      conditions.push({ 'lastMessage.content': { $exists: true, $ne: '' } });
     } else if (tab === 'leads') {
-      const leadContactIds = await Contact.find({
-        tags: { $in: ['Lead', 'New Lead', /^Lead/i] }
-      }).distinct('_id');
-      query.contactId = { $in: leadContactIds };
+      conditions.push({
+        $or: [
+          { contactType: 'lead' },
+          { contactType: { $exists: false } },
+          { contactType: null }
+        ]
+      });
     } else if (tab === 'dealers') {
-      const dealerContactIds = await Contact.find({
-        tags: { $in: ['Dealer', 'Verified Retailer', /^Dealer/i] }
-      }).distinct('_id');
-      query.contactId = { $in: dealerContactIds };
+      conditions.push({ contactType: 'dealer' });
     } else if (tab === 'unread') {
-      query.unreadCount = { $gt: 0 };
+      conditions.push({ unreadCount: { $gt: 0 } });
     }
 
     // Apply Search Filters by customer name, phone number, or shop name
@@ -80,60 +86,110 @@ const getConversations = async (req, res) => {
             { phone: { $regex: `91${cleanPhone}` } }
           ] : [])
         ]
-      }).select('_id');
+      }).select('_id').lean();
       const contactIds = matchingContacts.map(c => c._id);
-      
-      if (query.contactId && query.contactId.$in) {
-        // Intersect contact IDs
-        const existingIds = new Set(query.contactId.$in.map(String));
-        query.contactId = { $in: contactIds.filter(id => existingIds.has(String(id))) };
-      } else {
-        query.contactId = { $in: contactIds };
-      }
+      conditions.push({ contactId: { $in: contactIds } });
     }
 
-    const conversations = await Conversation.find(query)
-      .populate('contactId')
-      .populate('assignedTo', 'firstName lastName email phoneNumber')
-      .sort({ lastMessageAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit));
+    const query = conditions.length > 0 ? { $and: conditions } : {};
 
-    const total = await Conversation.countDocuments(query);
-
-    // Compute live tab summary counts
-    const baseQuery = {};
+    // Base conditions for role isolation tab counts (independent of specific tab filter)
+    const baseConditions = [];
     if (status && status !== 'all' && status.trim() !== '') {
-      baseQuery.status = status;
+      if (status === 'open') {
+        baseConditions.push({
+          $or: [
+            { status: 'open' },
+            { status: { $exists: false } },
+            { status: null }
+          ]
+        });
+      } else {
+        baseConditions.push({ status: status });
+      }
     }
     if (req.user.role === 'sales') {
       const assignedContactIds = await Contact.find({ assignedTo: req.user.id }).distinct('_id');
-      baseQuery.$or = [
-        { assignedTo: req.user.id },
-        ...(assignedContactIds.length > 0 ? [{ contactId: { $in: assignedContactIds } }] : [])
-      ];
+      baseConditions.push({
+        $or: [
+          { assignedTo: req.user.id },
+          ...(assignedContactIds.length > 0 ? [{ contactId: { $in: assignedContactIds } }] : [])
+        ]
+      });
     } else if (req.user.role === 'admin' && agentId) {
       const assignedContactIds = await Contact.find({ assignedTo: agentId }).distinct('_id');
-      baseQuery.$or = [
-        { assignedTo: agentId },
-        ...(assignedContactIds.length > 0 ? [{ contactId: { $in: assignedContactIds } }] : [])
-      ];
+      baseConditions.push({
+        $or: [
+          { assignedTo: agentId },
+          ...(assignedContactIds.length > 0 ? [{ contactId: { $in: assignedContactIds } }] : [])
+        ]
+      });
+    }
+    const baseQuery = baseConditions.length > 0 ? { $and: baseConditions } : {};
+
+    // Lightning-fast parallel execution: Lean conversation query + Single aggregation facet
+    let [conversations, facetResult, total] = await Promise.all([
+      Conversation.find(query)
+        .populate('contactId')
+        .populate('assignedTo', 'firstName lastName email phoneNumber')
+        .sort({ lastMessageAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean(),
+      Conversation.aggregate([
+        { $match: baseQuery },
+        {
+          $facet: {
+            all: [{ $count: 'count' }],
+            leads: [
+              { $match: { $or: [{ contactType: 'lead' }, { contactType: { $exists: false } }, { contactType: null }] } },
+              { $count: 'count' }
+            ],
+            dealers: [
+              { $match: { contactType: 'dealer' } },
+              { $count: 'count' }
+            ],
+            active: [
+              { $match: { 'lastMessage.content': { $exists: true, $ne: '' } } },
+              { $count: 'count' }
+            ],
+            unread: [
+              { $match: { unreadCount: { $gt: 0 } } },
+              { $count: 'count' }
+            ]
+          }
+        }
+      ]),
+      Conversation.countDocuments(query)
+    ]);
+
+    // Auto-sync fallback: If 0 conversations found and no search query, kick off instant sync and re-query
+    if (total === 0 && search === '' && page == 1 && tab === 'all') {
+      try {
+        if (req.user.role === 'sales') {
+          await contactSyncService.syncAllAssignedUsersForAgent(req.user.id, false);
+        } else {
+          await contactSyncService.syncAllUsers(false);
+        }
+        conversations = await Conversation.find(query)
+          .populate('contactId')
+          .populate('assignedTo', 'firstName lastName email phoneNumber')
+          .sort({ lastMessageAt: -1 })
+          .skip(skip)
+          .limit(parseInt(limit))
+          .lean();
+        total = conversations.length;
+      } catch (syncErr) {
+        console.error('[getConversations] Auto-sync fallback error:', syncErr.message);
+      }
     }
 
-    const allLeadContactIds = await Contact.find({
-      tags: { $in: ['Lead', 'New Lead', /^Lead/i] }
-    }).distinct('_id');
-    const allDealerContactIds = await Contact.find({
-      tags: { $in: ['Dealer', 'Verified Retailer', /^Dealer/i] }
-    }).distinct('_id');
-
-    const [allCount, leadsCount, dealersCount, activeCount, unreadCount] = await Promise.all([
-      Conversation.countDocuments(baseQuery),
-      Conversation.countDocuments({ ...baseQuery, contactId: { $in: allLeadContactIds } }),
-      Conversation.countDocuments({ ...baseQuery, contactId: { $in: allDealerContactIds } }),
-      Conversation.countDocuments({ ...baseQuery, 'lastMessage.content': { $exists: true, $ne: '' } }),
-      Conversation.countDocuments({ ...baseQuery, unreadCount: { $gt: 0 } })
-    ]);
+    const countsFacet = facetResult?.[0] || {};
+    const allCount = countsFacet.all?.[0]?.count || 0;
+    const leadsCount = countsFacet.leads?.[0]?.count || 0;
+    const dealersCount = countsFacet.dealers?.[0]?.count || 0;
+    const activeCount = countsFacet.active?.[0]?.count || 0;
+    const unreadCount = countsFacet.unread?.[0]?.count || 0;
 
     res.json({
       success: true,
@@ -159,13 +215,13 @@ const syncRoster = async (req, res) => {
   try {
     let result;
     if (req.user.role === 'sales') {
-      result = await contactSyncService.syncAllAssignedUsersForAgent(req.user.id);
+      result = await contactSyncService.syncAllAssignedUsersForAgent(req.user.id, true);
     } else {
       const targetAgentId = req.query.agentId || req.body.agentId;
       if (targetAgentId) {
-        result = await contactSyncService.syncAllAssignedUsersForAgent(targetAgentId);
+        result = await contactSyncService.syncAllAssignedUsersForAgent(targetAgentId, true);
       } else {
-        result = await contactSyncService.syncAllUsers();
+        result = await contactSyncService.syncAllUsers(true);
       }
     }
     res.json({

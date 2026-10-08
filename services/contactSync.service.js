@@ -67,6 +67,8 @@ const syncUserToContactAndConversation = async (userOrId, options = { broadcastW
       await contact.save();
     }
 
+    const contactType = isDealer ? 'dealer' : 'lead';
+
     // 2. Find or Create Conversation
     let conversation = await Conversation.findOne({ contactId: contact._id });
     const isNewConversation = !conversation;
@@ -75,14 +77,33 @@ const syncUserToContactAndConversation = async (userOrId, options = { broadcastW
       conversation = new Conversation({
         contactId: contact._id,
         assignedTo: user.assignedAgent || null,
+        contactType: contactType,
+        contactName: contactName,
+        contactPhone: phone,
         status: 'open',
         unreadCount: 0,
         lastMessageAt: user.assignedAt || user.createdAt || new Date()
       });
       await conversation.save();
     } else {
+      let needsSave = false;
       if (user.assignedAgent && String(conversation.assignedTo) !== String(user.assignedAgent)) {
         conversation.assignedTo = user.assignedAgent;
+        needsSave = true;
+      }
+      if (conversation.contactType !== contactType) {
+        conversation.contactType = contactType;
+        needsSave = true;
+      }
+      if (conversation.contactName !== contactName) {
+        conversation.contactName = contactName;
+        needsSave = true;
+      }
+      if (conversation.contactPhone !== phone) {
+        conversation.contactPhone = phone;
+        needsSave = true;
+      }
+      if (needsSave) {
         await conversation.save();
       }
     }
@@ -112,22 +133,40 @@ const syncUserToContactAndConversation = async (userOrId, options = { broadcastW
   }
 };
 
+// Global Sync Cooldown Cache (Prevents DB saturation on rapid tab switching)
+let lastGlobalSyncTimestamp = 0;
+const agentSyncTimestamps = new Map();
+const SYNC_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes
+
 /**
- * Bulk sync all assigned leads and dealers for a specific sales agent
+ * Bulk sync all assigned leads and dealers for a specific sales agent in concurrent batches
  * @param {String} agentId
+ * @param {Boolean} force
  */
-const syncAllAssignedUsersForAgent = async (agentId) => {
+const syncAllAssignedUsersForAgent = async (agentId, force = false) => {
   try {
     if (!agentId) return { synced: 0 };
+
+    const now = Date.now();
+    const lastSync = agentSyncTimestamps.get(String(agentId)) || 0;
+    if (!force && now - lastSync < SYNC_COOLDOWN_MS) {
+      return { synced: 0, cached: true };
+    }
+    agentSyncTimestamps.set(String(agentId), now);
+
     const users = await User.find({
       assignedAgent: agentId,
       role: { $in: ['user', 'dealer'] }
-    });
+    }).lean();
 
     let count = 0;
-    for (const user of users) {
-      const res = await syncUserToContactAndConversation(user, { broadcastWs: false });
-      if (res) count++;
+    const BATCH_SIZE = 50;
+    for (let i = 0; i < users.length; i += BATCH_SIZE) {
+      const chunk = users.slice(i, i + BATCH_SIZE);
+      const results = await Promise.all(
+        chunk.map(u => syncUserToContactAndConversation(u, { broadcastWs: false }))
+      );
+      count += results.filter(Boolean).length;
     }
 
     return { synced: count, total: users.length };
@@ -140,17 +179,21 @@ const syncAllAssignedUsersForAgent = async (agentId) => {
 /**
  * Bulk sync all users with assigned agents in the database
  */
-const syncAllAssignedUsers = async () => {
+const syncAllAssignedUsers = async (force = false) => {
   try {
     const users = await User.find({
       assignedAgent: { $ne: null, $exists: true },
       role: { $in: ['user', 'dealer'] }
-    });
+    }).lean();
 
     let count = 0;
-    for (const user of users) {
-      const res = await syncUserToContactAndConversation(user, { broadcastWs: false });
-      if (res) count++;
+    const BATCH_SIZE = 50;
+    for (let i = 0; i < users.length; i += BATCH_SIZE) {
+      const chunk = users.slice(i, i + BATCH_SIZE);
+      const results = await Promise.all(
+        chunk.map(u => syncUserToContactAndConversation(u, { broadcastWs: false }))
+      );
+      count += results.filter(Boolean).length;
     }
 
     console.log(`[ContactSync] Successfully synced ${count} assigned users to contacts/conversations.`);
@@ -163,18 +206,29 @@ const syncAllAssignedUsers = async () => {
 
 /**
  * Bulk sync ALL Leads and Dealers in the system (Assigned and Unassigned) for Admins
+ * @param {Boolean} force
  */
-const syncAllUsers = async () => {
+const syncAllUsers = async (force = false) => {
   try {
+    const now = Date.now();
+    if (!force && now - lastGlobalSyncTimestamp < SYNC_COOLDOWN_MS) {
+      return { synced: 0, cached: true };
+    }
+    lastGlobalSyncTimestamp = now;
+
     const users = await User.find({
       role: { $in: ['user', 'dealer'] },
       phoneNumber: { $exists: true, $ne: '' }
-    });
+    }).lean();
 
     let count = 0;
-    for (const user of users) {
-      const res = await syncUserToContactAndConversation(user, { broadcastWs: false });
-      if (res) count++;
+    const BATCH_SIZE = 50;
+    for (let i = 0; i < users.length; i += BATCH_SIZE) {
+      const chunk = users.slice(i, i + BATCH_SIZE);
+      const results = await Promise.all(
+        chunk.map(u => syncUserToContactAndConversation(u, { broadcastWs: false }))
+      );
+      count += results.filter(Boolean).length;
     }
 
     console.log(`[ContactSync] Successfully synced ${count} total leads & dealers to contacts/conversations.`);
@@ -185,9 +239,37 @@ const syncAllUsers = async () => {
   }
 };
 
+/**
+ * Instant DB backfill to ensure 100% of Conversation records have contactType populated
+ */
+const ensureContactTypesBackfilled = async () => {
+  try {
+    const dealerContacts = await Contact.find({
+      tags: { $in: ['Dealer', 'Verified Retailer', /^Dealer/i] }
+    }).select('_id').lean();
+
+    if (dealerContacts.length > 0) {
+      const dealerIds = dealerContacts.map(c => c._id);
+      await Conversation.updateMany(
+        { contactId: { $in: dealerIds }, contactType: { $ne: 'dealer' } },
+        { $set: { contactType: 'dealer' } }
+      );
+    }
+
+    await Conversation.updateMany(
+      { $or: [{ contactType: { $exists: false } }, { contactType: null }] },
+      { $set: { contactType: 'lead' } }
+    );
+    console.log('[ContactSync] ContactType backfill check completed successfully.');
+  } catch (err) {
+    console.error('[ContactSync] Backfill warning:', err.message);
+  }
+};
+
 module.exports = {
   syncUserToContactAndConversation,
   syncAllAssignedUsersForAgent,
   syncAllAssignedUsers,
-  syncAllUsers
+  syncAllUsers,
+  ensureContactTypesBackfilled
 };

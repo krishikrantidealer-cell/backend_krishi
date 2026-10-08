@@ -113,9 +113,14 @@ const getCallLogs = async (req, res) => {
       query.isDeleted = { $ne: true };
     }
 
-    // ── Multi-Field Search (Phone, Customer Name, Disposition, Notes) ────────
-    const searchTerm = (search || customerPhone || '').trim();
-    if (searchTerm !== '') {
+    // ── Phone / Customer Specific Filter vs Broad Multi-Field Search ────────
+    if (customerPhone && customerPhone.trim() !== '') {
+      const cleanDigits = customerPhone.replace(/\D/g, '').replace(/^91/, '');
+      if (cleanDigits.length >= 5) {
+        query.customerPhone = { $regex: cleanDigits, $options: 'i' };
+      }
+    } else if (search && search.trim() !== '') {
+      const searchTerm = search.trim();
       const cleanDigits = searchTerm.replace(/\D/g, '').replace(/^91/, '');
       const searchConditions = [];
 
