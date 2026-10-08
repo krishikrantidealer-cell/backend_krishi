@@ -62,55 +62,38 @@ class MyOperatorService {
         agentUser = await User.findById(agentId);
       }
       const agentConfig = agentUser?.myoperatorConfig || {};
-      const customPhoneNumId = agentConfig.wabaPhoneNumberId || (await this.getPhoneNumberId());
+      const customPhoneNumId = agentConfig.wabaPhoneNumberId || (await this.getPhoneNumberId()) || this.phoneNumberId || '1307352865799863';
 
       let payload = {
-        phone_number_id: customPhoneNumId || undefined,
+        phone_number_id: customPhoneNumId,
         customer_country_code: countryCode,
         customer_number: cleanPhone,
         data: {}
       };
 
       if (type === 'Template' || templateName) {
-        const components = [];
-
-        if (mediaUrl) {
-          components.push({
-            type: 'header',
-            parameters: [
-              {
-                type: mediaType.toLowerCase() === 'document' ? 'document' : 'image',
-                [mediaType.toLowerCase() === 'document' ? 'document' : 'image']: {
-                  link: mediaUrl
-                }
-              }
-            ]
-          });
-        }
-
         const validBodyParams = Array.isArray(bodyValues)
-          ? bodyValues.filter(v => v !== null && v !== undefined && String(v).trim() !== '')
+          ? bodyValues.filter(v => v !== null && v !== undefined).map(v => String(v).trim())
           : [];
 
+        const contextObj = {
+          template_name: templateName,
+          language: languageCode || 'en'
+        };
+
         if (validBodyParams.length > 0) {
-          components.push({
-            type: 'body',
-            parameters: validBodyParams.map(val => ({
-              type: 'text',
-              text: String(val)
-            }))
-          });
+          contextObj.body_values = validBodyParams;
+          contextObj.parameters = validBodyParams;
+        }
+
+        if (mediaUrl) {
+          contextObj.media_url = mediaUrl;
+          contextObj.media_type = (mediaType || 'Image').toLowerCase();
         }
 
         payload.data = {
           type: 'template',
-          template: {
-            name: templateName,
-            language: {
-              code: languageCode
-            },
-            ...(components.length > 0 ? { components } : {})
-          }
+          context: contextObj
         };
       } else {
         // Freeform Session Message
