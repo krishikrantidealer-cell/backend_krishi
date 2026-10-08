@@ -336,6 +336,10 @@ const createTemplate = async (req, res) => {
       }
     }
 
+    if (req.body.status === 'APPROVED') {
+      initialStatus = 'APPROVED';
+    }
+
     const template = new WhatsAppTemplate({
       name: formattedName,
       title: title || formattedName.replace(/_/g, ' ').toUpperCase(),
