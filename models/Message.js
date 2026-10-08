@@ -55,6 +55,12 @@ const messageSchema = new mongoose.Schema({
     default: 'sent',
     index: true
   },
+  replyTo: {
+    messageId: { type: String },
+    senderName: { type: String },
+    content: { type: String },
+    mediaUrl: { type: String }
+  },
   createdAt: {
     type: Date,
     default: Date.now

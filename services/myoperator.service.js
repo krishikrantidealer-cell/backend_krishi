@@ -304,6 +304,35 @@ class MyOperatorService {
               content = m.data.text;
             }
 
+            let replyToObj = null;
+            if (m.is_reply || m.reply_to || m.data?.context?.id) {
+              const replyId = m.reply_to || m.data?.context?.id;
+              let refMsg = replyId ? await Message.findOne({
+                $or: [
+                  { myoperatorMessageId: replyId.toString() }
+                ]
+              }).lean() : null;
+
+              if (!refMsg && Array.isArray(myopMsgs)) {
+                const foundInBatch = myopMsgs.find(bm => bm.id === replyId || bm.metadata?.waba_msg_id === replyId);
+                if (foundInBatch) {
+                  let refContent = foundInBatch.data?.context?.body?.context || foundInBatch.data?.context?.body || foundInBatch.data?.body || foundInBatch.data?.text || '';
+                  if (typeof refContent !== 'string') refContent = JSON.stringify(refContent);
+                  replyToObj = {
+                    messageId: replyId,
+                    senderName: foundInBatch.action === 'incoming' ? customerName : 'You',
+                    content: refContent
+                  };
+                }
+              } else if (refMsg) {
+                replyToObj = {
+                  messageId: replyId,
+                  senderName: refMsg.direction === 'incoming' ? customerName : 'You',
+                  content: refMsg.content
+                };
+              }
+            }
+
             const orConds = [];
             if (myopMsgId) orConds.push({ myoperatorMessageId: myopMsgId.toString() });
             if (content) orConds.push({ conversationId: conversation._id, content: content, direction: direction });
@@ -318,6 +347,7 @@ class MyOperatorService {
                 direction: direction,
                 type: ['text', 'image', 'document', 'audio', 'video', 'template'].includes(msgType) ? msgType : 'text',
                 content: content,
+                replyTo: replyToObj,
                 myoperatorMessageId: myopMsgId ? myopMsgId.toString() : undefined,
                 status: m.status === 'read' ? 'read' : (m.status === 'delivered' ? 'delivered' : (direction === 'incoming' ? 'delivered' : 'sent')),
                 createdAt: m.created ? new Date(m.created) : new Date()
