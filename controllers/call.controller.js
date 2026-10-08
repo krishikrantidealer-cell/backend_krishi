@@ -861,18 +861,33 @@ const handleCallWebhook = async (req, res) => {
           ]
         }).select('name phone preferredLanguage').lean();
 
-        // If contact doesn't exist yet, auto-create in CRM so it's immediately indexed
+        // If contact doesn't exist yet, check User (Lead/Dealer) first, or auto-create in CRM
         if (!contactObj && customerPhone && customerPhone.length >= 10) {
           try {
+            const clean10 = customerPhone.replace(/\D/g, '').replace(/^91/, '');
+            const existingUser = await User.findOne({
+              $or: [
+                { phoneNumber: clean10 },
+                { phoneNumber: `91${clean10}` },
+                { phoneNumber: `+91${clean10}` }
+              ]
+            }).lean();
+
+            const computedName = existingUser
+              ? `${existingUser.firstName || ''} ${existingUser.lastName || ''}`.trim() || existingUser.shopName || `Caller +91 ${clean10}`
+              : `Caller +91 ${clean10}`;
+
             const newContact = await Contact.create({
-              name: `Caller +91 ${customerPhone}`,
-              phone: `+91${customerPhone}`,
-              assignedTo: resolvedAgentId || null
+              name: computedName,
+              phone: `91${clean10}`,
+              assignedTo: resolvedAgentId || existingUser?.assignedAgent || null,
+              tags: existingUser ? ['lead'] : []
             });
             contactObj = { _id: newContact._id, name: newContact.name, phone: newContact.phone };
           } catch (_) {
+            const clean10 = customerPhone.replace(/\D/g, '').replace(/^91/, '');
             contactObj = await Contact.findOne({
-              $or: [{ phone: customerPhone }, { phone: `+91${customerPhone}` }]
+              $or: [{ phone: clean10 }, { phone: `91${clean10}` }, { phone: `+91${clean10}` }]
             }).select('name phone preferredLanguage').lean();
           }
         }
