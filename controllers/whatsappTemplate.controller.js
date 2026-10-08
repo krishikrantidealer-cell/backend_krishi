@@ -467,12 +467,26 @@ const sendTemplate = async (req, res) => {
         message: `Template "${resolvedName}" sent successfully to ${customerPhone}`,
         data: { customerPhone, templateName: resolvedName }
       });
-    } else {
-      res.status(500).json({
-        success: false,
-        message: 'Could not dispatch WhatsApp message via carrier gateway.'
-      });
+/**
+ * Update Template (Edit text or toggle status APPROVED/REJECTED/PENDING_APPROVAL)
+ */
+const updateTemplate = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, title, body, footer, headerText } = req.body;
+    const updateFields = {};
+    if (status) updateFields.status = status.toUpperCase();
+    if (title) updateFields.title = title.trim();
+    if (body) updateFields.body = body.trim();
+    if (footer !== undefined) updateFields.footer = footer.trim();
+    if (headerText !== undefined) updateFields.headerText = headerText.trim();
+
+    const updated = await WhatsAppTemplate.findByIdAndUpdate(id, updateFields, { new: true });
+    if (!updated) {
+      return res.status(404).json({ success: false, message: 'Template not found' });
     }
+
+    res.json({ success: true, message: 'Template updated successfully', data: updated });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -482,6 +496,7 @@ module.exports = {
   getTemplates,
   getTemplateById,
   createTemplate,
+  updateTemplate,
   deleteTemplate,
   sendTemplate
 };

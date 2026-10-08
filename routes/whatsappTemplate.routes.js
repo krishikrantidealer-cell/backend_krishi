@@ -9,6 +9,8 @@ router.use(protect);
 router.get('/', whatsappTemplateController.getTemplates);
 router.get('/:id', whatsappTemplateController.getTemplateById);
 router.post('/', whatsappTemplateController.createTemplate);
+router.patch('/:id', whatsappTemplateController.updateTemplate);
+router.put('/:id', whatsappTemplateController.updateTemplate);
 router.delete('/:id', whatsappTemplateController.deleteTemplate);
 router.post('/send', whatsappTemplateController.sendTemplate);
 
