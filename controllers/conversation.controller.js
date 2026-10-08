@@ -203,6 +203,15 @@ const getConversations = async (req, res) => {
         unread: unreadCount
       }
     });
+
+    // Asynchronous background periodic refresh (governed by 10-minute cooldown cache)
+    if (page == 1 && search === '') {
+      if (req.user.role === 'sales') {
+        contactSyncService.syncAllAssignedUsersForAgent(req.user.id, false).catch(() => {});
+      } else {
+        contactSyncService.syncAllUsers(false).catch(() => {});
+      }
+    }
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

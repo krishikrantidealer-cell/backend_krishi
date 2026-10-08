@@ -3,6 +3,7 @@ const User = require('../models/User');
 const { processAndUploadKycDocument } = require('../utils/gcs');
 const Notification = require('../models/Notification');
 const auditService = require('../services/audit.service');
+const contactSyncService = require('../services/contactSync.service');
 
 exports.getProfile = async (req, res, next) => {
   try {
@@ -32,6 +33,7 @@ exports.updateProfile = async (req, res, next) => {
 exports.completeProfile = async (req, res, next) => {
   try {
     const user = await userService.completeProfile(req.user._id, req.body);
+    contactSyncService.syncUserToContactAndConversation(user, { broadcastWs: true }).catch(() => {});
     res.json({
       success: true,
       message: 'Account created successfully',
@@ -131,6 +133,8 @@ exports.submitKyc = async (req, res, next) => {
         console.error('[Notification] Failed to notify admins on KYC submission:', notifErr.message);
       }
     } catch (wsErr) {}
+
+    contactSyncService.syncUserToContactAndConversation(user, { broadcastWs: true }).catch(() => {});
 
     return res.status(200).json({
       success: true,
@@ -379,6 +383,8 @@ exports.adminUpdateKycStatus = async (req, res, next) => {
       console.error('[WS] Failed to broadcast KYC status update:', wsErr.message);
     }
 
+    contactSyncService.syncUserToContactAndConversation(user, { broadcastWs: true }).catch(() => {});
+
     res.json({ success: true, message: `KYC status updated to ${status}`, user });
   } catch (error) {
     next(error);
@@ -421,35 +427,9 @@ exports.adminAssignAgent = async (req, res, next) => {
     const user = await userService.assignAgent(userId, agentId);
 
     // Sync WhatsApp CRM Contact and Conversation assignments to match this change
-    if (user && user.phoneNumber) {
-      try {
-        const Contact = require('../models/Contact');
-        const Conversation = require('../models/Conversation');
-        let cleanPhone = user.phoneNumber.replace(/[^\d]/g, '');
-        if (cleanPhone.length > 10) {
-          cleanPhone = cleanPhone.slice(-10);
-        }
-        const phoneVariants = [
-          cleanPhone,
-          `91${cleanPhone}`,
-          `+91${cleanPhone}`,
-          `0${cleanPhone}`
-        ];
-        const contact = await Contact.findOneAndUpdate(
-          { phone: { $in: phoneVariants } },
-          { assignedTo: agentId },
-          { new: true }
-        );
-        if (contact) {
-          await Conversation.findOneAndUpdate(
-            { contactId: contact._id },
-            { assignedTo: agentId }
-          );
-        }
-      } catch (err) {
-        console.error('[Sync] Failed to sync WhatsApp contact/conversation assignment:', err.message);
-      }
-    }
+    contactSyncService.syncUserToContactAndConversation(user, { broadcastWs: true }).catch(err => {
+      console.error('[Sync] Failed to sync WhatsApp contact/conversation assignment:', err.message);
+    });
 
     // Audit critical sales/admin action
     auditService.logAction({
@@ -648,6 +628,8 @@ exports.adminSubmitKyc = async (req, res, next) => {
       console.error('[WS] Failed to broadcast admin KYC submission:', wsErr.message);
     }
 
+    contactSyncService.syncUserToContactAndConversation(user, { broadcastWs: true }).catch(() => {});
+
     res.json({
       success: true,
       message: 'KYC submitted successfully by Admin',
@@ -821,6 +803,8 @@ exports.createDealer = async (req, res, next) => {
         }
       } catch (wsErr) {}
 
+      contactSyncService.syncUserToContactAndConversation(existingUser, { broadcastWs: true }).catch(() => {});
+
       const populatedUser = await User.findById(existingUser._id).populate('assignedAgent', 'firstName lastName phoneNumber email');
 
       return res.status(200).json({
@@ -911,6 +895,8 @@ exports.createDealer = async (req, res, next) => {
       }
     } catch (wsErr) {}
 
+    contactSyncService.syncUserToContactAndConversation(newDealer, { broadcastWs: true }).catch(() => {});
+
     const populatedDealer = await User.findById(newDealer._id).populate('assignedAgent', 'firstName lastName phoneNumber email');
 
     res.status(201).json({
@@ -985,6 +971,8 @@ exports.adminUpdateUser = async (req, res, next) => {
     } catch (wsErr) {
       console.error('[WS] Failed to broadcast user update:', wsErr.message);
     }
+
+    contactSyncService.syncUserToContactAndConversation(user, { broadcastWs: true }).catch(() => {});
 
     res.json({
       success: true,
@@ -1454,6 +1442,7 @@ exports.adminBulkCreateUsers = async (req, res, next) => {
         });
 
         results.success.push(newUser._id);
+        contactSyncService.syncUserToContactAndConversation(newUser, { broadcastWs: false }).catch(() => {});
       } catch (err) {
         results.failed.push({ data: userData, reason: err.message });
       }

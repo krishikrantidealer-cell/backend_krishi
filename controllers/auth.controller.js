@@ -246,6 +246,16 @@ class AuthController {
         }
       }
 
+      // Auto-sync Lead / Dealer to WhatsApp CRM Contact & Conversation
+      try {
+        const contactSync = require('../services/contactSync.service');
+        contactSync.syncUserToContactAndConversation(user, { broadcastWs: true }).catch(err => {
+          console.error('[Auth] Failed to sync user to CRM contact/conversation:', err.message);
+        });
+      } catch (err) {
+        console.error('[Auth] ContactSync invocation error:', err.message);
+      }
+
       const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress;
       const userAgent = req.headers['user-agent'];
       
