@@ -130,8 +130,25 @@ class MyOperatorService {
         const trimmedCaption = (rawCaption && !['none', 'null', 'undefined', '[media]', '[document]'].includes(rawCaption.toLowerCase()) && resolvedType !== 'audio')
           ? rawCaption
           : null;
-        const cleanMediaUrl = mediaUrl.toString().trim();
-        const headers = this.getHeaders();
+        // Resolve precise MIME type for MyOperator context
+        let resolvedMimeType = 'application/pdf';
+        const fnLower = (resolvedFilename || cleanMediaUrl || '').toLowerCase();
+        if (fnLower.endsWith('.png')) resolvedMimeType = 'image/png';
+        else if (fnLower.endsWith('.jpg') || fnLower.endsWith('.jpeg')) resolvedMimeType = 'image/jpeg';
+        else if (fnLower.endsWith('.webp')) resolvedMimeType = 'image/webp';
+        else if (fnLower.endsWith('.pdf')) resolvedMimeType = 'application/pdf';
+        else if (fnLower.endsWith('.csv')) resolvedMimeType = 'text/csv';
+        else if (fnLower.endsWith('.xlsx')) resolvedMimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+        else if (fnLower.endsWith('.xls')) resolvedMimeType = 'application/vnd.ms-excel';
+        else if (fnLower.endsWith('.docx')) resolvedMimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+        else if (fnLower.endsWith('.doc')) resolvedMimeType = 'application/msword';
+        else if (fnLower.endsWith('.txt')) resolvedMimeType = 'text/plain';
+        else if (fnLower.endsWith('.zip')) resolvedMimeType = 'application/zip';
+        else if (fnLower.endsWith('.mp3')) resolvedMimeType = 'audio/mpeg';
+        else if (fnLower.endsWith('.mp4')) resolvedMimeType = 'video/mp4';
+        else if (resolvedType === 'image') resolvedMimeType = 'image/jpeg';
+        else if (resolvedType === 'video') resolvedMimeType = 'video/mp4';
+        else if (resolvedType === 'audio') resolvedMimeType = 'audio/mpeg';
 
         const isUrl = cleanMediaUrl.startsWith('http://') || cleanMediaUrl.startsWith('https://');
 
@@ -140,35 +157,38 @@ class MyOperatorService {
           // Strategy 0: If media ID / token from MyOperator vault
           ...(!isUrl ? [
             {
-              name: 'vault-id',
+              name: 'vault-media_id',
               data: {
                 type: resolvedType,
                 context: {
-                  id: cleanMediaUrl,
+                  media_id: cleanMediaUrl,
+                  mime_type: resolvedMimeType,
                   ...(resolvedType === 'document' ? { filename: resolvedFilename } : {}),
                   ...(trimmedCaption ? { caption: trimmedCaption } : {})
                 }
               }
             },
             {
-              name: 'vault-media_id',
+              name: 'vault-id',
               data: {
                 type: resolvedType,
                 context: {
-                  media_id: cleanMediaUrl,
+                  id: cleanMediaUrl,
+                  mime_type: resolvedMimeType,
                   ...(resolvedType === 'document' ? { filename: resolvedFilename } : {}),
                   ...(trimmedCaption ? { caption: trimmedCaption } : {})
                 }
               }
             }
           ] : []),
-          // Strategy 1: Standard context format with link
+          // Strategy 1: Standard context format with link and required mime_type
           {
-            name: 'context-link',
+            name: 'context-link-with-mime',
             data: {
               type: resolvedType,
               context: {
                 link: cleanMediaUrl,
+                mime_type: resolvedMimeType,
                 ...(resolvedType === 'document' ? { filename: resolvedFilename } : {}),
                 ...(trimmedCaption ? { caption: trimmedCaption } : {})
               }
@@ -181,6 +201,7 @@ class MyOperatorService {
               type: resolvedType,
               context: {
                 media_url: cleanMediaUrl,
+                mime_type: resolvedMimeType,
                 ...(resolvedType === 'document' ? { filename: resolvedFilename } : {}),
                 ...(trimmedCaption ? { caption: trimmedCaption } : {})
               }
@@ -193,6 +214,7 @@ class MyOperatorService {
               type: resolvedType,
               context: {
                 url: cleanMediaUrl,
+                mime_type: resolvedMimeType,
                 ...(resolvedType === 'document' ? { filename: resolvedFilename } : {}),
                 ...(trimmedCaption ? { caption: trimmedCaption } : {})
               }
@@ -205,6 +227,7 @@ class MyOperatorService {
               type: resolvedType,
               [resolvedType]: {
                 link: cleanMediaUrl,
+                mime_type: resolvedMimeType,
                 ...(resolvedType === 'document' ? { filename: resolvedFilename } : {}),
                 ...(trimmedCaption ? { caption: trimmedCaption } : {})
               }
@@ -217,6 +240,7 @@ class MyOperatorService {
               type: resolvedType,
               context: {
                 link: cleanMediaUrl,
+                mime_type: resolvedMimeType,
                 ...(resolvedType === 'document' ? { filename: resolvedFilename } : {})
               }
             }
@@ -377,13 +401,14 @@ class MyOperatorService {
         else resolvedMime = 'application/pdf';
       }
 
-      form.append('application', 'whatsapp');
+      form.append('application', 'template');
       form.append('messaging_product', 'whatsapp');
       form.append('phone_number_id', targetPhoneNumId);
       form.append('type', resolvedMime);
       form.append('file', fileBuffer, {
         filename: fileName || 'document.pdf',
-        contentType: resolvedMime
+        contentType: resolvedMime,
+        knownLength: fileBuffer.length
       });
 
       const headers = {

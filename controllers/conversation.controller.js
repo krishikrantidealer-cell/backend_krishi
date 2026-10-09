@@ -516,11 +516,13 @@ const sendConversationMessage = async (req, res, next) => {
       }
     }
 
+    const normalizedMsgType = (type || 'text').toLowerCase();
+
     const messageData = {
       conversationId: conversation._id,
       contactId: conversation.contactId._id,
       direction: 'outgoing',
-      type: type.toLowerCase(),
+      type: normalizedMsgType,
       content: resolvedContent || `[Template] ${templateName}`,
       mediaUrl,
       sentBy: req.user.id,
@@ -542,28 +544,33 @@ const sendConversationMessage = async (req, res, next) => {
     await message.save();
 
     // Update conversation metadata
-    conversation.lastMessage = { type: type.toLowerCase(), content: resolvedContent, mediaUrl };
+    conversation.lastMessage = { type: normalizedMsgType, content: resolvedContent, mediaUrl };
     conversation.lastMessageAt = new Date();
     conversation.unreadCount = 0;
     await conversation.save();
 
     // Broadcast new message update via Native WebSockets
-    const populatedMessage = await Message.findById(message._id).populate('sentBy', 'firstName lastName');
-    const broadcastPayload = {
-      type: 'NEW_MESSAGE',
-      data: {
-        conversation: await conversation.populate(['contactId', 'assignedTo']),
-        message: populatedMessage
-      }
-    };
+    try {
+      const populatedMessage = await Message.findById(message._id).populate('sentBy', 'firstName lastName');
+      const broadcastPayload = {
+        type: 'NEW_MESSAGE',
+        data: {
+          conversation: await conversation.populate(['contactId', 'assignedTo']),
+          message: populatedMessage
+        }
+      };
 
-    if (conversation.assignedTo) {
-      wsService.sendToUser(conversation.assignedTo.toString(), broadcastPayload);
+      if (conversation.assignedTo) {
+        wsService.sendToUser(conversation.assignedTo.toString(), broadcastPayload);
+      }
+      wsService.broadcastToRoles(['admin'], broadcastPayload);
+    } catch (wsErr) {
+      console.warn('[WS Broadcast Note]:', wsErr.message);
     }
-    wsService.broadcastToRoles(['admin'], broadcastPayload);
 
     res.json({ success: true, data: message });
   } catch (error) {
+    console.error('[sendConversationMessage Error]:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
