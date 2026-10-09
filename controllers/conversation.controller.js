@@ -1237,14 +1237,14 @@ const uploadMedia = async (req, res, next) => {
         fileName: req.file.originalname,
         mimeType: req.file.mimetype
       });
-      const mediaId = myopMedia?.media_id || myopMedia?.id;
+      const mediaId = myopMedia?.media_id || myopMedia?.id || myopMedia?.mediaId;
       const mediaUrl = myopMedia?.url || myopMedia?.link || myopMedia?.media_url;
       if (mediaId || mediaUrl) {
         return res.json({
           success: true,
           data: {
             mediaId: mediaId ? String(mediaId) : undefined,
-            mediaUrl: mediaUrl || `https://publicapi.myoperator.co/chat/media/${mediaId}`,
+            mediaUrl: mediaId ? String(mediaId) : (mediaUrl || ''),
             fileName: req.file.originalname,
             mimeType: req.file.mimetype,
             fileSize: req.file.size

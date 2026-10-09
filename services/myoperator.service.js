@@ -133,8 +133,35 @@ class MyOperatorService {
         const cleanMediaUrl = mediaUrl.toString().trim();
         const headers = this.getHeaders();
 
+        const isUrl = cleanMediaUrl.startsWith('http://') || cleanMediaUrl.startsWith('https://');
+
         // Multi-strategy cascade for media dispatch
         const strategies = [
+          // Strategy 0: If media ID / token from MyOperator vault
+          ...(!isUrl ? [
+            {
+              name: 'vault-id',
+              data: {
+                type: resolvedType,
+                context: {
+                  id: cleanMediaUrl,
+                  ...(resolvedType === 'document' ? { filename: resolvedFilename } : {}),
+                  ...(trimmedCaption ? { caption: trimmedCaption } : {})
+                }
+              }
+            },
+            {
+              name: 'vault-media_id',
+              data: {
+                type: resolvedType,
+                context: {
+                  media_id: cleanMediaUrl,
+                  ...(resolvedType === 'document' ? { filename: resolvedFilename } : {}),
+                  ...(trimmedCaption ? { caption: trimmedCaption } : {})
+                }
+              }
+            }
+          ] : []),
           // Strategy 1: Standard context format with link
           {
             name: 'context-link',
@@ -330,10 +357,34 @@ class MyOperatorService {
       const form = new FormData();
       const targetPhoneNumId = (await this.getPhoneNumberId()) || this.phoneNumberId || '1307352865799863';
 
+      // Determine robust MIME type from filename if octet-stream or missing
+      let resolvedMime = mimeType;
+      const fnLower = (fileName || '').toLowerCase();
+      if (!resolvedMime || resolvedMime === 'application/octet-stream') {
+        if (fnLower.endsWith('.pdf')) resolvedMime = 'application/pdf';
+        else if (fnLower.endsWith('.png')) resolvedMime = 'image/png';
+        else if (fnLower.endsWith('.jpg') || fnLower.endsWith('.jpeg')) resolvedMime = 'image/jpeg';
+        else if (fnLower.endsWith('.webp')) resolvedMime = 'image/webp';
+        else if (fnLower.endsWith('.csv')) resolvedMime = 'text/csv';
+        else if (fnLower.endsWith('.xlsx')) resolvedMime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+        else if (fnLower.endsWith('.xls')) resolvedMime = 'application/vnd.ms-excel';
+        else if (fnLower.endsWith('.docx')) resolvedMime = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+        else if (fnLower.endsWith('.doc')) resolvedMime = 'application/msword';
+        else if (fnLower.endsWith('.txt')) resolvedMime = 'text/plain';
+        else if (fnLower.endsWith('.zip')) resolvedMime = 'application/zip';
+        else if (fnLower.endsWith('.mp3')) resolvedMime = 'audio/mpeg';
+        else if (fnLower.endsWith('.mp4')) resolvedMime = 'video/mp4';
+        else resolvedMime = 'application/pdf';
+      }
+
+      form.append('application', 'whatsapp');
       form.append('messaging_product', 'whatsapp');
       form.append('phone_number_id', targetPhoneNumId);
-      form.append('type', mimeType || 'application/pdf');
-      form.append('file', fileBuffer, { filename: fileName, contentType: mimeType });
+      form.append('type', resolvedMime);
+      form.append('file', fileBuffer, {
+        filename: fileName || 'document.pdf',
+        contentType: resolvedMime
+      });
 
       const headers = {
         ...this.getHeaders(),
@@ -341,6 +392,7 @@ class MyOperatorService {
       };
 
       const response = await axios.post(`${this.baseUrl}/chat/media/upload`, form, { headers });
+      console.log('[MyOperator Media Vault Upload Success]:', JSON.stringify(response.data));
       return response.data?.data || response.data;
     } catch (error) {
       console.error('[MyOperator WABA Media Upload Error]:', error.response?.data || error.message);
