@@ -1,6 +1,7 @@
 const axios = require('axios');
 const Contact = require('../models/Contact');
 const User = require('../models/User');
+const wsService = require('./websocket.service');
 const { normalizeIndianPhone, getPhoneQueryVariants } = require('../utils/phone');
 
 class MyOperatorService {
