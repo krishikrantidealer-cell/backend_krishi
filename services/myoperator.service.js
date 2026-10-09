@@ -18,9 +18,11 @@ class MyOperatorService {
     };
     if (this.wabaKey) {
       headers['Authorization'] = `Bearer ${this.wabaKey}`;
+      headers['x-api-key'] = this.wabaKey;
     }
     if (this.companyId) {
       headers['X-MYOP-COMPANY-ID'] = this.companyId;
+      headers['x-myop-company-id'] = this.companyId;
     }
     return headers;
   }
@@ -53,25 +55,12 @@ class MyOperatorService {
       // Always use verified master WABA phone number ID for WhatsApp messaging
       const targetPhoneNumId = (await this.getPhoneNumberId()) || this.phoneNumberId || '1307352865799863';
 
-      const cleanReplyId = (replyToMessageId || contextMessageId) && String(replyToMessageId || contextMessageId).trim()
-        ? String(replyToMessageId || contextMessageId).trim()
-        : null;
-
       let payload = {
         phone_number_id: targetPhoneNumId,
         customer_country_code: countryCode,
         customer_number: cleanPhone,
         data: {}
       };
-
-      if (cleanReplyId) {
-        payload.context = { message_id: cleanReplyId };
-        // MyOperator's reply_to field strictly accepts only MyOperator UUIDs (<= 40 characters). Longer IDs like wamid cause "Invalid input" error.
-        if (cleanReplyId.length <= 40 && !cleanReplyId.startsWith('wamid.')) {
-          payload.is_reply = true;
-          payload.reply_to = cleanReplyId;
-        }
-      }
 
       const isTemplate = type?.toLowerCase() === 'template' || Boolean(templateName);
 
@@ -95,19 +84,20 @@ class MyOperatorService {
           contextObj.media_type = (mediaType || 'Image').toLowerCase();
         }
 
-        if (cleanContextId) {
-          contextObj.message_id = cleanContextId;
-        }
-
         payload.data = {
           type: 'template',
           context: contextObj
         };
+
+        console.log(`[MyOperator WABA] Dispatching Template (${templateName}) to +${countryCode}${cleanPhone}:`, JSON.stringify(payload));
+        const headers = this.getHeaders();
+        const response = await axios.post(`${this.baseUrl}/chat/messages`, payload, { headers });
+        return response.data;
       } else if (mediaUrl && mediaUrl.toString().trim().length > 0) {
         // Freeform Media Message (Image, Document, Audio, Video)
         const rawType = (mediaType || type || 'image').toLowerCase();
         let resolvedType = 'image';
-        if (rawType.includes('doc') || rawType.includes('pdf') || rawType.includes('xls') || rawType.includes('csv')) {
+        if (rawType.includes('doc') || rawType.includes('pdf') || rawType.includes('xls') || rawType.includes('csv') || rawType.includes('sheet') || rawType.includes('word') || rawType.includes('file')) {
           resolvedType = 'document';
         } else if (rawType.includes('video') || rawType.includes('mp4')) {
           resolvedType = 'video';
@@ -117,28 +107,137 @@ class MyOperatorService {
           resolvedType = 'image';
         }
 
-        const mediaObj = {
-          link: mediaUrl.toString().trim()
-        };
-
-        if (textBody && textBody.trim().length > 0 && resolvedType !== 'audio') {
-          mediaObj.caption = textBody.trim();
-        }
-
+        let resolvedFilename = 'document.pdf';
         if (resolvedType === 'document') {
           try {
-            const urlPath = new URL(mediaUrl).pathname;
-            const filename = urlPath.split('/').pop();
-            if (filename && filename.includes('.')) {
-              mediaObj.filename = decodeURIComponent(filename);
+            const urlObj = new URL(mediaUrl);
+            const pathname = urlObj.pathname;
+            const extracted = pathname.split('/').pop();
+            if (extracted && extracted.trim().length > 0) {
+              resolvedFilename = decodeURIComponent(extracted.split('?')[0]);
             }
-          } catch (_) {}
+          } catch (_) {
+            resolvedFilename = 'document.pdf';
+          }
+          // Remove timestamp prefix if present (e.g. 1791549102213-call_logs.csv -> call_logs.csv)
+          resolvedFilename = resolvedFilename.replace(/^\d{10,14}-/, '');
+          if (!resolvedFilename.includes('.')) {
+            resolvedFilename += '.pdf';
+          }
         }
 
-        payload.data = {
-          type: resolvedType,
-          [resolvedType]: mediaObj
+        const rawCaption = (textBody && typeof textBody === 'string') ? textBody.trim() : '';
+        const trimmedCaption = (rawCaption && !['none', 'null', 'undefined', '[media]', '[document]'].includes(rawCaption.toLowerCase()) && resolvedType !== 'audio')
+          ? rawCaption
+          : null;
+        const cleanMediaUrl = mediaUrl.toString().trim();
+        const headers = this.getHeaders();
+
+        // Multi-strategy cascade for media dispatch
+        const strategies = [
+          // Strategy 1: Standard context format with link
+          {
+            name: 'context-link',
+            data: {
+              type: resolvedType,
+              context: {
+                link: cleanMediaUrl,
+                ...(resolvedType === 'document' ? { filename: resolvedFilename } : {}),
+                ...(trimmedCaption ? { caption: trimmedCaption } : {})
+              }
+            }
+          },
+          // Strategy 2: Context format with media_url
+          {
+            name: 'context-media_url',
+            data: {
+              type: resolvedType,
+              context: {
+                media_url: cleanMediaUrl,
+                ...(resolvedType === 'document' ? { filename: resolvedFilename } : {}),
+                ...(trimmedCaption ? { caption: trimmedCaption } : {})
+              }
+            }
+          },
+          // Strategy 3: Context format with url
+          {
+            name: 'context-url',
+            data: {
+              type: resolvedType,
+              context: {
+                url: cleanMediaUrl,
+                ...(resolvedType === 'document' ? { filename: resolvedFilename } : {}),
+                ...(trimmedCaption ? { caption: trimmedCaption } : {})
+              }
+            }
+          },
+          // Strategy 4: Typed object format: { type: 'document', document: { link, filename, caption } }
+          {
+            name: 'typed-object',
+            data: {
+              type: resolvedType,
+              [resolvedType]: {
+                link: cleanMediaUrl,
+                ...(resolvedType === 'document' ? { filename: resolvedFilename } : {}),
+                ...(trimmedCaption ? { caption: trimmedCaption } : {})
+              }
+            }
+          },
+          // Strategy 5: Context link without caption (in case caption schema triggers invalid input on document)
+          {
+            name: 'context-no-caption',
+            data: {
+              type: resolvedType,
+              context: {
+                link: cleanMediaUrl,
+                ...(resolvedType === 'document' ? { filename: resolvedFilename } : {})
+              }
+            }
+          }
+        ];
+
+        let lastError = null;
+        for (const strategy of strategies) {
+          try {
+            const attemptPayload = {
+              phone_number_id: targetPhoneNumId,
+              customer_country_code: countryCode,
+              customer_number: cleanPhone,
+              data: strategy.data
+            };
+            console.log(`[MyOperator WABA] Trying Media (${resolvedType}) strategy "${strategy.name}" to +${countryCode}${cleanPhone}...`);
+            const response = await axios.post(`${this.baseUrl}/chat/messages`, attemptPayload, { headers });
+            console.log(`[MyOperator WABA] ✅ Media (${resolvedType}) dispatched successfully using "${strategy.name}":`, response.data);
+            return response.data;
+          } catch (err) {
+            lastError = err;
+            const errMsg = err.response?.data?.message || err.message;
+            console.warn(`[MyOperator WABA] Strategy "${strategy.name}" failed: ${errMsg}`);
+          }
+        }
+
+        // Strategy 6: Resilient Fallback (Guarantees customer receives file even if binary media is blocked)
+        console.warn(`[MyOperator WABA] All binary media strategies failed (${lastError?.response?.data?.message || lastError?.message}). Falling back to direct secure file link text...`);
+        const fallbackText = resolvedType === 'document'
+          ? `📄 *[Document: ${resolvedFilename}]*\n${cleanMediaUrl}${trimmedCaption ? '\n\n' + trimmedCaption : ''}`
+          : `🖼️ *[${resolvedType.toUpperCase()}]*\n${cleanMediaUrl}${trimmedCaption ? '\n\n' + trimmedCaption : ''}`;
+
+        const textPayload = {
+          phone_number_id: targetPhoneNumId,
+          customer_country_code: countryCode,
+          customer_number: cleanPhone,
+          data: {
+            type: 'text',
+            context: {
+              body: fallbackText,
+              preview_url: true
+            }
+          }
         };
+
+        const textRes = await axios.post(`${this.baseUrl}/chat/messages`, textPayload, { headers });
+        console.log(`[MyOperator WABA] ✅ Fallback text link dispatched successfully:`, textRes.data);
+        return textRes.data;
       } else {
         // Freeform Plain Text Message
         payload.data = {
@@ -148,14 +247,14 @@ class MyOperatorService {
             preview_url: false
           }
         };
+
+        console.log(`[MyOperator WABA] Dispatching Text to +${countryCode}${cleanPhone}:`, JSON.stringify(payload));
+
+        const headers = this.getHeaders();
+        const response = await axios.post(`${this.baseUrl}/chat/messages`, payload, { headers });
+
+        return response.data;
       }
-
-      console.log(`[MyOperator WABA] Dispatching to +${countryCode}${cleanPhone} on behalf of Agent (${agentUser?.firstName || 'System'} PhoneId: ${targetPhoneNumId}):`, JSON.stringify(payload));
-
-      const headers = this.getHeaders();
-      const response = await axios.post(`${this.baseUrl}/chat/messages`, payload, { headers });
-
-      return response.data;
     } catch (error) {
       const errorData = error.response?.data;
       console.error('[MyOperator WABA API Error]:', JSON.stringify(errorData || error.message));
@@ -229,6 +328,11 @@ class MyOperatorService {
     try {
       const FormData = require('form-data');
       const form = new FormData();
+      const targetPhoneNumId = (await this.getPhoneNumberId()) || this.phoneNumberId || '1307352865799863';
+
+      form.append('messaging_product', 'whatsapp');
+      form.append('phone_number_id', targetPhoneNumId);
+      form.append('type', mimeType || 'application/pdf');
       form.append('file', fileBuffer, { filename: fileName, contentType: mimeType });
 
       const headers = {

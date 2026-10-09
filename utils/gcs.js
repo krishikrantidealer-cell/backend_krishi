@@ -67,7 +67,16 @@ const uploadToGCS = async (fileBuffer, destination, contentType) => {
     stream.on('error', (err) => reject(err));
     stream.on('finish', async () => {
       try { await file.makePublic(); } catch (e) { }
-      resolve(`https://storage.googleapis.com/${bucket.name}/${file.name}`);
+      try {
+        const [readUrl] = await file.getSignedUrl({
+          version: 'v4',
+          action: 'read',
+          expires: Date.now() + 30 * 24 * 60 * 60 * 1000, // 30 days
+        });
+        resolve(readUrl || `https://storage.googleapis.com/${bucket.name}/${file.name}`);
+      } catch (_) {
+        resolve(`https://storage.googleapis.com/${bucket.name}/${file.name}`);
+      }
     });
 
     stream.end(fileBuffer);
@@ -195,16 +204,27 @@ const getSignedUploadUrl = async (destination, contentType) => {
     throw new Error('GCS Bucket is not configured. Please check your .env file.');
   }
 
-  const [url] = await bucket.file(destination).getSignedUrl({
+  const file = bucket.file(destination);
+  const [url] = await file.getSignedUrl({
     version: 'v4',
     action: 'write',
     expires: Date.now() + 15 * 60 * 1000, // 15 minutes
     contentType: contentType,
   });
 
+  let publicUrl = `https://storage.googleapis.com/${bucket.name}/${destination}`;
+  try {
+    const [readUrl] = await file.getSignedUrl({
+      version: 'v4',
+      action: 'read',
+      expires: Date.now() + 30 * 24 * 60 * 60 * 1000, // 30 days
+    });
+    if (readUrl) publicUrl = readUrl;
+  } catch (_) {}
+
   return {
     uploadUrl: url,
-    publicUrl: `https://storage.googleapis.com/${bucket.name}/${destination}`
+    publicUrl: publicUrl
   };
 };
 

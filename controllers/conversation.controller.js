@@ -375,7 +375,7 @@ const getMessages = async (req, res) => {
 };
 
 // Send message via API (Text or Media)
-const sendConversationMessage = async (req, res) => {
+const sendConversationMessage = async (req, res, next) => {
   try {
     const { conversationId, type, content, mediaUrl, templateName, bodyValues, languageCode, replyTo } = req.body;
 
@@ -1221,17 +1221,42 @@ const markAsUnread = async (req, res) => {
 };
 
 /**
- * Upload WhatsApp Media File (Image, PDF, Document) to Cloud Storage (Fallback memory upload)
+ * Upload WhatsApp Media File (Image, PDF, Document) to MyOperator Media Vault (Zero GCS cost)
+ * with Cloud Storage fallback
  */
-const uploadMedia = async (req, res) => {
+const uploadMedia = async (req, res, next) => {
   try {
     if (!req.file) {
       return res.status(400).json({ success: false, message: 'No media file provided' });
     }
 
+    // 1. Direct upload to MyOperator WhatsApp Media Vault (Zero GCS storage cost & free CDN hosting)
+    try {
+      const myopMedia = await myoperatorService.uploadMedia({
+        fileBuffer: req.file.buffer,
+        fileName: req.file.originalname,
+        mimeType: req.file.mimetype
+      });
+      const mediaId = myopMedia?.media_id || myopMedia?.id;
+      const mediaUrl = myopMedia?.url || myopMedia?.link || myopMedia?.media_url;
+      if (mediaId || mediaUrl) {
+        return res.json({
+          success: true,
+          data: {
+            mediaId: mediaId ? String(mediaId) : undefined,
+            mediaUrl: mediaUrl || `https://publicapi.myoperator.co/chat/media/${mediaId}`,
+            fileName: req.file.originalname,
+            mimeType: req.file.mimetype,
+            fileSize: req.file.size
+          }
+        });
+      }
+    } catch (myopUploadErr) {
+      console.warn('[MyOperator Media Vault Note]:', myopUploadErr.message, '- Using Cloud Storage fallback');
+    }
+
+    // 2. Google Cloud Storage Fallback
     const { uploadToGCS } = require('../utils/gcs');
-    const path = require('path');
-    const ext = path.extname(req.file.originalname) || '';
     const safeName = (req.file.originalname || 'file').replace(/[^a-zA-Z0-9._-]/g, '_');
     const destination = `whatsapp-media/${Date.now()}-${safeName}`;
 
