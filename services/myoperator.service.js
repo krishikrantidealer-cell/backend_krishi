@@ -157,7 +157,7 @@ class MyOperatorService {
 
         // Multi-strategy cascade for media dispatch
         const strategies = [
-          // Strategy 0: If media ID / token from MyOperator vault
+          // Strategy 0: If media ID / token from MyOperator vault (Documents)
           ...(!isUrl ? [
             {
               name: 'vault-media_id',
@@ -170,84 +170,33 @@ class MyOperatorService {
                   ...(trimmedCaption ? { caption: trimmedCaption } : {})
                 }
               }
-            },
+            }
+          ] : [
+            // Strategy 1: Public URL link with mime_type (Images & Direct URLs)
             {
-              name: 'vault-id',
+              name: 'context-link-with-mime',
               data: {
                 type: resolvedType,
                 context: {
-                  id: cleanMediaUrl,
+                  link: cleanMediaUrl,
                   mime_type: resolvedMimeType,
                   ...(resolvedType === 'document' ? { filename: resolvedFilename } : {}),
                   ...(trimmedCaption ? { caption: trimmedCaption } : {})
                 }
               }
-            }
-          ] : []),
-          // Strategy 1: Standard context format with link and required mime_type
-          {
-            name: 'context-link-with-mime',
-            data: {
-              type: resolvedType,
-              context: {
-                link: cleanMediaUrl,
-                mime_type: resolvedMimeType,
-                ...(resolvedType === 'document' ? { filename: resolvedFilename } : {}),
-                ...(trimmedCaption ? { caption: trimmedCaption } : {})
+            },
+            {
+              name: 'context-link-no-caption',
+              data: {
+                type: resolvedType,
+                context: {
+                  link: cleanMediaUrl,
+                  mime_type: resolvedMimeType,
+                  ...(resolvedType === 'document' ? { filename: resolvedFilename } : {})
+                }
               }
             }
-          },
-          // Strategy 2: Context format with media_url
-          {
-            name: 'context-media_url',
-            data: {
-              type: resolvedType,
-              context: {
-                media_url: cleanMediaUrl,
-                mime_type: resolvedMimeType,
-                ...(resolvedType === 'document' ? { filename: resolvedFilename } : {}),
-                ...(trimmedCaption ? { caption: trimmedCaption } : {})
-              }
-            }
-          },
-          // Strategy 3: Context format with url
-          {
-            name: 'context-url',
-            data: {
-              type: resolvedType,
-              context: {
-                url: cleanMediaUrl,
-                mime_type: resolvedMimeType,
-                ...(resolvedType === 'document' ? { filename: resolvedFilename } : {}),
-                ...(trimmedCaption ? { caption: trimmedCaption } : {})
-              }
-            }
-          },
-          // Strategy 4: Typed object format: { type: 'document', document: { link, filename, caption } }
-          {
-            name: 'typed-object',
-            data: {
-              type: resolvedType,
-              [resolvedType]: {
-                link: cleanMediaUrl,
-                mime_type: resolvedMimeType,
-                ...(resolvedType === 'document' ? { filename: resolvedFilename } : {}),
-                ...(trimmedCaption ? { caption: trimmedCaption } : {})
-              }
-            }
-          },
-          // Strategy 5: Context link without caption (in case caption schema triggers invalid input on document)
-          {
-            name: 'context-no-caption',
-            data: {
-              type: resolvedType,
-              context: {
-                link: cleanMediaUrl,
-                mime_type: resolvedMimeType,
-                ...(resolvedType === 'document' ? { filename: resolvedFilename } : {})
-              }
-            }
-          }
+          ])
         ];
 
         let lastError = null;

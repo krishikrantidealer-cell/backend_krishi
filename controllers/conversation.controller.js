@@ -1246,32 +1246,36 @@ const uploadMedia = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'No media file provided' });
     }
 
-    // 1. Direct upload to MyOperator WhatsApp Media Vault (Zero GCS storage cost & free CDN hosting)
-    try {
-      const myopMedia = await myoperatorService.uploadMedia({
-        fileBuffer: req.file.buffer,
-        fileName: req.file.originalname,
-        mimeType: req.file.mimetype
-      });
-      const mediaId = myopMedia?.media_id || myopMedia?.id || myopMedia?.mediaId;
-      const mediaUrl = myopMedia?.url || myopMedia?.link || myopMedia?.media_url;
-      if (mediaId || mediaUrl) {
-        return res.json({
-          success: true,
-          data: {
-            mediaId: mediaId ? String(mediaId) : undefined,
-            mediaUrl: mediaId ? String(mediaId) : (mediaUrl || ''),
-            fileName: req.file.originalname,
-            mimeType: req.file.mimetype,
-            fileSize: req.file.size
-          }
+    const isImage = req.file.mimetype && req.file.mimetype.startsWith('image/');
+
+    // 1. For documents/catalogs/CSVs: Use MyOperator WhatsApp Free Media Vault (Zero GCS storage cost)
+    if (!isImage) {
+      try {
+        const myopMedia = await myoperatorService.uploadMedia({
+          fileBuffer: req.file.buffer,
+          fileName: req.file.originalname,
+          mimeType: req.file.mimetype
         });
+        const mediaId = myopMedia?.media_id || myopMedia?.id || myopMedia?.mediaId;
+        const mediaUrl = myopMedia?.url || myopMedia?.link || myopMedia?.media_url;
+        if (mediaId || mediaUrl) {
+          return res.json({
+            success: true,
+            data: {
+              mediaId: mediaId ? String(mediaId) : undefined,
+              mediaUrl: mediaId ? String(mediaId) : (mediaUrl || ''),
+              fileName: req.file.originalname,
+              mimeType: req.file.mimetype,
+              fileSize: req.file.size
+            }
+          });
+        }
+      } catch (myopUploadErr) {
+        console.warn('[MyOperator Media Vault Note]:', myopUploadErr.message, '- Using Cloud Storage fallback');
       }
-    } catch (myopUploadErr) {
-      console.warn('[MyOperator Media Vault Note]:', myopUploadErr.message, '- Using Cloud Storage fallback');
     }
 
-    // 2. Google Cloud Storage Fallback
+    // 2. Google Cloud Storage (Required for Images to provide high-speed public CDN links)
     const { uploadToGCS } = require('../utils/gcs');
     const safeName = (req.file.originalname || 'file').replace(/[^a-zA-Z0-9._-]/g, '_');
     const destination = `whatsapp-media/${Date.now()}-${safeName}`;
