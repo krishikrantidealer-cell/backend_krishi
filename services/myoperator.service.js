@@ -95,6 +95,8 @@ class MyOperatorService {
         return response.data;
       } else if (mediaUrl && mediaUrl.toString().trim().length > 0) {
         // Freeform Media Message (Image, Document, Audio, Video)
+        const cleanMediaUrl = mediaUrl.toString().trim();
+        const headers = this.getHeaders();
         const rawType = (mediaType || type || 'image').toLowerCase();
         let resolvedType = 'image';
         if (rawType.includes('doc') || rawType.includes('pdf') || rawType.includes('xls') || rawType.includes('csv') || rawType.includes('sheet') || rawType.includes('word') || rawType.includes('file')) {
