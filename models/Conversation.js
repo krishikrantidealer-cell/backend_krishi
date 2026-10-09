@@ -57,11 +57,10 @@ const conversationSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 // Strict phone normalization pre-save hook
-conversationSchema.pre('save', function(next) {
+conversationSchema.pre('save', function() {
   if (this.contactPhone) {
     this.contactPhone = normalizeIndianPhone(this.contactPhone);
   }
-  next();
 });
 
 // High performance compound indexes for instant tab queries, filtering, and sorting

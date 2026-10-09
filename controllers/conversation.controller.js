@@ -404,8 +404,17 @@ const sendConversationMessage = async (req, res, next) => {
     const selectedLang = languageCode || conversation.contactId?.preferredLanguage || 'en';
 
     let normalizedType = (type || 'text').toLowerCase();
-    if (mediaUrl && (normalizedType === 'text' || !normalizedType)) {
-      normalizedType = 'image';
+    if (mediaUrl) {
+      const urlLower = mediaUrl.toString().toLowerCase();
+      if (normalizedType === 'document' || urlLower.endsWith('.pdf') || urlLower.endsWith('.csv') || urlLower.endsWith('.xlsx') || urlLower.endsWith('.xls') || urlLower.endsWith('.docx') || urlLower.endsWith('.doc') || urlLower.endsWith('.txt') || urlLower.endsWith('.zip')) {
+        normalizedType = 'document';
+      } else if (normalizedType === 'video' || urlLower.endsWith('.mp4')) {
+        normalizedType = 'video';
+      } else if (normalizedType === 'audio' || urlLower.endsWith('.mp3') || urlLower.endsWith('.ogg')) {
+        normalizedType = 'audio';
+      } else if (normalizedType === 'text' || !normalizedType) {
+        normalizedType = 'image';
+      }
     }
 
     // Extract contextual reply message ID if quoting another message

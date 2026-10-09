@@ -37,11 +37,10 @@ const contactSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 // Strict phone normalization pre-save hook
-contactSchema.pre('save', function(next) {
+contactSchema.pre('save', function() {
   if (this.phone) {
     this.phone = normalizeIndianPhone(this.phone);
   }
-  next();
 });
 
 contactSchema.index({ assignedTo: 1, phone: 1 });
