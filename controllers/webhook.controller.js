@@ -142,13 +142,25 @@ const handleWebhook = async (req, res) => {
         payload.data?.sender_name ||
         payload.details?.sender_name;
 
+      const rawMsgId =
+        messageData.waba_msg_id ||
+        messageData.metadata?.waba_msg_id ||
+        payload.waba_msg_id ||
+        payload.data?.waba_msg_id ||
+        payload.data?.metadata?.waba_msg_id ||
+        payload.details?.waba_msg_id ||
+        messageData.id ||
+        messageData.message_id ||
+        payload.message_id ||
+        payload.id;
+
       await processIncomingMessage({
         phone: rawPhone,
         name: customerName,
         messageObj: messageData,
         phoneNumberId: rawPhoneId,
         receiver: rawReceiver,
-        messageId: messageData.id || messageData.message_id || payload.message_id || payload.id
+        messageId: rawMsgId
       });
       return;
     }

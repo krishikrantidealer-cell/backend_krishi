@@ -163,27 +163,36 @@ class MyOperatorService {
    * Triggers the blue double checkmarks on customer's phone
    */
   async markMessageAsRead(messageId) {
-    if (!this.wabaKey || !messageId) return false;
+    if (!messageId) return false;
 
-    try {
-      const targetPhoneNumId = (await this.getPhoneNumberId()) || this.phoneNumberId || '1307352865799863';
-      const headers = this.getHeaders();
+    const metaToken = process.env.META_WHATSAPP_TOKEN || process.env.WHATSAPP_CLOUD_API_TOKEN;
+    const targetPhoneNumId = (await this.getPhoneNumberId()) || this.phoneNumberId || '1307352865799863';
 
-      // Meta Cloud API & MyOperator specification for marking messages as read
-      const payload = {
-        messaging_product: 'whatsapp',
-        phone_number_id: targetPhoneNumId,
-        status: 'read',
-        message_id: messageId.toString()
-      };
-
-      const response = await axios.post(`${this.baseUrl}/chat/messages`, payload, { headers });
-      console.log(`[MyOperator WABA] 👁️ Sent read receipt (blue tick) for message ${messageId}`);
-      return response.data?.status === 'success' || response.status === 200;
-    } catch (error) {
-      console.warn(`[MyOperator WABA Read Receipt Warning for ${messageId}]:`, error.response?.data?.message || error.message);
-      return false;
+    // 1. If Meta Cloud API token is configured, send directly to Meta Graph API
+    if (metaToken) {
+      try {
+        const response = await axios.post(
+          `https://graph.facebook.com/v21.0/${targetPhoneNumId}/messages`,
+          {
+            messaging_product: 'whatsapp',
+            status: 'read',
+            message_id: messageId.toString()
+          },
+          {
+            headers: {
+              'Authorization': `Bearer ${metaToken}`,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+        console.log(`[Meta WABA] 👁️ Sent direct blue tick read receipt for message ${messageId}:`, response.data);
+        return true;
+      } catch (metaErr) {
+        console.warn(`[Meta WABA Read Receipt Error for ${messageId}]:`, metaErr.response?.data || metaErr.message);
+      }
     }
+
+    return false;
   }
 
   /**
