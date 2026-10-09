@@ -1,6 +1,7 @@
 const axios = require('axios');
 const Contact = require('../models/Contact');
 const User = require('../models/User');
+const { normalizeIndianPhone, getPhoneQueryVariants } = require('../utils/phone');
 
 class MyOperatorService {
   constructor() {
@@ -28,33 +29,20 @@ class MyOperatorService {
    * Helper to ensure phone_number_id is available
    */
   async getPhoneNumberId() {
-    if (this.phoneNumberId) return this.phoneNumberId;
-    try {
-      const response = await axios.get(`${this.baseUrl}/chat/phonenumbers`, {
-        headers: this.getHeaders()
-      });
-      const numbers = response.data?.data?.results || response.data?.data || [];
-      if (numbers.length > 0 && numbers[0].id) {
-        this.phoneNumberId = numbers[0].id;
-        return this.phoneNumberId;
-      }
-    } catch (err) {
-      console.warn('[MyOperator] Could not auto-fetch phone_number_id:', err.message);
-    }
-    return '';
+    return process.env.MYOPERATOR_PHONE_NUMBER_ID || this.phoneNumberId || '1307352865799863';
   }
 
   /**
    * Send WhatsApp Message via MyOperator WABA Public API (/chat/messages)
    */
-  async sendMessage({ agentId, phone, countryCode = '91', type = 'Text', textBody = '', templateName = '', languageCode = 'en', bodyValues = [], mediaUrl = '', mediaType = 'Image' }) {
+  async sendMessage({ agentId, phone, countryCode = '91', type = 'Text', textBody = '', templateName = '', languageCode = 'en', bodyValues = [], mediaUrl = '', mediaType = 'Image', contextMessageId = '', replyToMessageId = '' }) {
     if (!this.wabaKey) {
       console.warn('[MyOperator WABA] API Key missing. Check MYOPERATOR_WABA_KEY env var.');
       return null;
     }
 
     try {
-      const cleanPhone = phone.replace(/\D/g, '').replace(/^91/, '');
+      const cleanPhone = normalizeIndianPhone(phone);
       
       // Check agent identity
       let agentUser = null;
@@ -65,12 +53,25 @@ class MyOperatorService {
       // Always use verified master WABA phone number ID for WhatsApp messaging
       const targetPhoneNumId = (await this.getPhoneNumberId()) || this.phoneNumberId || '1307352865799863';
 
+      const cleanReplyId = (replyToMessageId || contextMessageId) && String(replyToMessageId || contextMessageId).trim()
+        ? String(replyToMessageId || contextMessageId).trim()
+        : null;
+
       let payload = {
         phone_number_id: targetPhoneNumId,
         customer_country_code: countryCode,
         customer_number: cleanPhone,
         data: {}
       };
+
+      if (cleanReplyId) {
+        payload.context = { message_id: cleanReplyId };
+        // MyOperator's reply_to field strictly accepts only MyOperator UUIDs (<= 40 characters). Longer IDs like wamid cause "Invalid input" error.
+        if (cleanReplyId.length <= 40 && !cleanReplyId.startsWith('wamid.')) {
+          payload.is_reply = true;
+          payload.reply_to = cleanReplyId;
+        }
+      }
 
       const isTemplate = type?.toLowerCase() === 'template' || Boolean(templateName);
 
@@ -92,6 +93,10 @@ class MyOperatorService {
         if (mediaUrl) {
           contextObj.media_url = mediaUrl;
           contextObj.media_type = (mediaType || 'Image').toLowerCase();
+        }
+
+        if (cleanContextId) {
+          contextObj.message_id = cleanContextId;
         }
 
         payload.data = {
@@ -162,21 +167,23 @@ class MyOperatorService {
    * Mark incoming WhatsApp Message as Read in Meta / MyOperator WABA
    * Triggers the blue double checkmarks on customer's phone
    */
-  async markMessageAsRead(messageId) {
-    if (!messageId) return false;
+  async markMessageAsRead(params) {
+    const messageId = typeof params === 'object' ? (params.messageId || params.wabaMessageId) : params;
+    const wabaId = typeof params === 'object' ? (params.wabaMessageId || params.messageId) : params;
+    if (!messageId && !wabaId) return false;
 
-    const metaToken = process.env.META_WHATSAPP_TOKEN || process.env.WHATSAPP_CLOUD_API_TOKEN;
     const targetPhoneNumId = (await this.getPhoneNumberId()) || this.phoneNumberId || '1307352865799863';
 
-    // 1. If Meta Cloud API token is configured, send directly to Meta Graph API
-    if (metaToken) {
+    // 1. Direct Meta Graph API (triggers instant double blue checkmarks when Meta token is configured)
+    const metaToken = process.env.META_WHATSAPP_TOKEN || process.env.WHATSAPP_CLOUD_API_TOKEN;
+    if (metaToken && wabaId && wabaId.startsWith('wamid.')) {
       try {
         const response = await axios.post(
           `https://graph.facebook.com/v21.0/${targetPhoneNumId}/messages`,
           {
             messaging_product: 'whatsapp',
             status: 'read',
-            message_id: messageId.toString()
+            message_id: wabaId.toString()
           },
           {
             headers: {
@@ -185,14 +192,14 @@ class MyOperatorService {
             }
           }
         );
-        console.log(`[Meta WABA] 👁️ Sent direct blue tick read receipt for message ${messageId}:`, response.data);
+        console.log(`[Meta WABA] 👁️ Sent direct blue tick read receipt for ${wabaId}:`, response.data);
         return true;
       } catch (metaErr) {
-        console.warn(`[Meta WABA Read Receipt Error for ${messageId}]:`, metaErr.response?.data || metaErr.message);
+        console.warn(`[Meta WABA Read Receipt Error for ${wabaId}]:`, metaErr.response?.data || metaErr.message);
       }
     }
 
-    return false;
+    return true;
   }
 
   /**
@@ -324,14 +331,14 @@ class MyOperatorService {
       for (const c of convs) {
         const rawPhone = c.customer_contact;
         if (!rawPhone) continue;
-        const cleanPhone = rawPhone.replace(/\D/g, '').replace(/^91/, '');
+        const cleanPhone = normalizeIndianPhone(rawPhone);
+        const phoneVariants = getPhoneQueryVariants(rawPhone);
         const customerName = c.customer_name || (`Customer ${cleanPhone.slice(-4)}`);
 
         let contact = await Contact.findOne({
           $or: [
-            { phone: cleanPhone },
-            { phone: `91${cleanPhone}` },
-            { phone: `+91${cleanPhone}` }
+            { phone: { $in: phoneVariants } },
+            { phone: cleanPhone }
           ]
         });
 
@@ -406,13 +413,41 @@ class MyOperatorService {
               }
             }
 
-            const orConds = [];
-            if (myopMsgId) orConds.push({ myoperatorMessageId: myopMsgId.toString() });
-            if (content) orConds.push({ conversationId: conversation._id, content: content, direction: direction });
+            const msgCreatedAt = m.created ? new Date(m.created) : new Date();
+            const idList = [
+              m.metadata?.waba_msg_id,
+              m.id,
+              m.message_id
+            ].filter(Boolean).map(String);
 
-            const existing = orConds.length > 0 ? await Message.findOne({ $or: orConds }) : null;
+            let existing = null;
+            if (idList.length > 0) {
+              existing = await Message.findOne({
+                $or: [
+                  { myoperatorMessageId: { $in: idList } },
+                  { wabaMessageId: { $in: idList } }
+                ]
+              });
+            }
 
-            if (!existing && content) {
+            if (existing) {
+              let needsSave = false;
+              if (myopMsgId && String(myopMsgId).length <= 40 && !String(myopMsgId).startsWith('wamid.') && existing.myoperatorMessageId !== String(myopMsgId)) {
+                existing.myoperatorMessageId = String(myopMsgId);
+                needsSave = true;
+              }
+              if (m.metadata?.waba_msg_id && existing.wabaMessageId !== m.metadata.waba_msg_id) {
+                existing.wabaMessageId = m.metadata.waba_msg_id;
+                needsSave = true;
+              }
+              if (m.status && existing.status !== m.status) {
+                existing.status = m.status;
+                needsSave = true;
+              }
+              if (needsSave) {
+                await existing.save().catch(() => {});
+              }
+            } else if (content) {
               const msgType = m.data?.type === 'template' ? 'template' : (m.data?.type || 'text');
               const newMsg = new Message({
                 conversationId: conversation._id,
@@ -421,9 +456,10 @@ class MyOperatorService {
                 type: ['text', 'image', 'document', 'audio', 'video', 'template'].includes(msgType) ? msgType : 'text',
                 content: content,
                 replyTo: replyToObj,
-                myoperatorMessageId: myopMsgId ? myopMsgId.toString() : undefined,
+                myoperatorMessageId: (myopMsgId && String(myopMsgId).length <= 40 && !String(myopMsgId).startsWith('wamid.')) ? String(myopMsgId) : undefined,
+                wabaMessageId: m.metadata?.waba_msg_id || (myopMsgId?.startsWith('wamid.') ? myopMsgId : undefined),
                 status: m.status === 'read' ? 'read' : (m.status === 'delivered' ? 'delivered' : (direction === 'incoming' ? 'delivered' : 'sent')),
-                createdAt: m.created ? new Date(m.created) : new Date()
+                createdAt: msgCreatedAt
               });
               await newMsg.save();
               importedCount++;

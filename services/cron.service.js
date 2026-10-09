@@ -390,7 +390,7 @@ exports.initCronJobs = () => {
   setInterval(runKycUrgencyCheck, 30 * 60 * 1000);
   setInterval(() => runScheduledSegmentNotifications(), 10 * 1000);
   setInterval(runWhatsAppAutomation, 60 * 60 * 1000);
-  setInterval(runWhatsAppMessageSync, 10 * 1000); // 10s auto-sync loop
+  setInterval(runWhatsAppMessageSync, 5 * 60 * 1000); // 5-minute fallback sync loop (real-time events handled via webhooks)
 };
 
 // Export individual tasks for router triggering

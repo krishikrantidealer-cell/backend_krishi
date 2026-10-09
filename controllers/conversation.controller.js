@@ -8,11 +8,7 @@ const WhatsAppTemplate = require('../models/WhatsAppTemplate');
 const myoperatorService = require('../services/myoperator.service');
 const wsService = require('../services/websocket.service');
 const contactSyncService = require('../services/contactSync.service');
-
-// Run fast one-time DB backfill check asynchronously on startup
-contactSyncService.ensureContactTypesBackfilled().catch(err => {
-  console.error('[ConversationController] Startup backfill error:', err.message);
-});
+const { normalizeIndianPhone, getPhoneQueryVariants } = require('../utils/phone');
 
 // Get all conversations with pagination, role checks, and tab filtering
 const getConversations = async (req, res) => {
@@ -58,7 +54,9 @@ const getConversations = async (req, res) => {
 
     // Tab-based filtering: 'all', 'active', 'leads', 'dealers', 'unread'
     if (tab === 'active') {
-      conditions.push({ 'lastMessage.content': { $exists: true, $ne: '' } });
+      // 🟢 WhatsApp 24-Hour Active Messaging Window filter
+      const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      conditions.push({ lastIncomingMessageAt: { $gte: twentyFourHoursAgo } });
     } else if (tab === 'leads') {
       conditions.push({
         $or: [
@@ -76,15 +74,15 @@ const getConversations = async (req, res) => {
     // Apply Search Filters by customer name, phone number, or shop name
     if (search && search.trim() !== '') {
       const cleanSearch = search.trim();
-      const cleanPhone = cleanSearch.replace(/\D/g, '').replace(/^91/, '');
+      const phoneVariants = getPhoneQueryVariants(cleanSearch);
+      const clean10 = normalizeIndianPhone(cleanSearch);
+
       const matchingContacts = await Contact.find({
         $or: [
           { name: { $regex: cleanSearch, $options: 'i' } },
           { tags: { $regex: cleanSearch, $options: 'i' } },
-          ...(cleanPhone ? [
-            { phone: { $regex: cleanPhone } },
-            { phone: { $regex: `91${cleanPhone}` } }
-          ] : [])
+          ...(phoneVariants.length > 0 ? [{ phone: { $in: phoneVariants } }] : []),
+          ...(clean10 ? [{ phone: { $regex: clean10 } }] : [])
         ]
       }).select('_id').lean();
       const contactIds = matchingContacts.map(c => c._id);
@@ -150,7 +148,7 @@ const getConversations = async (req, res) => {
               { $count: 'count' }
             ],
             active: [
-              { $match: { 'lastMessage.content': { $exists: true, $ne: '' } } },
+              { $match: { lastIncomingMessageAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } } },
               { $count: 'count' }
             ],
             unread: [
@@ -191,9 +189,25 @@ const getConversations = async (req, res) => {
     const activeCount = countsFacet.active?.[0]?.count || 0;
     const unreadCount = countsFacet.unread?.[0]?.count || 0;
 
+    // Guaranteed in-memory deduplication by canonical 10-digit phone
+    const seenPhones = new Set();
+    const dedupedConversations = [];
+    for (const conv of conversations) {
+      const p = conv.contactPhone || conv.contactId?.phone;
+      const clean10 = normalizeIndianPhone(p);
+      if (clean10) {
+        if (seenPhones.has(clean10)) {
+          contactSyncService.deduplicateContactsAndConversations().catch(() => {});
+          continue;
+        }
+        seenPhones.add(clean10);
+      }
+      dedupedConversations.push(conv);
+    }
+
     res.json({
       success: true,
-      data: conversations,
+      data: dedupedConversations,
       pagination: { total, page: parseInt(page), pages: Math.ceil(total / parseInt(limit)) },
       counts: {
         all: allCount,
@@ -234,6 +248,9 @@ const syncRoster = async (req, res) => {
       }
     }
 
+    // Deduplicate & merge any redundant contact or conversation entries
+    await contactSyncService.deduplicateContactsAndConversations().catch(() => {});
+
     // Also pull latest WhatsApp messages from MyOperator
     try {
       await myoperatorService.syncAllMessagesFromMyOperator();
@@ -241,7 +258,7 @@ const syncRoster = async (req, res) => {
 
     res.json({
       success: true,
-      message: `Roster sync completed: ${result.synced || 0} contacts synchronized`,
+      message: `Roster sync and deduplication completed: ${result.synced || 0} contacts synchronized`,
       data: result
     });
   } catch (error) {
@@ -255,21 +272,28 @@ const syncRoster = async (req, res) => {
  */
 const sendReadReceiptsForConversation = async (conversationId) => {
   try {
-    const unreadIncoming = await Message.find({
+    const incomingMessages = await Message.find({
       conversationId,
-      direction: 'incoming',
-      status: { $ne: 'read' }
-    }).select('_id myoperatorMessageId');
+      direction: 'incoming'
+    })
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .select('_id myoperatorMessageId wabaMessageId status');
 
-    if (unreadIncoming && unreadIncoming.length > 0) {
+    if (incomingMessages && incomingMessages.length > 0) {
       await Message.updateMany(
-        { _id: { $in: unreadIncoming.map(m => m._id) } },
+        { _id: { $in: incomingMessages.map(m => m._id) } },
         { status: 'read' }
       );
 
-      for (const msg of unreadIncoming) {
-        if (msg.myoperatorMessageId) {
-          myoperatorService.markMessageAsRead(msg.myoperatorMessageId).catch(() => {});
+      for (const msg of incomingMessages) {
+        if (msg.wabaMessageId || msg.myoperatorMessageId) {
+          myoperatorService.markMessageAsRead({
+            messageId: msg.myoperatorMessageId,
+            wabaMessageId: msg.wabaMessageId
+          }).catch((err) => {
+            console.warn('[markMessageAsRead error]:', err.message);
+          });
         }
       }
     }
@@ -303,16 +327,46 @@ const getMessages = async (req, res) => {
     // Clean unread count and trigger blue tick read receipts on customer's WhatsApp
     await Conversation.findByIdAndUpdate(id, { unreadCount: 0 });
     sendReadReceiptsForConversation(id).catch(() => {});
+    wsService.broadcastToRoles(['admin', 'sales'], {
+      type: 'CONVERSATION_READ',
+      data: { conversationId: id }
+    });
 
     const messages = await Message.find({ conversationId: id })
       .populate('sentBy', 'firstName lastName')
-      .sort({ createdAt: -1 })
+      .sort({ createdAt: -1, _id: -1 })
       .skip(skip)
-      .limit(parseInt(limit));
+      .limit(parseInt(limit))
+      .lean();
+
+    // Sort strictly chronological ascending
+    messages.sort((a, b) => {
+      const aTime = new Date(a.createdAt).getTime();
+      const bTime = new Date(b.createdAt).getTime();
+      if (aTime !== bTime) return aTime - bTime;
+      return String(a._id).localeCompare(String(b._id));
+    });
+
+    // Auto-heal conversation's lastMessage and lastMessageAt if needed
+    if (messages.length > 0) {
+      const latestMsg = messages[messages.length - 1];
+      if (latestMsg) {
+        const latestMsgType = ['text', 'image', 'document', 'audio', 'video', 'template'].includes(latestMsg.type) ? latestMsg.type : 'text';
+        const latestContent = latestMsg.content || (latestMsg.mediaUrl ? `[${latestMsgType}]` : '');
+        Conversation.findByIdAndUpdate(id, {
+          lastMessage: {
+            type: latestMsgType,
+            content: latestContent,
+            mediaUrl: latestMsg.mediaUrl
+          },
+          lastMessageAt: latestMsg.createdAt
+        }).catch(() => {});
+      }
+    }
 
     res.json({
       success: true,
-      data: messages.reverse(), // Send in chronological order
+      data: messages,
       page: parseInt(page)
     });
   } catch (error) {
@@ -354,6 +408,57 @@ const sendConversationMessage = async (req, res) => {
       normalizedType = 'image';
     }
 
+    // Extract contextual reply message ID if quoting another message
+    let contextMessageId = null;
+    let resolvedReplyTo = null;
+
+    if (replyTo && (replyTo.myoperatorMessageId || replyTo.messageId || replyTo.content)) {
+      const rawContextId = replyTo.myoperatorMessageId || replyTo.messageId;
+      if (rawContextId) {
+        try {
+          const mongoose = require('mongoose');
+          const parentMsg = await Message.findOne({
+            $or: [
+              ...(mongoose.Types.ObjectId.isValid(rawContextId) ? [{ _id: rawContextId }] : []),
+              { myoperatorMessageId: rawContextId },
+              { wabaMessageId: rawContextId }
+            ]
+          }).lean();
+          if (parentMsg) {
+            // Prioritize the MyOperator UUID (<= 40 chars) so MyOperator creates the quoted reply bubble
+            if (parentMsg.myoperatorMessageId && parentMsg.myoperatorMessageId.length <= 40 && !parentMsg.myoperatorMessageId.startsWith('wamid.')) {
+              contextMessageId = parentMsg.myoperatorMessageId;
+            } else if (parentMsg.wabaMessageId) {
+              contextMessageId = parentMsg.wabaMessageId;
+            } else {
+              contextMessageId = parentMsg.myoperatorMessageId || rawContextId;
+            }
+            resolvedReplyTo = {
+              messageId: parentMsg._id.toString(),
+              senderName: replyTo.senderName || (parentMsg.direction === 'outgoing' ? 'You' : (conversation.contactId?.name || 'Lead')),
+              content: replyTo.content || parentMsg.content || (parentMsg.mediaUrl ? '[Media]' : ''),
+              mediaUrl: replyTo.mediaUrl || parentMsg.mediaUrl
+            };
+          } else if (typeof rawContextId === 'string' && rawContextId.length > 0) {
+            contextMessageId = rawContextId.trim();
+          }
+        } catch (_) {
+          if (typeof rawContextId === 'string' && rawContextId.length > 0) {
+            contextMessageId = rawContextId.trim();
+          }
+        }
+      }
+
+      if (!resolvedReplyTo && replyTo.content) {
+        resolvedReplyTo = {
+          messageId: replyTo.messageId,
+          senderName: replyTo.senderName || (replyTo.direction === 'outgoing' ? 'You' : (conversation.contactId?.name || 'Lead')),
+          content: replyTo.content,
+          mediaUrl: replyTo.mediaUrl
+        };
+      }
+    }
+
     // Dispatches message to MyOperator WABA API with dedicated agent credentials
     const myopResponse = await myoperatorService.sendMessage({
       agentId: req.user.id,
@@ -364,10 +469,22 @@ const sendConversationMessage = async (req, res) => {
       mediaUrl,
       templateName,
       bodyValues,
-      languageCode: selectedLang
+      languageCode: selectedLang,
+      contextMessageId,
+      replyToMessageId: contextMessageId
     });
 
-    const messageId = myopResponse?.id || myopResponse?.data?.id || myopResponse?.message?.id || myopResponse?.message_id;
+    const myopMsgId =
+      myopResponse?.data?.message_id ||
+      myopResponse?.data?.id ||
+      myopResponse?.message_id ||
+      myopResponse?.id;
+    const wabaMsgId =
+      myopResponse?.data?.metadata?.waba_msg_id ||
+      myopResponse?.metadata?.waba_msg_id;
+    const resolvedMyopId = (myopMsgId && String(myopMsgId).length <= 40 && !String(myopMsgId).startsWith('wamid.'))
+      ? String(myopMsgId).trim()
+      : (wabaMsgId ? String(wabaMsgId).trim() : (myopMsgId ? String(myopMsgId).trim() : undefined));
 
     // Resolve actual message text if sending a template
     let resolvedContent = content;
@@ -410,16 +527,15 @@ const sendConversationMessage = async (req, res) => {
       status: 'sent'
     };
 
-    if (replyTo && replyTo.content) {
-      messageData.replyTo = {
-        messageId: replyTo.messageId,
-        senderName: replyTo.senderName || 'Lead',
-        content: replyTo.content
-      };
+    if (resolvedReplyTo) {
+      messageData.replyTo = resolvedReplyTo;
     }
 
-    if (messageId) {
-      messageData.myoperatorMessageId = messageId.toString();
+    if (resolvedMyopId) {
+      messageData.myoperatorMessageId = resolvedMyopId;
+    }
+    if (wabaMsgId) {
+      messageData.wabaMessageId = wabaMsgId.toString();
     }
 
     const message = new Message(messageData);
@@ -580,15 +696,15 @@ const startConversation = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Phone number is required' });
     }
 
-    // Clean phone number to digits only (10 digits, no leading 91 or +91)
-    const cleanPhone = phone.replace(/[^\d]/g, '').replace(/^91/, '');
+    // Clean phone number to canonical 10 digits
+    const cleanPhone = normalizeIndianPhone(phone);
+    const phoneVariants = getPhoneQueryVariants(phone);
 
     // Check if there is an existing User (Lead/Dealer) with this phone number
     const existingUser = await User.findOne({
       $or: [
+        { phoneNumber: { $in: phoneVariants } },
         { phoneNumber: cleanPhone },
-        { phoneNumber: `91${cleanPhone}` },
-        { phoneNumber: `+91${cleanPhone}` },
         { phoneNumber: phone }
       ]
     }).populate('assignedAgent');
@@ -596,10 +712,9 @@ const startConversation = async (req, res) => {
     // 1. Create or Find Contact
     let contact = await Contact.findOne({
       $or: [
-        { phone: phone },
+        { phone: { $in: phoneVariants } },
         { phone: cleanPhone },
-        { phone: `91${cleanPhone}` },
-        { phone: `+91${cleanPhone}` }
+        { phone: phone }
       ]
     });
 
@@ -616,14 +731,25 @@ const startConversation = async (req, res) => {
         tags: ['myoperator-lead']
       });
       await contact.save();
-    }
-else {
+    } else {
+      if (contact.phone !== cleanPhone && cleanPhone.length === 10) {
+        contact.phone = cleanPhone;
+        await contact.save();
+      }
       // Sync: If the Contact exists but its assignment is different from the User's assignment, update it!
       if (existingUser && assignedAgentId && String(contact.assignedTo) !== String(assignedAgentId)) {
         contact.assignedTo = assignedAgentId;
         await contact.save();
       }
+      const realName = name || (existingUser ? `${existingUser.firstName || ''} ${existingUser.lastName || ''}`.trim() || existingUser.shopName : null);
+      if (realName && (!contact.name || contact.name === 'WhatsApp User' || contact.name.startsWith('User ') || /^\d+$/.test(contact.name))) {
+        contact.name = realName;
+        await contact.save();
+      }
     }
+
+    const isDealer = existingUser?.role === 'dealer' || (contact.tags || []).some(t => /dealer|retailer/i.test(t));
+    const contactType = isDealer ? 'dealer' : 'lead';
 
     // 2. Create or Find Conversation
     let conversation = await Conversation.findOne({ contactId: contact._id });
@@ -638,15 +764,22 @@ else {
     if (!conversation) {
       conversation = new Conversation({
         contactId: contact._id,
-        assignedTo: contact.assignedTo || req.user.id
+        assignedTo: contact.assignedTo || req.user.id,
+        contactType: contactType,
+        contactName: contact.name,
+        contactPhone: cleanPhone,
+        status: 'open'
       });
       await conversation.save();
     } else {
+      conversation.contactType = contactType;
+      conversation.contactName = contact.name;
+      conversation.contactPhone = cleanPhone;
       // Sync Conversation's assignment to match Contact's assignment
       if (String(conversation.assignedTo) !== String(contact.assignedTo)) {
         conversation.assignedTo = contact.assignedTo;
-        await conversation.save();
       }
+      await conversation.save();
     }
 
     const populated = await Conversation.findById(conversation._id)
@@ -1034,7 +1167,7 @@ const markAsRead = async (req, res) => {
     const conversation = await Conversation.findByIdAndUpdate(
       id,
       { unreadCount: 0 },
-      { new: true }
+      { returnDocument: 'after' }
     ).populate(['contactId', 'assignedTo']);
 
     if (!conversation) {
@@ -1042,6 +1175,14 @@ const markAsRead = async (req, res) => {
     }
 
     sendReadReceiptsForConversation(id).catch(() => {});
+
+    wsService.broadcastToRoles(['admin', 'sales'], {
+      type: 'CONVERSATION_READ',
+      data: {
+        conversationId: id,
+        conversation
+      }
+    });
 
     res.json({ success: true, data: conversation });
   } catch (error) {
@@ -1058,12 +1199,20 @@ const markAsUnread = async (req, res) => {
     const conversation = await Conversation.findByIdAndUpdate(
       id,
       { unreadCount: 1 },
-      { new: true }
+      { returnDocument: 'after' }
     ).populate(['contactId', 'assignedTo']);
 
     if (!conversation) {
       return res.status(404).json({ success: false, message: 'Conversation not found' });
     }
+
+    wsService.broadcastToRoles(['admin', 'sales'], {
+      type: 'CONVERSATION_UNREAD',
+      data: {
+        conversationId: id,
+        conversation
+      }
+    });
 
     res.json({ success: true, data: conversation });
   } catch (error) {
@@ -1072,7 +1221,7 @@ const markAsUnread = async (req, res) => {
 };
 
 /**
- * Upload WhatsApp Media File (Image, PDF, Document) to Cloud Storage
+ * Upload WhatsApp Media File (Image, PDF, Document) to Cloud Storage (Fallback memory upload)
  */
 const uploadMedia = async (req, res) => {
   try {
@@ -1103,6 +1252,38 @@ const uploadMedia = async (req, res) => {
   }
 };
 
+/**
+ * Generate Presigned Signed URL for Zero-Memory Direct-to-GCS Media Upload
+ */
+const getMediaUploadUrl = async (req, res) => {
+  try {
+    const { fileName, mimeType } = req.body;
+    if (!fileName || !mimeType) {
+      return res.status(400).json({ success: false, message: 'fileName and mimeType are required' });
+    }
+
+    const { getSignedUploadUrl } = require('../utils/gcs');
+    const safeName = (fileName || 'file').replace(/[^a-zA-Z0-9._-]/g, '_');
+    const destination = `whatsapp-media/${Date.now()}-${safeName}`;
+
+    const result = await getSignedUploadUrl(destination, mimeType);
+
+    res.json({
+      success: true,
+      data: {
+        uploadUrl: result.uploadUrl,
+        mediaUrl: result.publicUrl,
+        destination,
+        fileName,
+        mimeType
+      }
+    });
+  } catch (error) {
+    console.error('[getMediaUploadUrl Error]:', error.message);
+    res.status(500).json({ success: false, message: error.message || 'Failed to generate signed upload URL' });
+  }
+};
+
 module.exports = {
   getConversations,
   syncRoster,
@@ -1116,6 +1297,7 @@ module.exports = {
   markAsRead,
   markAsUnread,
   uploadMedia,
+  getMediaUploadUrl,
   getTemplates,
   createTemplate,
   deleteTemplate,

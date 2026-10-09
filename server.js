@@ -46,6 +46,14 @@ const startServer = async () => {
           console.error('Migration failed (customOrders):', migErr.message);
         }
 
+        try {
+          const contactSyncService = require('./services/contactSync.service');
+          await contactSyncService.ensureContactTypesBackfilled();
+          await contactSyncService.deduplicateContactsAndConversations();
+        } catch (syncErr) {
+          console.error('Contact sync init error:', syncErr.message);
+        }
+
         // Start background tasks (Order Tracker, etc.)
         cronService.initCronJobs();
       })();

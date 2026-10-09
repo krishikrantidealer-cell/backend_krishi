@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { normalizeIndianPhone } = require('../utils/phone');
 
 const contactSchema = new mongoose.Schema({
   name: {
@@ -34,5 +35,16 @@ const contactSchema = new mongoose.Schema({
     default: Date.now
   }
 }, { timestamps: true });
+
+// Strict phone normalization pre-save hook
+contactSchema.pre('save', function(next) {
+  if (this.phone) {
+    this.phone = normalizeIndianPhone(this.phone);
+  }
+  next();
+});
+
+contactSchema.index({ assignedTo: 1, phone: 1 });
+contactSchema.index({ tags: 1 });
 
 module.exports = mongoose.model('Contact', contactSchema);

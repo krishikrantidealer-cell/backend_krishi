@@ -34,15 +34,11 @@ const messageSchema = new mongoose.Schema({
   },
   myoperatorMessageId: {
     type: String,
-    unique: true,
-    sparse: true,
-    index: true
+    trim: true
   },
-  // Legacy field — kept for backward compat with old messages, do not use for new messages
-  interaktMessageId: {
+  wabaMessageId: {
     type: String,
-    sparse: true,
-    index: true
+    trim: true
   },
   sentBy: {
     type: mongoose.Schema.Types.ObjectId,
@@ -63,8 +59,15 @@ const messageSchema = new mongoose.Schema({
   },
   createdAt: {
     type: Date,
-    default: Date.now
+    default: Date.now,
+    index: true
   }
 }, { timestamps: true });
+
+// High performance compound indexes for instant chat history pagination and status lookups
+messageSchema.index({ conversationId: 1, createdAt: -1, _id: -1 });
+messageSchema.index({ conversationId: 1, direction: 1, status: 1 });
+messageSchema.index({ myoperatorMessageId: 1 }, { sparse: true });
+messageSchema.index({ wabaMessageId: 1 }, { sparse: true });
 
 module.exports = mongoose.model('Message', messageSchema);

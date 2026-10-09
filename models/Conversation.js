@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { normalizeIndianPhone } = require('../utils/phone');
 
 const conversationSchema = new mongoose.Schema({
   contactId: {
@@ -51,15 +52,24 @@ const conversationSchema = new mongoose.Schema({
   },
   contactPhone: {
     type: String,
-    trim: true,
-    index: true
+    trim: true
   }
 }, { timestamps: true });
 
-// High performance compound indexes for instant tab queries and sorting
+// Strict phone normalization pre-save hook
+conversationSchema.pre('save', function(next) {
+  if (this.contactPhone) {
+    this.contactPhone = normalizeIndianPhone(this.contactPhone);
+  }
+  next();
+});
+
+// High performance compound indexes for instant tab queries, filtering, and sorting
 conversationSchema.index({ status: 1, contactType: 1, lastMessageAt: -1 });
 conversationSchema.index({ assignedTo: 1, status: 1, contactType: 1, lastMessageAt: -1 });
-conversationSchema.index({ status: 1, unreadCount: 1 });
+conversationSchema.index({ status: 1, unreadCount: 1, lastMessageAt: -1 });
+conversationSchema.index({ lastIncomingMessageAt: -1 });
+conversationSchema.index({ contactPhone: 1 });
 conversationSchema.index({ contactName: 'text', contactPhone: 'text' });
 
 module.exports = mongoose.model('Conversation', conversationSchema);

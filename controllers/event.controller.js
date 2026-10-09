@@ -922,6 +922,8 @@ exports.getSummaryMetrics = async (req, res, next) => {
     const agentIdStr = req.user && req.user._id ? req.user._id.toString() : '';
     const agentEmail = req.user && req.user.email ? req.user.email.toLowerCase() : '';
 
+    const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+
     const cacheKey = isSales
       ? `stats:events:summary-metrics:sales:${agentIdStr || agentEmail}`
       : 'stats:events:summary-metrics:v2';
