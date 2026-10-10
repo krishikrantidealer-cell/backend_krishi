@@ -251,11 +251,14 @@ class MyOperatorService {
         const response = await axios.post(`${this.baseUrl}/chat/messages`, payload, { headers });
 
         return response.data;
-      }
     } catch (error) {
       const errorData = error.response?.data;
-      console.error('[MyOperator WABA API Error]:', JSON.stringify(errorData || error.message));
-      throw new Error(errorData?.message || errorData?.error?.message || (errorData?.errors ? JSON.stringify(errorData.errors) : error.message) || 'Failed to dispatch WhatsApp message via MyOperator');
+      console.error('[MyOperator WABA API Error Status]:', error.response?.status);
+      console.error('[MyOperator WABA API Error Details]:', JSON.stringify(errorData || error.message));
+      const extractedError = (errorData && typeof errorData === 'object')
+        ? (errorData.message || errorData.error?.message || (Array.isArray(errorData.errors) ? errorData.errors.map(e => e.message || JSON.stringify(e)).join(', ') : (errorData.errors ? JSON.stringify(errorData.errors) : null)) || error.message)
+        : error.message;
+      throw new Error(extractedError || 'Failed to dispatch WhatsApp message via MyOperator');
     }
   }
 
