@@ -434,7 +434,9 @@ const sendConversationMessage = async (req, res, next) => {
             ]
           }).lean();
           if (parentMsg) {
-            contextMessageId = parentMsg.wabaMessageId || parentMsg.myoperatorMessageId || rawContextId;
+            contextMessageId = (parentMsg.myoperatorMessageId && parentMsg.myoperatorMessageId.length <= 40 && !parentMsg.myoperatorMessageId.startsWith('wamid.'))
+              ? parentMsg.myoperatorMessageId
+              : (parentMsg.wabaMessageId || parentMsg.myoperatorMessageId || rawContextId);
             resolvedReplyTo = {
               messageId: parentMsg._id.toString(),
               senderName: replyTo.senderName || (parentMsg.direction === 'outgoing' ? 'You' : (conversation.contactId?.name || 'Lead')),

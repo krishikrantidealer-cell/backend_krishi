@@ -65,9 +65,12 @@ class MyOperatorService {
 
       const replyContextId = (contextMessageId || replyToMessageId || '').toString().trim();
       if (replyContextId) {
+        payload.reply_to = replyContextId;
         payload.context = {
+          id: replyContextId,
           message_id: replyContextId
         };
+        payload.data.reply_to = replyContextId;
       }
 
       const isTemplate = type?.toLowerCase() === 'template' || Boolean(templateName);
