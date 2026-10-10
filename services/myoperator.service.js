@@ -251,6 +251,7 @@ class MyOperatorService {
         const response = await axios.post(`${this.baseUrl}/chat/messages`, payload, { headers });
 
         return response.data;
+      }
     } catch (error) {
       const errorData = error.response?.data;
       console.error('[MyOperator WABA API Error Status]:', error.response?.status);
