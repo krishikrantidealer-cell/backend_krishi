@@ -149,6 +149,8 @@ class MyOperatorService {
 
         const isUrl = cleanMediaUrl.startsWith('http://') || cleanMediaUrl.startsWith('https://');
 
+        const replyContextId = (contextMessageId || replyToMessageId || '').toString().trim();
+
         // Multi-strategy cascade for media dispatch
         const strategies = [
           // Strategy 0: If media ID / token from MyOperator vault (Documents)
@@ -161,7 +163,8 @@ class MyOperatorService {
                   media_id: cleanMediaUrl,
                   mime_type: resolvedMimeType,
                   ...(resolvedType === 'document' ? { filename: resolvedFilename } : {}),
-                  ...(trimmedCaption ? { caption: trimmedCaption } : {})
+                  ...(trimmedCaption ? { caption: trimmedCaption } : {}),
+                  ...(replyContextId ? { message_id: replyContextId } : {})
                 }
               }
             }
@@ -175,7 +178,8 @@ class MyOperatorService {
                   link: cleanMediaUrl,
                   mime_type: resolvedMimeType,
                   ...(resolvedType === 'document' ? { filename: resolvedFilename } : {}),
-                  ...(trimmedCaption ? { caption: trimmedCaption } : {})
+                  ...(trimmedCaption ? { caption: trimmedCaption } : {}),
+                  ...(replyContextId ? { message_id: replyContextId } : {})
                 }
               }
             },
@@ -186,7 +190,8 @@ class MyOperatorService {
                 context: {
                   link: cleanMediaUrl,
                   mime_type: resolvedMimeType,
-                  ...(resolvedType === 'document' ? { filename: resolvedFilename } : {})
+                  ...(resolvedType === 'document' ? { filename: resolvedFilename } : {}),
+                  ...(replyContextId ? { message_id: replyContextId } : {})
                 }
               }
             }
@@ -227,7 +232,8 @@ class MyOperatorService {
             type: 'text',
             context: {
               body: fallbackText,
-              preview_url: true
+              preview_url: true,
+              ...(replyContextId ? { message_id: replyContextId } : {})
             }
           }
         };
@@ -237,11 +243,13 @@ class MyOperatorService {
         return textRes.data;
       } else {
         // Freeform Plain Text Message
+        const replyContextId = (contextMessageId || replyToMessageId || '').toString().trim();
         payload.data = {
           type: 'text',
           context: {
             body: textBody || '',
-            preview_url: false
+            preview_url: false,
+            ...(replyContextId ? { message_id: replyContextId } : {})
           }
         };
 

@@ -434,14 +434,7 @@ const sendConversationMessage = async (req, res, next) => {
             ]
           }).lean();
           if (parentMsg) {
-            // Prioritize the MyOperator UUID (<= 40 chars) so MyOperator creates the quoted reply bubble
-            if (parentMsg.myoperatorMessageId && parentMsg.myoperatorMessageId.length <= 40 && !parentMsg.myoperatorMessageId.startsWith('wamid.')) {
-              contextMessageId = parentMsg.myoperatorMessageId;
-            } else if (parentMsg.wabaMessageId) {
-              contextMessageId = parentMsg.wabaMessageId;
-            } else {
-              contextMessageId = parentMsg.myoperatorMessageId || rawContextId;
-            }
+            contextMessageId = parentMsg.wabaMessageId || parentMsg.myoperatorMessageId || rawContextId;
             resolvedReplyTo = {
               messageId: parentMsg._id.toString(),
               senderName: replyTo.senderName || (parentMsg.direction === 'outgoing' ? 'You' : (conversation.contactId?.name || 'Lead')),
@@ -458,11 +451,11 @@ const sendConversationMessage = async (req, res, next) => {
         }
       }
 
-      if (!resolvedReplyTo && replyTo.content) {
+      if (!resolvedReplyTo && (replyTo.content !== undefined || replyTo.mediaUrl || replyTo.messageId)) {
         resolvedReplyTo = {
           messageId: replyTo.messageId,
           senderName: replyTo.senderName || (replyTo.direction === 'outgoing' ? 'You' : (conversation.contactId?.name || 'Lead')),
-          content: replyTo.content,
+          content: replyTo.content || (replyTo.mediaUrl ? '[Media]' : ''),
           mediaUrl: replyTo.mediaUrl
         };
       }
