@@ -1246,48 +1246,54 @@ const uploadMedia = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'No media file provided' });
     }
 
-    const isImage = req.file.mimetype && req.file.mimetype.startsWith('image/');
-
-    // 1. For documents/catalogs/CSVs: Use MyOperator WhatsApp Free Media Vault (Zero GCS storage cost)
-    if (!isImage) {
-      try {
-        const myopMedia = await myoperatorService.uploadMedia({
-          fileBuffer: req.file.buffer,
-          fileName: req.file.originalname,
-          mimeType: req.file.mimetype
-        });
-        const mediaId = myopMedia?.media_id || myopMedia?.id || myopMedia?.mediaId;
-        const mediaUrl = myopMedia?.url || myopMedia?.link || myopMedia?.media_url;
-        if (mediaId || mediaUrl) {
-          return res.json({
-            success: true,
-            data: {
-              mediaId: mediaId ? String(mediaId) : undefined,
-              mediaUrl: mediaId ? String(mediaId) : (mediaUrl || ''),
-              fileName: req.file.originalname,
-              mimeType: req.file.mimetype,
-              fileSize: req.file.size
-            }
-          });
-        }
-      } catch (myopUploadErr) {
-        console.warn('[MyOperator Media Vault Note]:', myopUploadErr.message, '- Using Cloud Storage fallback');
-      }
+    const fileName = req.file.originalname || 'file';
+    const fnLower = fileName.toLowerCase();
+    
+    // Resolve exact MIME type
+    let resolvedMime = req.file.mimetype;
+    if (!resolvedMime || resolvedMime === 'application/octet-stream') {
+      if (fnLower.endsWith('.png')) resolvedMime = 'image/png';
+      else if (fnLower.endsWith('.jpg') || fnLower.endsWith('.jpeg')) resolvedMime = 'image/jpeg';
+      else if (fnLower.endsWith('.webp')) resolvedMime = 'image/webp';
+      else if (fnLower.endsWith('.gif')) resolvedMime = 'image/gif';
+      else if (fnLower.endsWith('.pdf')) resolvedMime = 'application/pdf';
+      else if (fnLower.endsWith('.csv')) resolvedMime = 'text/csv';
+      else if (fnLower.endsWith('.xlsx')) resolvedMime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+      else if (fnLower.endsWith('.xls')) resolvedMime = 'application/vnd.ms-excel';
+      else if (fnLower.endsWith('.docx')) resolvedMime = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+      else if (fnLower.endsWith('.doc')) resolvedMime = 'application/msword';
+      else if (fnLower.endsWith('.txt')) resolvedMime = 'text/plain';
+      else if (fnLower.endsWith('.zip')) resolvedMime = 'application/zip';
+      else if (fnLower.endsWith('.mp3')) resolvedMime = 'audio/mpeg';
+      else if (fnLower.endsWith('.mp4')) resolvedMime = 'video/mp4';
+      else resolvedMime = 'application/octet-stream';
     }
 
-    // 2. Google Cloud Storage (Required for Images to provide high-speed public CDN links)
+    // 1. Always upload to GCS to guarantee a permanent, high-speed public CDN URL for the panel and WABA
     const { uploadToGCS } = require('../utils/gcs');
-    const safeName = (req.file.originalname || 'file').replace(/[^a-zA-Z0-9._-]/g, '_');
+    const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
     const destination = `whatsapp-media/${Date.now()}-${safeName}`;
 
-    const mediaUrl = await uploadToGCS(req.file.buffer, destination, req.file.mimetype);
+    const mediaUrl = await uploadToGCS(req.file.buffer, destination, resolvedMime);
+
+    // 2. Optional MyOperator Media Vault registration (for document reference)
+    let mediaId = undefined;
+    try {
+      const myopMedia = await myoperatorService.uploadMedia({
+        fileBuffer: req.file.buffer,
+        fileName: fileName,
+        mimeType: resolvedMime
+      });
+      mediaId = myopMedia?.media_id || myopMedia?.id || myopMedia?.mediaId;
+    } catch (_) {}
 
     res.json({
       success: true,
       data: {
         mediaUrl,
-        fileName: req.file.originalname,
-        mimeType: req.file.mimetype,
+        mediaId: mediaId ? String(mediaId) : undefined,
+        fileName,
+        mimeType: resolvedMime,
         fileSize: req.file.size
       }
     });
