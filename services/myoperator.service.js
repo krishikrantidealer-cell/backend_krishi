@@ -110,48 +110,42 @@ class MyOperatorService {
           resolvedType = 'image';
         }
 
+        // Extract filename from mediaUrl or generate default
         let resolvedFilename = 'document.pdf';
-        if (resolvedType === 'document') {
-          try {
-            const urlObj = new URL(mediaUrl);
-            const pathname = urlObj.pathname;
-            const extracted = pathname.split('/').pop();
-            if (extracted && extracted.trim().length > 0) {
-              resolvedFilename = decodeURIComponent(extracted.split('?')[0]);
-            }
-          } catch (_) {
-            resolvedFilename = 'document.pdf';
+        try {
+          const urlObj = new URL(mediaUrl);
+          const extracted = urlObj.pathname.split('/').pop();
+          if (extracted && extracted.trim().length > 0) {
+            resolvedFilename = decodeURIComponent(extracted.split('?')[0]);
           }
-          // Remove timestamp prefix if present (e.g. 1791549102213-call_logs.csv -> call_logs.csv)
-          resolvedFilename = resolvedFilename.replace(/^\d{10,14}-/, '');
-          if (!resolvedFilename.includes('.')) {
-            resolvedFilename += '.pdf';
-          }
+        } catch (_) {
+          resolvedFilename = resolvedType === 'document' ? 'document.pdf' : 'image.jpg';
         }
+        // Remove timestamp prefix if present (e.g. 1791549102213-call_logs.csv -> call_logs.csv)
+        resolvedFilename = resolvedFilename.replace(/^\d{10,14}-/, '');
 
         const rawCaption = (textBody && typeof textBody === 'string') ? textBody.trim() : '';
         const trimmedCaption = (rawCaption && !['none', 'null', 'undefined', '[media]', '[document]'].includes(rawCaption.toLowerCase()) && resolvedType !== 'audio')
           ? rawCaption
           : null;
-        // Resolve precise MIME type for MyOperator context
-        let resolvedMimeType = 'application/pdf';
-        const fnLower = (resolvedFilename || cleanMediaUrl || '').toLowerCase();
-        if (fnLower.endsWith('.png')) resolvedMimeType = 'image/png';
-        else if (fnLower.endsWith('.jpg') || fnLower.endsWith('.jpeg')) resolvedMimeType = 'image/jpeg';
-        else if (fnLower.endsWith('.webp')) resolvedMimeType = 'image/webp';
-        else if (fnLower.endsWith('.pdf')) resolvedMimeType = 'application/pdf';
-        else if (fnLower.endsWith('.csv')) resolvedMimeType = 'text/csv';
-        else if (fnLower.endsWith('.xlsx')) resolvedMimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-        else if (fnLower.endsWith('.xls')) resolvedMimeType = 'application/vnd.ms-excel';
-        else if (fnLower.endsWith('.docx')) resolvedMimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-        else if (fnLower.endsWith('.doc')) resolvedMimeType = 'application/msword';
-        else if (fnLower.endsWith('.txt')) resolvedMimeType = 'text/plain';
-        else if (fnLower.endsWith('.zip')) resolvedMimeType = 'application/zip';
-        else if (fnLower.endsWith('.mp3')) resolvedMimeType = 'audio/mpeg';
-        else if (fnLower.endsWith('.mp4')) resolvedMimeType = 'video/mp4';
-        else if (resolvedType === 'image') resolvedMimeType = 'image/jpeg';
-        else if (resolvedType === 'video') resolvedMimeType = 'video/mp4';
-        else if (resolvedType === 'audio') resolvedMimeType = 'audio/mpeg';
+
+        // Resolve exact MIME type from URL and filename
+        const urlAndNameLower = (cleanMediaUrl + ' ' + resolvedFilename).toLowerCase();
+        let resolvedMimeType = resolvedType === 'document' ? 'application/pdf' : 'image/jpeg';
+
+        if (urlAndNameLower.includes('.png')) resolvedMimeType = 'image/png';
+        else if (urlAndNameLower.includes('.jpg') || urlAndNameLower.includes('.jpeg')) resolvedMimeType = 'image/jpeg';
+        else if (urlAndNameLower.includes('.webp')) resolvedMimeType = 'image/webp';
+        else if (urlAndNameLower.includes('.pdf')) resolvedMimeType = 'application/pdf';
+        else if (urlAndNameLower.includes('.csv')) resolvedMimeType = 'text/csv';
+        else if (urlAndNameLower.includes('.xlsx')) resolvedMimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+        else if (urlAndNameLower.includes('.xls')) resolvedMimeType = 'application/vnd.ms-excel';
+        else if (urlAndNameLower.includes('.docx')) resolvedMimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+        else if (urlAndNameLower.includes('.doc')) resolvedMimeType = 'application/msword';
+        else if (urlAndNameLower.includes('.txt')) resolvedMimeType = 'text/plain';
+        else if (urlAndNameLower.includes('.zip')) resolvedMimeType = 'application/zip';
+        else if (urlAndNameLower.includes('.mp3')) resolvedMimeType = 'audio/mpeg';
+        else if (urlAndNameLower.includes('.mp4')) resolvedMimeType = 'video/mp4';
 
         const isUrl = cleanMediaUrl.startsWith('http://') || cleanMediaUrl.startsWith('https://');
 
