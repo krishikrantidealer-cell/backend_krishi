@@ -63,6 +63,13 @@ class MyOperatorService {
         data: {}
       };
 
+      const replyContextId = (contextMessageId || replyToMessageId || '').toString().trim();
+      if (replyContextId) {
+        payload.context = {
+          message_id: replyContextId
+        };
+      }
+
       const isTemplate = type?.toLowerCase() === 'template' || Boolean(templateName);
 
       if (isTemplate) {
