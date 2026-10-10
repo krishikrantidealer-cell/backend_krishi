@@ -104,20 +104,20 @@ const getCallLogs = async (req, res) => {
     const { search, customerPhone, agentId, type, status, view, includeDeleted, page = 1, limit = 25 } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
-    const query = {};
+    const andConditions = [];
 
     // ── Industrial Soft Delete Filter ──────────────────────────────────────────
     if (view === 'trash' || view === 'deleted') {
-      query.isDeleted = true;
+      andConditions.push({ isDeleted: true });
     } else if (includeDeleted !== 'true') {
-      query.isDeleted = { $ne: true };
+      andConditions.push({ isDeleted: { $ne: true } });
     }
 
     // ── Phone / Customer Specific Filter vs Broad Multi-Field Search ────────
     if (customerPhone && customerPhone.trim() !== '') {
       const cleanDigits = customerPhone.replace(/\D/g, '').replace(/^91/, '');
       if (cleanDigits.length >= 5) {
-        query.customerPhone = { $regex: cleanDigits, $options: 'i' };
+        andConditions.push({ customerPhone: { $regex: cleanDigits, $options: 'i' } });
       }
     } else if (search && search.trim() !== '') {
       const searchTerm = search.trim();
@@ -144,52 +144,78 @@ const getCallLogs = async (req, res) => {
       searchConditions.push({ callSummary: { $regex: searchTerm, $options: 'i' } });
 
       if (searchConditions.length > 0) {
-        query.$or = searchConditions;
+        andConditions.push({ $or: searchConditions });
       }
     }
 
-    if (agentId && agentId !== 'null' && agentId !== 'undefined' && agentId.trim() !== '') {
-      query.agentId = agentId;
-    }
-
     if (type && type !== 'all' && type.trim() !== '') {
-      query.$or = [{ direction: type }, { type: type }];
+      andConditions.push({ $or: [{ direction: type }, { type: type }] });
     }
 
     if (status && status !== 'all' && status.trim() !== '') {
       const s = status.toLowerCase();
       if (s === 'missed') {
-        query.status = { $in: ['missed', 'no-answer'] };
+        andConditions.push({ status: { $in: ['missed', 'no-answer'] } });
       } else if (s === 'answered') {
-        query.$or = [{ status: 'answered' }, { durationSeconds: { $gt: 0 } }];
+        andConditions.push({ $or: [{ status: 'answered' }, { durationSeconds: { $gt: 0 } }] });
       } else {
-        query.status = s;
+        andConditions.push({ status: s });
       }
     }
 
-    // Role Security: Sales agents see calls they made/received OR calls with contacts assigned to them
+    // Role Security: Sales agents strictly ONLY see calls they made (outbound) or received (inbound)
+    let metricsMatch = { isDeleted: { $ne: true } };
+
     if (req.user.role === 'sales') {
       const agentUser = await User.findById(req.user.id);
-      const agentPhone = agentUser?.phoneNumber
+      const agentPhoneDigits = agentUser?.phoneNumber
         ? agentUser.phoneNumber.replace(/\D/g, '').replace(/^91/, '')
         : '';
-      
-      const assignedContactIds = await Contact.find({ assignedTo: req.user.id }).distinct('_id');
+      const agentDid = agentUser?.myoperatorConfig?.did
+        ? agentUser.myoperatorConfig.did.replace(/\D/g, '').replace(/^91/, '').replace(/^0+/, '')
+        : '';
+      const agentVid = agentUser?.myoperatorConfig?.vid || agentUser?.myoperatorConfig?.extension;
 
-      query.$and = query.$and || [];
-      query.$and.push({
-        $or: [
-          { agentId: req.user.id },
-          ...(agentPhone ? [{ agentPhone: { $regex: agentPhone } }] : []),
-          ...(assignedContactIds.length > 0 ? [{ contactId: { $in: assignedContactIds } }] : [])
-        ]
-      });
+      const salesAgentOr = [
+        { agentId: req.user.id },
+        { agentId: new mongoose.Types.ObjectId(req.user.id) }
+      ];
+
+      if (agentPhoneDigits) {
+        salesAgentOr.push({ agentPhone: { $regex: agentPhoneDigits } });
+      }
+      if (agentDid) {
+        salesAgentOr.push(
+          { 'metadata.matchedDid': { $regex: agentDid } },
+          { 'metadata.agentDid': { $regex: agentDid } },
+          { 'metadata.received_on': { $regex: agentDid } }
+        );
+      }
+      if (agentVid) {
+        salesAgentOr.push(
+          { 'metadata.matchedVid': agentVid },
+          { 'metadata.agentVid': agentVid }
+        );
+      }
+
+      andConditions.push({ $or: salesAgentOr });
+
+      // Metrics strictly scoped to sales agent's own calls
+      metricsMatch = {
+        isDeleted: { $ne: true },
+        $or: salesAgentOr
+      };
+    } else if (agentId && agentId !== 'null' && agentId !== 'undefined' && agentId.trim() !== '') {
+      andConditions.push({ agentId });
+      if (mongoose.Types.ObjectId.isValid(agentId)) {
+        metricsMatch = {
+          isDeleted: { $ne: true },
+          agentId: new mongoose.Types.ObjectId(agentId)
+        };
+      }
     }
 
-    // Parallelize Primary Query, Count, KPI Metrics & Leaderboard
-    const metricsMatch = req.user.role === 'sales'
-      ? { agentId: new mongoose.Types.ObjectId(req.user.id), isDeleted: { $ne: true } }
-      : { isDeleted: { $ne: true } };
+    const query = andConditions.length > 0 ? { $and: andConditions } : {};
 
     const [callLogs, total, summaryResult, leaderboardResult] = await Promise.all([
       CallLog.find(query)
@@ -356,6 +382,24 @@ const saveCallDisposition = async (req, res) => {
     const callLog = await CallLog.findById(callLogId);
     if (!callLog) {
       return res.status(404).json({ success: false, message: 'Call log not found' });
+    }
+
+    // Role Security: Sales agents can only update dispositions on their own calls
+    if (req.user.role === 'sales') {
+      const agentUser = await User.findById(req.user.id);
+      const agentPhoneDigits = agentUser?.phoneNumber
+        ? agentUser.phoneNumber.replace(/\D/g, '').replace(/^91/, '')
+        : '';
+      const isMyCall =
+        (callLog.agentId && callLog.agentId.toString() === req.user.id.toString()) ||
+        (agentPhoneDigits && callLog.agentPhone && callLog.agentPhone.replace(/\D/g, '').includes(agentPhoneDigits));
+
+      if (!isMyCall) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access Denied: You can only update dispositions on your own call records.'
+        });
+      }
     }
 
     if (userDisposition) callLog.userDisposition = userDisposition;
@@ -1079,6 +1123,28 @@ const getRecordingPlaybackUrl = async (req, res) => {
     }
     if (!callLog) {
       callLog = await CallLog.findOne({ $or: [{ callId }, { providerCallId: callId }] });
+    }
+
+    if (!callLog) {
+      return res.status(404).json({ success: false, message: 'Call log not found or recording unavailable' });
+    }
+
+    // Role Security: Sales agents are strictly authorized ONLY for their own calls
+    if (req.user.role === 'sales') {
+      const agentUser = await User.findById(req.user.id);
+      const agentPhoneDigits = agentUser?.phoneNumber
+        ? agentUser.phoneNumber.replace(/\D/g, '').replace(/^91/, '')
+        : '';
+      const isMyCall =
+        (callLog.agentId && callLog.agentId.toString() === req.user.id.toString()) ||
+        (agentPhoneDigits && callLog.agentPhone && callLog.agentPhone.replace(/\D/g, '').includes(agentPhoneDigits));
+
+      if (!isMyCall) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access Denied: You are only authorized to listen to your own call recordings.'
+        });
+      }
     }
 
     if (callLog && callLog.recordingUrl) {
