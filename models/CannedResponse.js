@@ -20,7 +20,7 @@ const cannedResponseSchema = new mongoose.Schema({
   category: {
     type: String,
     default: 'General',
-    enum: ['General', 'Sales', 'Support', 'Logistics', 'Finance']
+    trim: true
   },
   tags: [{
     type: String
