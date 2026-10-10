@@ -526,13 +526,14 @@ const sendConversationMessage = async (req, res, next) => {
     }
 
     const normalizedMsgType = (type || 'text').toLowerCase();
+    const safeContent = resolvedContent || (templateName ? `[Template] ${templateName}` : '');
 
     const messageData = {
       conversationId: conversation._id,
       contactId: conversation.contactId._id,
       direction: 'outgoing',
       type: normalizedMsgType,
-      content: resolvedContent || `[Template] ${templateName}`,
+      content: safeContent,
       mediaUrl,
       sentBy: req.user.id,
       status: 'sent'
@@ -553,7 +554,7 @@ const sendConversationMessage = async (req, res, next) => {
     await message.save();
 
     // Update conversation metadata
-    conversation.lastMessage = { type: normalizedMsgType, content: resolvedContent, mediaUrl };
+    conversation.lastMessage = { type: normalizedMsgType, content: safeContent, mediaUrl };
     conversation.lastMessageAt = new Date();
     conversation.unreadCount = 0;
     await conversation.save();
