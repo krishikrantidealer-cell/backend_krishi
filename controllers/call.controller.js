@@ -221,7 +221,7 @@ const getCallLogs = async (req, res) => {
       CallLog.find(query)
         .populate('agentId', 'firstName lastName email phoneNumber')
         .populate('contactId', 'name phone preferredLanguage')
-        .sort({ createdAt: -1 })
+        .sort({ createdAt: -1, _id: -1 })
         .skip(skip)
         .limit(parseInt(limit))
         .lean(),
@@ -550,24 +550,14 @@ const TELEPHONY_ACCOUNTS = [
     mobileNumber: '9399022063'
   },
   {
-    name: 'Garima Gokulpure',
-    email: 'essentialbiosciences12@gmail.com',
+    name: 'Jaspal Rajput',
+    email: 'ebsale01@gmail.com',
     role: 'sales',
     accountName: 'Ram Ji Shukla - 6 (6abceacb44b44323)',
     companyId: '6abceacb44b44323',
     did: '07316917216',
     outboundNumber: '+91 7316917216',
-    mobileNumber: '9201896603'
-  },
-  {
-    name: 'Eram Istiyaque',
-    email: 'sales6.essential@gmail.com',
-    role: 'sales',
-    accountName: 'Ram Ji Shukla - 6 (6abceacb44b44323)',
-    companyId: '6abceacb44b44323',
-    did: '07316917216',
-    outboundNumber: '+91 7316917216',
-    mobileNumber: '9201896608'
+    mobileNumber: '9399022061'
   }
 ];
 
@@ -666,7 +656,7 @@ const handleCallWebhook = async (req, res) => {
     ).trim();
 
     // Known sales agent numbers to prevent inverted caller assignment
-    const KNOWN_AGENT_PHONES = ['9201896606', '9399022063', '9201896603', '9201896608', '9201896604'];
+    const KNOWN_AGENT_PHONES = ['9201896606', '9399022063', '9399022061', '9201896604'];
 
     // Extract Customer Phone (Caller for Inbound, Callee for Outbound)
     let rawCustomerPhone = '';
@@ -948,7 +938,7 @@ const handleCallWebhook = async (req, res) => {
       } else if (isEndEvent) {
         callLog.status = duration > 0 ? 'answered' : (rawStatus === 'busy' ? 'busy' : (rawStatus === 'missed' || rawStatus === 'no-answer' || rawStatus === 'not_answered' ? 'missed' : 'ended'));
         if (duration > 0 || !callLog.durationSeconds) callLog.durationSeconds = duration;
-        if (recordingUrl) callLog.recordingUrl = recordingUrl;
+        if (recordingUrl && (!callLog.recordingUrl || !callLog.recordingUrl.includes('amazonaws.com'))) callLog.recordingUrl = recordingUrl;
         callLog.callSummary = callSummary;
       } else if (rawStatus) {
         callLog.status = rawStatus;
@@ -1147,18 +1137,25 @@ const getRecordingPlaybackUrl = async (req, res) => {
       }
     }
 
-    if (callLog && callLog.recordingUrl) {
+    // If callLog already has a direct playable S3 link, use it immediately
+    if (callLog && callLog.recordingUrl && (callLog.recordingUrl.includes('amazonaws.com') || callLog.recordingUrl.includes('s3.'))) {
       recordingUrl = callLog.recordingUrl;
     } else {
+      // Resolve direct S3 CDN stream URL from MyOperator recordings switch
       recordingUrl = await myoperatorCallService.getRecordingUrl(callLog || callId);
       if (recordingUrl && callLog) {
         callLog.recordingUrl = recordingUrl;
         await callLog.save();
+      } else if (callLog && callLog.recordingUrl && (callLog.recordingUrl.includes('amazonaws.com') || callLog.recordingUrl.includes('s3.'))) {
+        recordingUrl = callLog.recordingUrl;
       }
     }
 
-    if (!recordingUrl) {
-      return res.status(404).json({ success: false, message: 'Recording not ready or unavailable from MyOperator switch' });
+    if (!recordingUrl || (!recordingUrl.includes('amazonaws.com') && !recordingUrl.includes('s3.') && !recordingUrl.endsWith('.mp3'))) {
+      return res.status(404).json({
+        success: false,
+        message: 'Recording audio is currently being processed by MyOperator. Please try again in a few moments.'
+      });
     }
 
     res.json({ success: true, data: { recordingUrl } });

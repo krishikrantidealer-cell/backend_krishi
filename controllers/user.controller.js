@@ -227,6 +227,9 @@ exports.getAllUsers = async (req, res, next) => {
       role: req.query.role,
       kycStatus: req.query.kycStatus,
       trash: req.query.trash,
+      includeDeleted: req.query.includeDeleted,
+      isDeleted: req.query.isDeleted,
+      assignedAgent: req.query.assignedAgent,
       search: req.query.search,
       startDate: req.query.startDate,
       endDate: req.query.endDate,
@@ -267,6 +270,15 @@ exports.getAllUsers = async (req, res, next) => {
     }
     const { users, totalCount, hasMore } = await userService.getAllUsers(filters);
     res.json({ success: true, users, totalCount, hasMore });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.getCustomerDirectoryStats = async (req, res, next) => {
+  try {
+    const stats = await userService.getCustomerDirectoryStats();
+    res.json({ success: true, stats });
   } catch (error) {
     next(error);
   }
@@ -903,6 +915,231 @@ exports.createDealer = async (req, res, next) => {
       success: true,
       message: 'Dealer created successfully',
       user: populatedDealer || newDealer
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.createLead = async (req, res, next) => {
+  try {
+    let {
+      phoneNumber,
+      firstName,
+      lastName,
+      shopName,
+      email,
+      address,
+      assignedAgent,
+      status,
+      notes
+    } = req.body;
+
+    // Support stringified address
+    let parsedAddress = address;
+    if (typeof address === 'string') {
+      try {
+        parsedAddress = JSON.parse(address);
+      } catch (e) {
+        parsedAddress = {};
+      }
+    }
+
+    // Clean phone number
+    let cleanPhone = String(phoneNumber || '').replace(/[^\d]/g, '');
+    if (cleanPhone.startsWith('91') && cleanPhone.length === 12) {
+      cleanPhone = cleanPhone.substring(2);
+    } else if (cleanPhone.startsWith('0') && cleanPhone.length === 11) {
+      cleanPhone = cleanPhone.substring(1);
+    }
+
+    if (!cleanPhone || cleanPhone.length < 10) {
+      return res.status(400).json({ success: false, message: 'Valid 10-digit phone number is required' });
+    }
+
+    // Determine assigned agent:
+    // If request comes from a sales agent, lead MUST automatically be assigned to them!
+    const mongoose = require('mongoose');
+    let targetAgentId = null;
+    if (req.user.role === 'sales') {
+      targetAgentId = req.user._id;
+    } else if (assignedAgent && String(assignedAgent).trim() !== '' && String(assignedAgent) !== '-' && String(assignedAgent) !== 'null' && String(assignedAgent) !== 'undefined') {
+      if (mongoose.Types.ObjectId.isValid(assignedAgent)) {
+        targetAgentId = new mongoose.Types.ObjectId(assignedAgent);
+      }
+    }
+
+    // Check if user already exists
+    let existingUser = await User.findOne({ phoneNumber: cleanPhone });
+
+    if (existingUser) {
+      if (existingUser.kycStatus === 'verified') {
+        return res.status(400).json({
+          success: false,
+          message: `A verified dealer with phone ${cleanPhone} already exists (${existingUser.shopName || existingUser.firstName}).`
+        });
+      }
+
+      // If user is currently soft-deleted, restore them as active lead
+      if (existingUser.isDeleted) {
+        existingUser.isDeleted = false;
+        existingUser.deletedAt = null;
+        existingUser.deletedByAdminId = null;
+        existingUser.deletedByAdminName = null;
+      }
+
+      // Update existing lead details
+      existingUser.firstName = firstName || existingUser.firstName;
+      existingUser.lastName = lastName !== undefined ? lastName : existingUser.lastName;
+      if (shopName) existingUser.shopName = shopName;
+      if (email && !existingUser.email) existingUser.email = email;
+      if (status) existingUser.status = status;
+      if (parsedAddress) {
+        existingUser.address = {
+          ...existingUser.address,
+          ...parsedAddress
+        };
+      }
+
+      // Always assign to sales agent if sales created it, or admin specified target agent
+      if (targetAgentId) {
+        existingUser.assignedAgent = targetAgentId;
+        existingUser.assignedAt = new Date();
+      }
+
+      const creatorName = `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || req.user.email || 'Admin';
+      const creationNote = notes || `Lead profile updated from KD Panel by ${creatorName}`;
+      existingUser.notes = existingUser.notes ? `${existingUser.notes}\n\n${creationNote}` : creationNote;
+      existingUser.notesHistory = existingUser.notesHistory || [];
+      existingUser.notesHistory.push({
+        title: 'Lead Updated from KD Panel',
+        note: creationNote,
+        adminId: req.user._id,
+        adminName: creatorName,
+        createdAt: new Date(),
+        type: 'general',
+        priority: 'medium',
+        status: existingUser.status || 'prospect'
+      });
+
+      await existingUser.save();
+
+      // Audit Log
+      try {
+        auditService.logAction({
+          adminId: req.user._id,
+          adminEmail: req.user.email,
+          action: 'LEAD_UPDATED',
+          targetId: existingUser._id,
+          targetModel: 'User',
+          details: `Lead ${cleanPhone} updated in KD Panel by ${creatorName}`,
+        }, req);
+      } catch (e) {}
+
+      // WebSockets
+      try {
+        const { broadcastToRoles, sendToUser } = require('../services/websocket.service');
+        broadcastToRoles(['admin', 'sales'], { type: 'LEADS_UPDATE' });
+        if (targetAgentId) {
+          sendToUser(targetAgentId.toString(), { type: 'LEADS_UPDATE' });
+        }
+      } catch (wsErr) {}
+
+      contactSyncService.syncUserToContactAndConversation(existingUser, { broadcastWs: true }).catch(() => {});
+
+      const populatedUser = await User.findById(existingUser._id).populate('assignedAgent', 'firstName lastName phoneNumber email');
+
+      return res.status(200).json({
+        success: true,
+        message: 'Existing lead updated and assigned successfully',
+        user: populatedUser || existingUser
+      });
+    }
+
+    // New Lead Creation
+    const creatorName = `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || req.user.email || 'Admin';
+    const creationNote = notes || `Created as Lead directly from KD Panel by ${creatorName}`;
+
+    const newLead = await User.create({
+      phoneNumber: cleanPhone,
+      email: email && email.trim() !== '' ? email.trim() : undefined,
+      firstName: firstName.trim(),
+      lastName: (lastName || '').trim(),
+      shopName: shopName ? shopName.trim() : undefined,
+      address: {
+        villageArea: parsedAddress?.villageArea || '',
+        addressLine2: parsedAddress?.addressLine2 || '',
+        address2: parsedAddress?.address2 || '',
+        cityTehsil: parsedAddress?.cityTehsil || '',
+        state: parsedAddress?.state || '',
+        pincode: parsedAddress?.pincode || ''
+      },
+      addressType: 'Shop',
+      role: 'user',
+      userType: 'retailer',
+      kycStatus: 'pending',
+      isKycComplete: false,
+      isVerified: false,
+      isProfileComplete: false,
+      source: 'KD Panel',
+      isPanelCreated: true,
+      createdVia: 'panel',
+      createdByAdminId: req.user._id,
+      createdByAdminName: creatorName,
+      createdByRole: req.user.role,
+      status: status || 'prospect',
+      monthlyTarget: 500000,
+      preferredLanguage: 'en',
+      isBlocked: false,
+      isDeleted: false,
+      whatsappSequence: 0,
+      shippingAddresses: [],
+      assignedAgent: targetAgentId || null,
+      assignedAt: targetAgentId ? new Date() : null,
+      notes: creationNote,
+      notesHistory: [
+        {
+          title: 'Lead Created in KD Panel',
+          note: creationNote,
+          adminId: req.user._id,
+          adminName: creatorName,
+          createdAt: new Date(),
+          type: 'general',
+          priority: 'medium',
+          status: status || 'prospect'
+        }
+      ]
+    });
+
+    // Audit Log
+    try {
+      auditService.logAction({
+        adminId: req.user._id,
+        adminEmail: req.user.email,
+        action: 'LEAD_CREATED',
+        targetId: newLead._id,
+        targetModel: 'User',
+        details: `Created lead ${cleanPhone} (${newLead.firstName} ${newLead.lastName || ''}) by ${creatorName}`,
+      }, req);
+    } catch (e) {}
+
+    // Broadcast WebSockets
+    try {
+      const { broadcastToRoles, sendToUser } = require('../services/websocket.service');
+      broadcastToRoles(['admin', 'sales'], { type: 'LEADS_UPDATE' });
+      if (targetAgentId) {
+        sendToUser(targetAgentId.toString(), { type: 'LEADS_UPDATE' });
+      }
+    } catch (wsErr) {}
+
+    contactSyncService.syncUserToContactAndConversation(newLead, { broadcastWs: true }).catch(() => {});
+
+    const populatedLead = await User.findById(newLead._id).populate('assignedAgent', 'firstName lastName phoneNumber email');
+
+    res.status(201).json({
+      success: true,
+      message: 'Lead created successfully',
+      user: populatedLead || newLead
     });
   } catch (error) {
     next(error);

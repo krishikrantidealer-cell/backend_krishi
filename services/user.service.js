@@ -6,7 +6,9 @@ class UserService {
   async getAllUsers(filters = {}) {
     // Optionally filter by role, kycStatus, etc.
     const query = {};
-    if (filters.trash === 'true' || filters.trash === true) {
+    if (filters.trash === 'all' || filters.isDeleted === 'all' || filters.includeDeleted === 'true' || filters.includeDeleted === true) {
+      // Return all users regardless of deletion status
+    } else if (filters.trash === 'true' || filters.trash === true || filters.isDeleted === 'true' || filters.isDeleted === true) {
       query.isDeleted = true;
     } else {
       query.isDeleted = { $ne: true };
@@ -26,9 +28,9 @@ class UserService {
       }
     }
 
-    if (filters.role) query.role = filters.role;
+    if (filters.role && filters.role !== 'all') query.role = filters.role;
     
-    if (filters.kycStatus) {
+    if (filters.kycStatus && filters.kycStatus !== 'all') {
       if (filters.kycStatus === 'not_verified') {
         query.kycStatus = { $ne: 'verified' };
       } else {
@@ -36,7 +38,13 @@ class UserService {
       }
     }
     if (filters.assignedAgent) {
-      query.assignedAgent = filters.assignedAgent;
+      if (filters.assignedAgent === 'unassigned') {
+        query.assignedAgent = null;
+      } else if (filters.assignedAgent === 'assigned') {
+        query.assignedAgent = { $ne: null };
+      } else if (filters.assignedAgent !== 'all') {
+        query.assignedAgent = filters.assignedAgent;
+      }
     } else if (filters.assignedAgentCondition) {
       query.assignedAgent = filters.assignedAgentCondition;
     }
@@ -51,19 +59,29 @@ class UserService {
       const cleanSearch = String(filters.search).trim();
       const escapedSearch = cleanSearch.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
       const searchRegex = new RegExp(escapedSearch, 'i');
-      const searchOr = {
-        $or: [
-          { firstName: searchRegex },
-          { lastName: searchRegex },
-          { shopName: searchRegex },
-          { email: searchRegex },
-          { phoneNumber: searchRegex }
-        ]
-      };
+      const searchOr = [
+        { firstName: searchRegex },
+        { lastName: searchRegex },
+        { shopName: searchRegex },
+        { email: searchRegex },
+        { phoneNumber: searchRegex },
+        { 'address.cityTehsil': searchRegex },
+        { 'address.villageArea': searchRegex },
+        { 'address.state': searchRegex },
+        { 'address.pincode': searchRegex }
+      ];
+
+      // If search contains digits, also search normalized 10-digit phone
+      const digitsOnly = cleanSearch.replace(/\D/g, '');
+      if (digitsOnly.length >= 6) {
+        const phoneTerm = digitsOnly.length >= 10 ? digitsOnly.slice(-10) : digitsOnly;
+        searchOr.push({ phoneNumber: new RegExp(phoneTerm, 'i') });
+      }
+
       if (andConditions.length > 0) {
-        andConditions.push(searchOr);
+        andConditions.push({ $or: searchOr });
       } else {
-        query.$or = searchOr.$or;
+        query.$or = searchOr;
       }
     }
     
@@ -95,6 +113,77 @@ class UserService {
     const hasMore = limit > 0 ? (skip + users.length < totalCount) : false;
 
     return { users, totalCount, hasMore };
+  }
+
+  async getCustomerDirectoryStats() {
+    const [
+      total,
+      active,
+      deleted,
+      assigned,
+      unassigned,
+      verifiedDealers,
+      leads,
+      agentAgg
+    ] = await Promise.all([
+      User.countDocuments({ role: 'user' }),
+      User.countDocuments({ role: 'user', isDeleted: { $ne: true } }),
+      User.countDocuments({ role: 'user', isDeleted: true }),
+      User.countDocuments({ role: 'user', assignedAgent: { $ne: null } }),
+      User.countDocuments({ role: 'user', assignedAgent: null }),
+      User.countDocuments({ role: 'user', kycStatus: 'verified' }),
+      User.countDocuments({ role: 'user', kycStatus: { $ne: 'verified' } }),
+      User.aggregate([
+        { $match: { role: 'user' } },
+        {
+          $group: {
+            _id: '$assignedAgent',
+            total: { $sum: 1 },
+            active: { $sum: { $cond: [{ $ne: ['$isDeleted', true] }, 1, 0] } },
+            deleted: { $sum: { $cond: [{ $eq: ['$isDeleted', true] }, 1, 0] } }
+          }
+        }
+      ])
+    ]);
+
+    const agentIds = agentAgg
+      .map(a => a._id)
+      .filter(id => id && String(id) !== 'null');
+    const agentDocs = await User.find({ _id: { $in: agentIds } })
+      .select('firstName lastName phoneNumber email')
+      .lean();
+    const agentMap = {};
+    agentDocs.forEach(a => {
+      agentMap[String(a._id)] = a;
+    });
+
+    const agentBreakdown = agentAgg.map(a => {
+      const isNull = !a._id;
+      const agent = !isNull ? agentMap[String(a._id)] : null;
+      return {
+        agentId: isNull ? null : String(a._id),
+        agentName: isNull
+          ? 'Unassigned'
+          : (agent ? `${agent.firstName || ''} ${agent.lastName || ''}`.trim() : 'Unknown Agent'),
+        agentPhone: agent?.phoneNumber || '',
+        total: a.total,
+        active: a.active,
+        deleted: a.deleted
+      };
+    });
+
+    agentBreakdown.sort((a, b) => b.total - a.total);
+
+    return {
+      total,
+      active,
+      deleted,
+      assigned,
+      unassigned,
+      verifiedDealers,
+      leads,
+      agentBreakdown
+    };
   }
 
   async getProfile(userId, includeDeleted = false) {

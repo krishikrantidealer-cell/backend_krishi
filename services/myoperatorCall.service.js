@@ -86,9 +86,9 @@ const AGENT_TELEPHONY_REGISTRY = {
     userUuid: '6abe40026e466397',
     extension: '11',
   },
-  // Ram Ji Shukla - 6 (Garima)
-  '9201896603': {
-    name: 'Garima',
+  // Ram Ji Shukla - 6 (Jaspal Rajput)
+  '9399022061': {
+    name: 'Jaspal Rajput',
     accountName: 'Ram Ji Shukla - 6',
     did: '07316917216',
     companyId: '6abceacb44b44323',
@@ -99,19 +99,6 @@ const AGENT_TELEPHONY_REGISTRY = {
     userUuid: '6abe41494bcb1499',
     extension: '11',
   },
-  // Ram Ji Shukla - 6 (Eram Istiyaque)
-  '9201896608': {
-    name: 'Eram Istiyaque',
-    accountName: 'Ram Ji Shukla - 6',
-    did: '07316917216',
-    companyId: '6abceacb44b44323',
-    callingXApiKey: 'oomfKA3I2K6TCJYistHyb7sDf0l0F6c8AZro5DJh',
-    callingSecretKey: 'fb3c759e39ad53a6b3e811e0f203fa5ca53db295225f9d33c140c0f5eab80760',
-    callingToken: '55182190d578a476bc2b813ac804a294',
-    publicIvrId: '6ac3932d1bae5749',
-    userUuid: '6abe41494bcb1499',
-    extension: '11',
-  }
 };
 
 class MyOperatorCallService {
@@ -356,86 +343,140 @@ class MyOperatorCallService {
   }
 
   /**
-   * Fetch the direct playback link for a call recording from MyOperator.
-   * Supports direct filename lookup, UID search, and CDR customer phone search.
+   * Fetch the direct S3 CDN playback link for a call recording from MyOperator.
+   * MyOperator provides direct MP3 CDN links via:
+   * GET https://developers.myoperator.co/recordings/link?token={token}&file={filename.mp3}
+   * which resolves to https://developers-sounds-v2.s3.ap-south-1.amazonaws.com/...
    */
   async getRecordingUrl(target) {
     if (!target) return null;
 
     const callLog = (typeof target === 'object' && target !== null) ? target : null;
-    const filenameOrCallId = (typeof target === 'string') ? target : (callLog?.providerCallId || callLog?.callId || '');
-    const phone = (callLog?.customerPhone || '').toString().replace(/\D/g, '').replace(/^91/, '');
     
-    let token = this.callingToken || process.env.MYOPERATOR_CALLING_TOKEN;
-    if (callLog?.agentPhone) {
-      const cleanAgent = String(callLog.agentPhone).replace(/\D/g, '').replace(/^91/, '');
-      const reg = AGENT_TELEPHONY_REGISTRY[cleanAgent];
-      if (reg?.callingToken) {
-        token = reg.callingToken;
+    // If target is already a direct playable S3 link, return it immediately
+    if (typeof target === 'string' && (target.includes('amazonaws.com') || target.includes('s3.'))) {
+      return target;
+    }
+    if (callLog?.recordingUrl && (callLog.recordingUrl.includes('amazonaws.com') || callLog.recordingUrl.includes('s3.'))) {
+      return callLog.recordingUrl;
+    }
+
+    // Extract recording filename
+    let rawFilename = callLog?.metadata?.payload?.recording_filename ||
+                      callLog?.metadata?.recording_filename ||
+                      callLog?.metadata?.filename ||
+                      callLog?.recordingId;
+
+    if (!rawFilename && callLog?.recordingUrl) {
+      if (callLog.recordingUrl.includes('/audio/')) {
+        rawFilename = callLog.recordingUrl.split('/audio/')[1];
+      } else {
+        rawFilename = callLog.recordingUrl.split('/').pop();
       }
     }
 
-    if (!token) {
-      console.warn('[MyOperator] MYOPERATOR_CALLING_TOKEN is not configured.');
-      return null;
+    if (!rawFilename && typeof target === 'string') {
+      if (target.includes('/audio/')) {
+        rawFilename = target.split('/audio/')[1];
+      } else if (target.includes('/')) {
+        rawFilename = target.split('/').pop();
+      } else {
+        rawFilename = target;
+      }
     }
 
-    // 1. Direct file link if filename is present
-    if (filenameOrCallId) {
-      const cleanFile = filenameOrCallId.replace(/^CALL_/, '').replace(/^CRMCALL_/, '');
-      for (const fileParam of [filenameOrCallId, cleanFile]) {
+    let file = rawFilename ? String(rawFilename).split('?')[0].trim() : '';
+    if (file && !file.endsWith('.mp3')) {
+      file = `${file}.mp3`;
+    }
+
+    // Determine candidate tokens ordered by relevance
+    const candidateTokens = [];
+    const pushToken = (t) => {
+      if (t && typeof t === 'string' && !candidateTokens.includes(t)) {
+        candidateTokens.push(t);
+      }
+    };
+
+    const targetCompanyId = callLog?.metadata?.company_id ||
+                            callLog?.metadata?.companyId ||
+                            callLog?.metadata?.payload?.company_id ||
+                            callLog?.metadata?.payload?.companyId ||
+                            callLog?.companyId;
+
+    let targetAgentPhone = (callLog?.agentPhone || '').toString().replace(/\D/g, '').replace(/^91/, '').replace(/^0+/, '');
+    if (!targetAgentPhone && callLog?.metadata?.log_details?.[0]?.received_by?.[0]?.contact_number) {
+      targetAgentPhone = String(callLog.metadata.log_details[0].received_by[0].contact_number).replace(/\D/g, '').replace(/^91/, '').replace(/^0+/, '');
+    }
+    if (!targetAgentPhone && callLog?.metadata?.log_details?.[0]?._did) {
+      targetAgentPhone = String(callLog.metadata.log_details[0]._did).replace(/\D/g, '').replace(/^91/, '').replace(/^0+/, '');
+    }
+
+    // 1. Matched by companyId or agentPhone
+    for (const reg of Object.values(AGENT_TELEPHONY_REGISTRY)) {
+      if (targetCompanyId && reg.companyId === targetCompanyId) {
+        pushToken(reg.callingToken);
+      } else if (targetAgentPhone && (reg.did?.includes(targetAgentPhone) || reg.phone?.includes(targetAgentPhone))) {
+        pushToken(reg.callingToken);
+      }
+    }
+
+    // 2. Default calling token
+    pushToken(this.callingToken || process.env.MYOPERATOR_CALLING_TOKEN);
+
+    // 3. All other tokens from registry
+    for (const reg of Object.values(AGENT_TELEPHONY_REGISTRY)) {
+      pushToken(reg.callingToken);
+    }
+
+    // Try fetching CDN link with candidate tokens
+    if (file) {
+      for (const token of candidateTokens) {
         try {
-          const response = await axios.get(`${this.callingBaseUrl}/search/recordings/link`, {
-            params: { token, file: fileParam },
+          const response = await axios.get(`${this.callingBaseUrl}/recordings/link`, {
+            params: { token, file },
             timeout: 3500
           });
-          const link = response.data?.data?.url || response.data?.url || response.data?.link;
-          if (link) return link;
-        } catch (_) {}
-      }
-    }
-
-    // 2. Query MyOperator search by call ID or UID
-    if (filenameOrCallId) {
-      try {
-        const uidRes = await axios.get(`${this.callingBaseUrl}/search/recordings`, {
-          params: { token, uid: filenameOrCallId, call_id: filenameOrCallId },
-          timeout: 4000
-        });
-        const rec = uidRes.data?.data?.url || uidRes.data?.url || uidRes.data?.data?.[0]?.url || uidRes.data?.records?.[0]?.recording_url;
-        if (rec) return rec;
-      } catch (_) {}
-    }
-
-    // 3. Fallback: Search MyOperator CDR records by customer phone number
-    if (phone) {
-      const searchEndpoints = [
-        `${this.callingBaseUrl}/search`,
-        `${this.callingBaseUrl}/search/cdr`,
-        `${this.callingBaseUrl}/search/calls`
-      ];
-
-      for (const ep of searchEndpoints) {
-        try {
-          const searchRes = await axios.get(ep, {
-            params: { token, number: phone },
-            timeout: 4500
-          });
-
-          const data = searchRes.data?.data || searchRes.data?.records || searchRes.data;
-          const records = Array.isArray(data?.records) ? data.records : (Array.isArray(data) ? data : []);
-          
-          if (records.length > 0) {
-            for (const r of records) {
-              const url = r.recording_url || r.recording || r.audio_url || r.file_url || r.filename;
-              if (url) {
-                console.log(`[MyOperator] Found recording URL via CDR search for phone ${phone}: ${url}`);
-                return url;
-              }
-            }
+          const link = response.data?.url || response.data?.data?.url || response.data?.link;
+          if (link && (link.includes('amazonaws.com') || link.includes('s3.') || link.endsWith('.mp3'))) {
+            return link;
           }
         } catch (_) {}
       }
+    }
+
+    // Fallback: Query search by UID / callId / phone if filename wasn't found or failed
+    const searchTokens = candidateTokens.slice(0, 3);
+    for (const token of searchTokens) {
+      try {
+        const uid = callLog?.providerCallId || callLog?.callId || (typeof target === 'string' ? target : '');
+        if (uid) {
+          const searchRes = await axios.post(`${this.callingBaseUrl}/search`, {
+            token,
+            limit: 10
+          }, {
+            headers: { 'Content-Type': 'application/json' },
+            timeout: 4000
+          });
+          const hits = searchRes.data?.data?.hits || [];
+          for (const hit of hits) {
+            const src = hit._source || hit;
+            const uniqueId = src.additional_parameters?.find(p => p.ky === 'unique_id')?.vl;
+            if (uniqueId === uid || src.allcaller_id === uid || src.filename === file) {
+              let f = src.filename || file;
+              if (f && !f.endsWith('.mp3')) f = `${f}.mp3`;
+              if (f) {
+                const linkRes = await axios.get(`${this.callingBaseUrl}/recordings/link`, {
+                  params: { token, file: f },
+                  timeout: 3500
+                });
+                const link = linkRes.data?.url || linkRes.data?.data?.url;
+                if (link) return link;
+              }
+            }
+          }
+        }
+      } catch (_) {}
     }
 
     return null;
@@ -564,8 +605,7 @@ class MyOperatorCallService {
       { name: 'Runa Singh', email: 'essentialsale14@gmail.com', phone: '9201896604', token: '94f9842c4ae8e739dbce7382dededf53', companyId: '6abcea4e66e65852', did: '07316917220' },
       { name: 'Ajay Yadav', email: 'essentialsale8@gmail.com', phone: '9201896606', token: '775acb38ba13d6833011994c74e356cd', companyId: '6abcea68a9843790', did: '07316917210' },
       { name: 'Yogesh Nandwanshi', email: 'sales3.essential@gmail.com', phone: '9399022063', token: '817c3545b32f7df16784c2416d467a9b', companyId: '6abcea80a6fa9438', did: '07316917208' },
-      { name: 'Garima Gokulpure', email: 'essentialbiosciences12@gmail.com', phone: '9201896603', token: '55182190d578a476bc2b813ac804a294', companyId: '6abceacb44b44323', did: '07316917216' },
-      { name: 'Eram Istiyaque', email: 'sales6.essential@gmail.com', phone: '9201896608', token: '55182190d578a476bc2b813ac804a294', companyId: '6abceacb44b44323', did: '07316917216' }
+      { name: 'Jaspal Rajput', email: 'ebsale01@gmail.com', phone: '9399022061', token: '55182190d578a476bc2b813ac804a294', companyId: '6abceacb44b44323', did: '07316917216' }
     ];
 
     const uniqueTokens = [...new Set(accounts.map(a => a.token).filter(Boolean))];
@@ -610,7 +650,14 @@ class MyOperatorCallService {
         }
       }
 
-      for (const r of uniqueRecordsMap.values()) {
+      // Sort records by timestamp descending so the latest calls are processed first
+      const sortedRecords = Array.from(uniqueRecordsMap.values()).sort((a, b) => {
+        const timeA = Number(a.start_time || a._ms || 0) || 0;
+        const timeB = Number(b.start_time || b._ms || 0) || 0;
+        return timeB - timeA;
+      });
+
+      for (const r of sortedRecords) {
         const providerCallId = String(r.allcaller_id || r.uid || r.id || r.call_id || r.unique_id || r.reference_id || '');
         if (!providerCallId) continue;
 
@@ -622,7 +669,7 @@ class MyOperatorCallService {
           ? r.additional_parameters.find(p => p.ky === 'unique_id')?.vl
           : null;
 
-        const KNOWN_AGENT_PHONES = ['9201896606', '9399022063', '9201896603', '9201896608', '9201896604'];
+        const KNOWN_AGENT_PHONES = ['9201896606', '9399022063', '9399022061', '9201896604'];
 
         // MyOperator Direction Detection:
         // event === 1 or direction === 'incoming'/'inbound' => INBOUND
@@ -712,9 +759,24 @@ class MyOperatorCallService {
           status = this._normalizeStatus(rawStatus) || (rawStatus.includes('miss') ? 'missed' : 'ended');
         }
         
-        let recordingUrl = r.fileurl || r.recording_url || r.recording || r.audio_url || r.file_url || r.download_url || r.url || r.recordings?.[0]?.url || r.recordings?.[0]?.filename || r.filename || null;
-        if (recordingUrl && !recordingUrl.startsWith('http://') && !recordingUrl.startsWith('https://')) {
-          recordingUrl = String(recordingUrl);
+        let recordingUrl = null;
+        const rawRecording = r.fileurl || r.recording_url || r.recording || r.audio_url || r.file_url || r.download_url || r.url || null;
+        if (rawRecording && (rawRecording.includes('amazonaws.com') || rawRecording.includes('s3.') || rawRecording.endsWith('.mp3'))) {
+          recordingUrl = rawRecording;
+        } else if (r.filename) {
+          // Resolve direct S3 link using the active account token
+          try {
+            let f = String(r.filename).split('?')[0].trim();
+            if (!f.endsWith('.mp3')) f = `${f}.mp3`;
+            const linkRes = await axios.get(`${this.callingBaseUrl}/recordings/link`, {
+              params: { token, file: f },
+              timeout: 3000
+            });
+            const directLink = linkRes.data?.url || linkRes.data?.data?.url || linkRes.data?.link;
+            if (directLink && (directLink.includes('amazonaws.com') || directLink.includes('s3.') || directLink.endsWith('.mp3'))) {
+              recordingUrl = directLink;
+            }
+          } catch (_) {}
         }
 
         // Agent matching: check matched account by agent number, DID, user name tag, or primaryAccount
@@ -849,7 +911,8 @@ class MyOperatorCallService {
             existingLog.durationSeconds = durationSeconds;
             changed = true;
           }
-          if (recordingUrl && (!existingLog.recordingUrl || existingLog.recordingUrl !== recordingUrl)) {
+          // Preserve verified high-speed S3 CDN URLs; never overwrite with legacy app.myoperator.com links
+          if (recordingUrl && (recordingUrl.includes('amazonaws.com') || recordingUrl.includes('s3.') || recordingUrl.endsWith('.mp3')) && existingLog.recordingUrl !== recordingUrl) {
             existingLog.recordingUrl = recordingUrl;
             changed = true;
           }
@@ -861,15 +924,19 @@ class MyOperatorCallService {
             await existingLog.save();
             syncedCount++;
 
-            const populated = await CallLog.findById(existingLog._id)
-              .populate('agentId', 'firstName lastName email phoneNumber')
-              .populate('contactId', 'name phone preferredLanguage');
-            const broadcastPayload = {
-              type: 'CALL_UPDATE',
-              data: populated || existingLog.toObject()
-            };
-            if (agentId) wsService.sendToUser(agentId.toString(), broadcastPayload);
-            wsService.broadcastToRoles(['admin', 'sales'], broadcastPayload);
+            // Only broadcast live updates for recent/active calls (within last 60 minutes) to avoid shuffling older logs
+            const isRecent = (Date.now() - new Date(existingLog.createdAt).getTime()) < 60 * 60 * 1000;
+            if (isRecent) {
+              const populated = await CallLog.findById(existingLog._id)
+                .populate('agentId', 'firstName lastName email phoneNumber')
+                .populate('contactId', 'name phone preferredLanguage');
+              const broadcastPayload = {
+                type: 'CALL_UPDATE',
+                data: populated || existingLog.toObject()
+              };
+              if (agentId) wsService.sendToUser(agentId.toString(), broadcastPayload);
+              wsService.broadcastToRoles(['admin', 'sales'], broadcastPayload);
+            }
           }
         } else {
           const newLog = new CallLog({
@@ -890,16 +957,19 @@ class MyOperatorCallService {
           await newLog.save();
           syncedCount++;
 
-          // Broadcast newly found call to panels immediately
-          const populated = await CallLog.findById(newLog._id)
-            .populate('agentId', 'firstName lastName email phoneNumber')
-            .populate('contactId', 'name phone preferredLanguage');
-          const broadcastPayload = {
-            type: 'CALL_UPDATE',
-            data: populated || newLog.toObject()
-          };
-          if (agentId) wsService.sendToUser(agentId.toString(), broadcastPayload);
-          wsService.broadcastToRoles(['admin', 'sales'], broadcastPayload);
+          // Broadcast newly found call to panels only if recent
+          const isRecentNew = (Date.now() - new Date(newLog.createdAt).getTime()) < 60 * 60 * 1000;
+          if (isRecentNew) {
+            const populated = await CallLog.findById(newLog._id)
+              .populate('agentId', 'firstName lastName email phoneNumber')
+              .populate('contactId', 'name phone preferredLanguage');
+            const broadcastPayload = {
+              type: 'CALL_UPDATE',
+              data: populated || newLog.toObject()
+            };
+            if (agentId) wsService.sendToUser(agentId.toString(), broadcastPayload);
+            wsService.broadcastToRoles(['admin', 'sales'], broadcastPayload);
+          }
         }
       }
     }

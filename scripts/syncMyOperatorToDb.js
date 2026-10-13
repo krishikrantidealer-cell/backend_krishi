@@ -63,19 +63,31 @@ async function syncMyOperatorAccounts() {
       },
       {
         account: myoperatorAccounts.agents[4], // Ram Ji Shukla - 6 (WA: 7316917216)
-        email: 'essentialbiosciences12@gmail.com',
-        phone: '9201896603',
-        name: 'Garima Gokulpure'
-      },
-      {
-        account: myoperatorAccounts.agents[4], // Eram Istiyaque (sales6.essential@gmail.com)
-        email: 'sales6.essential@gmail.com',
-        phone: '9201896608',
-        name: 'Eram Istiyaque'
+        email: 'ebsale01@gmail.com',
+        phone: '9399022061',
+        name: 'Jaspal Rajput'
       }
     ];
 
     console.log('\n--- Syncing Sales Agents to Database ---');
+    await User.updateMany(
+      { phoneNumber: { $in: ['9201896603', '9201896608'] } },
+      {
+        $unset: {
+          'myoperatorConfig.did': 1,
+          'myoperatorConfig.vid': 1,
+          'myoperatorConfig.extension': 1,
+          'myoperatorConfig.uuid': 1,
+          'myoperatorConfig.userId': 1,
+          'myoperatorConfig.publicIvrId': 1,
+          'myoperatorConfig.apiKey': 1,
+          'myoperatorConfig.secretKey': 1,
+          'myoperatorConfig.token': 1,
+          'myoperatorConfig.companyId': 1
+        }
+      }
+    );
+
     for (const mapping of agentMappings) {
       const user = await User.findOne({
         $or: [
@@ -86,14 +98,15 @@ async function syncMyOperatorAccounts() {
 
       if (user) {
         user.myoperatorConfig = {
-          companyId: mapping.account.companyId,
-          token: mapping.account.callingToken,
+          did: mapping.account.did,
+          uuid: mapping.account.uuid,
+          userId: mapping.account.uuid,
+          publicIvrId: mapping.account.publicIvrId,
+          apiKey: mapping.account.callingXApiKey,
           secretKey: mapping.account.callingSecretKey,
-          wabaKey: mapping.account.wabaKey,
-          wabaPhoneNumberId: mapping.account.wabaPhoneNumberId,
-          whatsappNumber: mapping.account.whatsappNumber,
+          token: mapping.account.callingToken,
+          companyId: mapping.account.companyId,
           extension: mapping.account.extension || '11',
-          accountName: mapping.account.accountName
         };
         user.isAvailableForCalls = true;
         await user.save();

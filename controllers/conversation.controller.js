@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Conversation = require('../models/Conversation');
 const Message = require('../models/Message');
 const Contact = require('../models/Contact');
@@ -32,24 +33,51 @@ const getConversations = async (req, res) => {
       }
     }
 
-    // Role-based security filters: sales agents see only their assigned contacts/conversations
-    if (req.user.role === 'sales') {
-      const assignedContactIds = await Contact.find({ assignedTo: req.user.id }).distinct('_id');
-      conditions.push({
-        $or: [
-          { assignedTo: req.user.id },
-          ...(assignedContactIds.length > 0 ? [{ contactId: { $in: assignedContactIds } }] : [])
-        ]
-      });
-    } else if (req.user.role === 'admin' && agentId) {
-      // Admin filtering by specific sales agent
-      const assignedContactIds = await Contact.find({ assignedTo: agentId }).distinct('_id');
-      conditions.push({
-        $or: [
-          { assignedTo: agentId },
-          ...(assignedContactIds.length > 0 ? [{ contactId: { $in: assignedContactIds } }] : [])
-        ]
-      });
+    // Role-based security filters: sales agents see only their assigned contacts/conversations, admin can filter by agentId or unassigned
+    let agentFilterCondition = null;
+    const targetAgent = req.user.role === 'sales' ? req.user.id : (req.user.role === 'admin' ? agentId : null);
+
+    if (targetAgent && targetAgent !== 'all') {
+      if (targetAgent === 'unassigned') {
+        const assignedContactIds = await Contact.find({ assignedTo: { $ne: null } }).distinct('_id');
+        const assignedUsers = await User.find({ assignedAgent: { $ne: null } }).select('phoneNumber').lean();
+        const userPhones = assignedUsers.map(u => normalizeIndianPhone(u.phoneNumber)).filter(Boolean);
+        const phoneVariants = userPhones.flatMap(p => getPhoneQueryVariants(p));
+        const userAssignedContactIds = phoneVariants.length > 0
+          ? await Contact.find({ phone: { $in: phoneVariants } }).distinct('_id')
+          : [];
+        const allAssignedContactIds = Array.from(new Set([...assignedContactIds.map(String), ...userAssignedContactIds.map(String)]));
+
+        agentFilterCondition = {
+          $and: [
+            { $or: [{ assignedTo: null }, { assignedTo: { $exists: false } }] },
+            ...(allAssignedContactIds.length > 0 ? [{ contactId: { $nin: allAssignedContactIds } }] : [])
+          ]
+        };
+      } else if (mongoose.Types.ObjectId.isValid(targetAgent)) {
+        const agentObjId = new mongoose.Types.ObjectId(targetAgent);
+        const assignedUsers = await User.find({ assignedAgent: agentObjId }).select('phoneNumber').lean();
+        const userPhones = assignedUsers.map(u => normalizeIndianPhone(u.phoneNumber)).filter(Boolean);
+        const phoneVariants = userPhones.flatMap(p => getPhoneQueryVariants(p));
+
+        const assignedContactIds = await Contact.find({
+          $or: [
+            { assignedTo: agentObjId },
+            ...(phoneVariants.length > 0 ? [{ phone: { $in: phoneVariants } }] : [])
+          ]
+        }).distinct('_id');
+
+        agentFilterCondition = {
+          $or: [
+            { assignedTo: agentObjId },
+            ...(assignedContactIds.length > 0 ? [{ contactId: { $in: assignedContactIds } }] : [])
+          ]
+        };
+      }
+    }
+
+    if (agentFilterCondition) {
+      conditions.push(agentFilterCondition);
     }
 
     // Tab-based filtering: 'all', 'active', 'leads', 'dealers', 'unread'
@@ -106,22 +134,8 @@ const getConversations = async (req, res) => {
         baseConditions.push({ status: status });
       }
     }
-    if (req.user.role === 'sales') {
-      const assignedContactIds = await Contact.find({ assignedTo: req.user.id }).distinct('_id');
-      baseConditions.push({
-        $or: [
-          { assignedTo: req.user.id },
-          ...(assignedContactIds.length > 0 ? [{ contactId: { $in: assignedContactIds } }] : [])
-        ]
-      });
-    } else if (req.user.role === 'admin' && agentId) {
-      const assignedContactIds = await Contact.find({ assignedTo: agentId }).distinct('_id');
-      baseConditions.push({
-        $or: [
-          { assignedTo: agentId },
-          ...(assignedContactIds.length > 0 ? [{ contactId: { $in: assignedContactIds } }] : [])
-        ]
-      });
+    if (agentFilterCondition) {
+      baseConditions.push(agentFilterCondition);
     }
     const baseQuery = baseConditions.length > 0 ? { $and: baseConditions } : {};
 

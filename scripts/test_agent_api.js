@@ -11,7 +11,7 @@ const AGENTS = [
   { name: 'Runa Singh', phone: '9201896604', did: '07316917220', ivr: '6ac3926ed5589198', uuid: '6abe3cdaa65d9730' },
   { name: 'Ajay Yadav', phone: '9201896606', did: '07316917210', ivr: '6ac392e50b66c496', uuid: '6abe3e4363d3e779' },
   { name: 'Ram Ji Shukla', phone: '9399022063', did: '07316917208', ivr: '6abf9971d5b34126', uuid: '6abe40026e466397' },
-  { name: 'Garima', phone: '9201896603', did: '07316917216', ivr: '6ac3932d1bae5749', uuid: '6abe41494bcb1499' },
+  { name: 'Jaspal Rajput', phone: '9399022061', did: '07316917216', ivr: '6ac3932d1bae5749', uuid: '6abe41494bcb1499' },
 ];
 
 async function check() {

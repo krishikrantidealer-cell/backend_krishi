@@ -51,13 +51,14 @@ const AGENT_CONFIGS = [
     vid: '11',
   },
   {
-    name: 'Garima',
-    phoneNumber: '9201896603',
+    name: 'Jaspal Rajput',
+    phoneNumber: '9399022061',
     accountName: 'Ram Ji Shukla -6',
     did: '07316917216',
     publicIvrId: '6ac3932d1bae5749',
     userUuid: '6abe41494bcb1499',
     vid: '11',
+    companyId: '6abceacb44b44323',
   },
 ];
 
@@ -70,6 +71,24 @@ async function run() {
 
   await mongoose.connect(uri);
   console.log('Connected to MongoDB.');
+
+  await User.updateMany(
+    { phoneNumber: { $in: ['9201896603', '9201896608'] } },
+    {
+      $unset: {
+        'myoperatorConfig.did': 1,
+        'myoperatorConfig.vid': 1,
+        'myoperatorConfig.extension': 1,
+        'myoperatorConfig.uuid': 1,
+        'myoperatorConfig.userId': 1,
+        'myoperatorConfig.publicIvrId': 1,
+        'myoperatorConfig.apiKey': 1,
+        'myoperatorConfig.secretKey': 1,
+        'myoperatorConfig.token': 1,
+        'myoperatorConfig.companyId': 1
+      }
+    }
+  );
 
   for (const cfg of AGENT_CONFIGS) {
     const cleanPhone = cfg.phoneNumber.replace(/\D/g, '');
@@ -91,7 +110,7 @@ async function run() {
         userId: cfg.userUuid,
         uuid: cfg.userUuid,
         publicIvrId: cfg.publicIvrId,
-        companyId: process.env.MYOPERATOR_COMPANY_ID || '6ab0de5d51766538',
+        companyId: cfg.companyId || process.env.MYOPERATOR_COMPANY_ID || '6ab0de5d51766538',
         apiKey: process.env.MYOPERATOR_CALLING_X_API_KEY,
         secretKey: process.env.MYOPERATOR_CALLING_SECRET_KEY,
         token: process.env.MYOPERATOR_CALLING_TOKEN,
