@@ -377,7 +377,29 @@ const getMessages = async (req, res) => {
 // Send message via API (Text or Media)
 const sendConversationMessage = async (req, res, next) => {
   try {
-    const { conversationId, type, content, mediaUrl, templateName, bodyValues, languageCode, replyTo } = req.body;
+    const { conversationId, content, mediaUrl, templateName, replyTo } = req.body;
+
+    const rawType = req.body.type || (templateName ? 'template' : 'text');
+    const rawBodyValues = req.body.bodyValues || req.body.templateParams || req.body.parameters || req.body.variables || [];
+    const languageCode = req.body.languageCode || req.body.language || req.body.lang || 'en';
+
+    let bodyValues = [];
+    if (Array.isArray(rawBodyValues)) {
+      bodyValues = rawBodyValues.filter(v => v !== null && v !== undefined).map(v => String(v).trim());
+    } else if (rawBodyValues && typeof rawBodyValues === 'object') {
+      bodyValues = Object.values(rawBodyValues).filter(v => v !== null && v !== undefined).map(v => String(v).trim());
+    } else if (typeof rawBodyValues === 'string' && rawBodyValues.trim() !== '') {
+      try {
+        const parsed = JSON.parse(rawBodyValues);
+        if (Array.isArray(parsed)) {
+          bodyValues = parsed.map(v => String(v).trim());
+        } else {
+          bodyValues = [rawBodyValues.trim()];
+        }
+      } catch (_) {
+        bodyValues = rawBodyValues.split(',').map(s => s.trim());
+      }
+    }
 
     const conversation = await Conversation.findById(conversationId).populate('contactId');
     if (!conversation) {
@@ -403,8 +425,8 @@ const sendConversationMessage = async (req, res, next) => {
 
     const selectedLang = languageCode || conversation.contactId?.preferredLanguage || 'en';
 
-    let normalizedType = (type || 'text').toLowerCase();
-    if (mediaUrl) {
+    let normalizedType = (rawType || 'text').toLowerCase();
+    if (mediaUrl && normalizedType !== 'template') {
       const urlLower = mediaUrl.toString().toLowerCase();
       if (normalizedType === 'document' || urlLower.endsWith('.pdf') || urlLower.endsWith('.csv') || urlLower.endsWith('.xlsx') || urlLower.endsWith('.xls') || urlLower.endsWith('.docx') || urlLower.endsWith('.doc') || urlLower.endsWith('.txt') || urlLower.endsWith('.zip')) {
         normalizedType = 'document';
@@ -492,15 +514,11 @@ const sendConversationMessage = async (req, res, next) => {
 
     // Resolve actual message text if sending a template
     let resolvedContent = content;
-    if ((type && type.toLowerCase() === 'template') || templateName) {
+    if (normalizedType === 'template' || templateName) {
       if (!resolvedContent || resolvedContent.startsWith('[Template]')) {
         try {
           const tpl = await WhatsAppTemplate.findOne({
-            name: templateName,
-            $or: [
-              { isGlobal: true },
-              { agentId: req.user.id }
-            ]
+            name: templateName
           }).sort({ isGlobal: 1 });
 
           if (tpl && tpl.body) {
@@ -520,7 +538,7 @@ const sendConversationMessage = async (req, res, next) => {
       }
     }
 
-    const normalizedMsgType = (type || 'text').toLowerCase();
+    const normalizedMsgType = (normalizedType || 'text').toLowerCase();
     const safeContent = resolvedContent || (templateName ? `[Template] ${templateName}` : '');
 
     const messageData = {
