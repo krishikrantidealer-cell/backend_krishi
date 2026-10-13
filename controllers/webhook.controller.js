@@ -53,7 +53,8 @@ const handleWebhook = async (req, res) => {
                 phoneNumberId: value.metadata?.phone_number_id,
                 receiver: value.metadata?.display_phone_number,
                 messageId: msg.id,
-                timestamp: msg.timestamp
+                timestamp: msg.timestamp,
+                rawPayload: payload
               });
             }
           }
@@ -209,7 +210,8 @@ const handleWebhook = async (req, res) => {
         receiver: rawReceiver,
         messageId: rawMsgId,
         wabaMessageId: rawWabaId ? String(rawWabaId).trim() : undefined,
-        timestamp: rawTs
+        timestamp: rawTs,
+        rawPayload: payload
       });
       return;
     }
@@ -222,6 +224,23 @@ const handleWebhook = async (req, res) => {
         payload.message_id ||
         payload.id;
 
+      const rawWabaId =
+        innerPayload.metadata?.waba_msg_id ||
+        messageData.metadata?.waba_msg_id ||
+        messageData.waba_msg_id ||
+        payload.waba_msg_id ||
+        payload.data?.metadata?.waba_msg_id ||
+        payload.data?.waba_msg_id ||
+        payload.details?.waba_msg_id;
+
+      const errorReason =
+        messageData.metadata?.errors?.[0]?.title ||
+        messageData.metadata?.errors?.[0]?.message ||
+        messageData.metadata?.error ||
+        payload.error ||
+        payload.details?.error ||
+        null;
+
       let status = 'sent';
       if (eventType.includes('delivered') || payload.status === 'delivered') status = 'delivered';
       if (eventType.includes('read') || payload.status === 'read') status = 'read';
@@ -229,7 +248,9 @@ const handleWebhook = async (req, res) => {
 
       await processMessageStatusUpdate({
         messageId: myopMsgId,
-        status
+        status,
+        wabaMessageId: rawWabaId,
+        errorReason
       });
     }
   } catch (error) {
@@ -240,7 +261,7 @@ const handleWebhook = async (req, res) => {
 /**
  * Robust Inbound Message Processor with Direct Agent Line Mapping
  */
-async function processIncomingMessage({ phone, name, messageObj, phoneNumberId, receiver, messageId, wabaMessageId, timestamp }) {
+async function processIncomingMessage({ phone, name, messageObj, phoneNumberId, receiver, messageId, wabaMessageId, timestamp, rawPayload }) {
   if (!phone) {
     console.warn('[MyOperator Webhook] Missing phone number in incoming message');
     return;
@@ -524,30 +545,103 @@ async function processIncomingMessage({ phone, name, messageObj, phoneNumberId, 
 
   // 4b. Extract WhatsApp reply context if customer quoted a message
   let replyToData = undefined;
-  const rawContextId =
-    messageObj.context?.id ||
-    messageObj.context?.message_id ||
-    messageObj.context_id ||
-    messageObj.data?.context?.id ||
-    messageObj.data?.context_message_id;
 
-  if (rawContextId) {
+  const candidateContextIds = [
+    messageObj.reply_to,
+    messageObj.reply_data?.id,
+    messageObj.data?.context?.id,
+    messageObj.context?.id,
+    messageObj.context?.message_id,
+    messageObj.context_id,
+    messageObj.data?.context_message_id,
+    rawPayload?.reply_to,
+    rawPayload?.payload?.reply_to,
+    rawPayload?.reply_data?.id,
+    rawPayload?.payload?.reply_data?.id,
+    rawPayload?.data?.context?.id,
+    rawPayload?.payload?.data?.context?.id,
+    rawPayload?.context?.id
+  ].filter(id => id && typeof id === 'string' && id.trim().length > 0)
+   .map(id => id.trim());
+
+  const uniqueCandidateIds = [...new Set(candidateContextIds)];
+
+  let parentMsg = null;
+  if (uniqueCandidateIds.length > 0) {
     try {
-      const parentMsg = await Message.findOne({
+      parentMsg = await Message.findOne({
         $or: [
-          { myoperatorMessageId: rawContextId.toString().trim() },
-          { wabaMessageId: rawContextId.toString().trim() }
+          { myoperatorMessageId: { $in: uniqueCandidateIds } },
+          { wabaMessageId: { $in: uniqueCandidateIds } }
         ]
-      }).lean();
-      if (parentMsg) {
+      }).sort({ createdAt: -1 }).lean();
+    } catch (findErr) {
+      console.warn('[Webhook ReplyTo Lookup Warning]:', findErr.message);
+    }
+  }
+
+  if (parentMsg) {
+    const isOut = parentMsg.direction === 'outgoing';
+    replyToData = {
+      messageId: parentMsg._id.toString(),
+      senderName: isOut ? 'You' : (contact.name || 'Lead'),
+      content: parentMsg.content || (parentMsg.mediaUrl ? '[Media]' : ''),
+      mediaUrl: parentMsg.mediaUrl || null
+    };
+  } else {
+    const replyData = messageObj.reply_data || rawPayload?.payload?.reply_data || rawPayload?.reply_data;
+    const isReply = messageObj.is_reply || rawPayload?.payload?.is_reply || Boolean(replyData) || uniqueCandidateIds.length > 0;
+
+    if (isReply && (replyData || uniqueCandidateIds.length > 0)) {
+      let extractedContent = '';
+      let extractedMediaUrl = null;
+      let senderName = 'You';
+
+      if (replyData) {
+        const rData = replyData.data || {};
+        if (typeof rData.body === 'string') {
+          extractedContent = rData.body;
+        } else if (rData.body?.context) {
+          extractedContent = rData.body.context;
+        } else if (typeof rData.text === 'string') {
+          extractedContent = rData.text;
+        } else if (rData.caption) {
+          extractedContent = rData.caption;
+        } else if (replyData.type === 'template' && (rData.name || replyData.name)) {
+          extractedContent = `[Template] ${rData.name || replyData.name}`;
+        } else if (replyData.type === 'image') {
+          extractedContent = rData.caption || '[Image]';
+        } else if (replyData.type === 'document') {
+          extractedContent = rData.filename || rData.caption || '[Document]';
+        } else if (replyData.type === 'video') {
+          extractedContent = rData.caption || '[Video]';
+        } else if (replyData.type === 'audio') {
+          extractedContent = '[Audio]';
+        }
+        extractedMediaUrl = rData.media_url || rData.url || rData.link || null;
+      }
+
+      const contextFrom = messageObj.data?.context?.from || rawPayload?.payload?.data?.context?.from || messageObj.context?.from;
+      if (contextFrom) {
+        const cleanContextFrom = contextFrom.replace(/\D/g, '').replace(/^91/, '');
+        const cleanContactPhone = (contact.phone || '').replace(/\D/g, '').replace(/^91/, '');
+        if (cleanContactPhone && cleanContextFrom === cleanContactPhone) {
+          senderName = contact.name || 'Lead';
+        } else {
+          senderName = 'You';
+        }
+      }
+
+      const primaryContextId = uniqueCandidateIds[0] || (replyData?.id ? String(replyData.id) : null);
+      if (extractedContent || extractedMediaUrl || primaryContextId) {
         replyToData = {
-          messageId: parentMsg._id.toString(),
-          senderName: parentMsg.direction === 'outgoing' ? 'You' : (contact.name || 'Lead'),
-          content: parentMsg.content || (parentMsg.mediaUrl ? '[Media]' : ''),
-          mediaUrl: parentMsg.mediaUrl
+          messageId: primaryContextId || null,
+          senderName: senderName,
+          content: extractedContent || (extractedMediaUrl ? '[Media]' : ''),
+          mediaUrl: extractedMediaUrl
         };
       }
-    } catch (_) {}
+    }
   }
 
   let message;
@@ -606,20 +700,31 @@ async function processIncomingMessage({ phone, name, messageObj, phoneNumberId, 
 /**
  * Message Delivery & Status Update Processor
  */
-async function processMessageStatusUpdate({ messageId, status }) {
-  if (!messageId) return;
+async function processMessageStatusUpdate({ messageId, status, wabaMessageId, errorReason }) {
+  if (!messageId && !wabaMessageId) return;
 
   const cleanStatus = (status || '').toString().toLowerCase().trim();
-  const cleanId = messageId.toString().trim();
+  const cleanId = messageId ? messageId.toString().trim() : null;
+  const cleanWaba = wabaMessageId ? wabaMessageId.toString().trim() : null;
+
+  const orQueries = [];
+  if (cleanId) {
+    orQueries.push({ myoperatorMessageId: cleanId });
+    orQueries.push({ wabaMessageId: cleanId });
+  }
+  if (cleanWaba) {
+    orQueries.push({ wabaMessageId: cleanWaba });
+    orQueries.push({ myoperatorMessageId: cleanWaba });
+  }
+
+  const updateFields = {};
+  if (cleanStatus) updateFields.status = cleanStatus;
+  if (cleanWaba) updateFields.wabaMessageId = cleanWaba;
+  if (errorReason) updateFields.errorReason = errorReason;
 
   const updatedMsg = await Message.findOneAndUpdate(
-    {
-      $or: [
-        { myoperatorMessageId: cleanId },
-        { wabaMessageId: cleanId }
-      ]
-    },
-    { status: cleanStatus },
+    { $or: orQueries },
+    { $set: updateFields },
     { returnDocument: 'after' }
   );
 
@@ -629,11 +734,12 @@ async function processMessageStatusUpdate({ messageId, status }) {
       data: {
         conversationId: updatedMsg.conversationId,
         messageId: updatedMsg._id,
-        status: cleanStatus
+        status: cleanStatus || updatedMsg.status,
+        errorReason: errorReason || updatedMsg.errorReason
       }
     };
     wsService.broadcastToRoles(['admin', 'sales'], broadcastPayload);
-    console.log(`[MyOperator Webhook] ✅ Message ${cleanId} status updated to ${cleanStatus}`);
+    console.log(`[MyOperator Webhook] ✅ Message ${cleanId || cleanWaba} status updated to ${cleanStatus}`);
   }
 }
 
