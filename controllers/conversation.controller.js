@@ -347,20 +347,28 @@ const getMessages = async (req, res) => {
       return String(a._id).localeCompare(String(b._id));
     });
 
-    // Auto-heal conversation's lastMessage and lastMessageAt if needed
+    // Auto-heal conversation's lastMessage, lastMessageAt, and lastIncomingMessageAt if needed
     if (messages.length > 0) {
       const latestMsg = messages[messages.length - 1];
+      const latestIncoming = [...messages].reverse().find(m => m.direction === 'incoming');
+      const healFields = {};
       if (latestMsg) {
         const latestMsgType = ['text', 'image', 'document', 'audio', 'video', 'template'].includes(latestMsg.type) ? latestMsg.type : 'text';
         const latestContent = latestMsg.content || (latestMsg.mediaUrl ? `[${latestMsgType}]` : '');
-        Conversation.findByIdAndUpdate(id, {
-          lastMessage: {
-            type: latestMsgType,
-            content: latestContent,
-            mediaUrl: latestMsg.mediaUrl
-          },
-          lastMessageAt: latestMsg.createdAt
-        }).catch(() => {});
+        healFields.lastMessage = {
+          type: latestMsgType,
+          content: latestContent,
+          mediaUrl: latestMsg.mediaUrl
+        };
+        healFields.lastMessageAt = latestMsg.createdAt;
+      }
+      if (latestIncoming) {
+        if (!conversation.lastIncomingMessageAt || new Date(latestIncoming.createdAt).getTime() > new Date(conversation.lastIncomingMessageAt).getTime()) {
+          healFields.lastIncomingMessageAt = latestIncoming.createdAt;
+        }
+      }
+      if (Object.keys(healFields).length > 0) {
+        Conversation.findByIdAndUpdate(id, { $set: healFields }).catch(() => {});
       }
     }
 
