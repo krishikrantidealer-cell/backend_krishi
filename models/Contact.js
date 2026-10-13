@@ -30,6 +30,11 @@ const contactSchema = new mongoose.Schema({
     default: 'en',
     index: true
   },
+  isDeleted: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
   createdAt: {
     type: Date,
     default: Date.now

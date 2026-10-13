@@ -535,6 +535,32 @@ class UserService {
       console.error('[Session Invalidation Error] Failed to delete user sessions:', sessionErr.message);
     }
 
+    // Sync Contact & Conversation deletion status
+    try {
+      const Contact = require('../models/Contact');
+      const Conversation = require('../models/Conversation');
+      const { normalizeIndianPhone, getPhoneQueryVariants } = require('../utils/phone');
+      const rawPhone = (user.phoneNumber || '').replace(/_deleted_\d+$/, '');
+      const clean10 = normalizeIndianPhone(rawPhone);
+      const variants = getPhoneQueryVariants(clean10);
+      if (variants.length > 0) {
+        await Contact.updateMany(
+          { phone: { $in: variants } },
+          { $set: { isDeleted: true }, $addToSet: { tags: 'deleted' } }
+        );
+        const contactDocs = await Contact.find({ phone: { $in: variants } }).select('_id');
+        if (contactDocs.length > 0) {
+          const cIds = contactDocs.map(c => c._id);
+          await Conversation.updateMany(
+            { contactId: { $in: cIds } },
+            { $set: { isDeleted: true } }
+          );
+        }
+      }
+    } catch (syncErr) {
+      console.warn('[deleteUser] Contact/Conversation sync error:', syncErr.message);
+    }
+
     return true;
   }
 
@@ -576,6 +602,32 @@ class UserService {
     user.deletedByAdminId = undefined;
     user.deletedByAdminName = undefined;
     await user.save();
+
+    // Sync Contact & Conversation restoration status
+    try {
+      const Contact = require('../models/Contact');
+      const Conversation = require('../models/Conversation');
+      const { normalizeIndianPhone, getPhoneQueryVariants } = require('../utils/phone');
+      const clean10 = normalizeIndianPhone(restoredPhone);
+      const variants = getPhoneQueryVariants(clean10);
+      if (variants.length > 0) {
+        await Contact.updateMany(
+          { phone: { $in: variants } },
+          { $set: { isDeleted: false }, $pull: { tags: 'deleted' } }
+        );
+        const contactDocs = await Contact.find({ phone: { $in: variants } }).select('_id');
+        if (contactDocs.length > 0) {
+          const cIds = contactDocs.map(c => c._id);
+          await Conversation.updateMany(
+            { contactId: { $in: cIds } },
+            { $set: { isDeleted: false } }
+          );
+        }
+      }
+    } catch (syncErr) {
+      console.warn('[restoreUser] Contact/Conversation sync error:', syncErr.message);
+    }
+
     return user;
   }
 

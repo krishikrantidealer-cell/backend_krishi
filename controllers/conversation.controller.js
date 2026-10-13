@@ -205,6 +205,52 @@ const getConversations = async (req, res) => {
       dedupedConversations.push(conv);
     }
 
+    // Enrich with soft-deleted status from User collection for complete consistency
+    try {
+      const cleanPhones = dedupedConversations
+        .map(c => normalizeIndianPhone(c.contactPhone || c.contactId?.phone))
+        .filter(Boolean);
+
+      if (cleanPhones.length > 0) {
+        const regexList = cleanPhones.map(p => new RegExp('^' + p));
+        const matchedUsers = await User.find({
+          phoneNumber: { $in: regexList },
+          isDeleted: true
+        }).select('phoneNumber isDeleted').lean();
+
+        if (matchedUsers.length > 0) {
+          const deletedPhoneSet = new Set(
+            matchedUsers.map(u => {
+              const raw = String(u.phoneNumber || '').split('_deleted_')[0];
+              return normalizeIndianPhone(raw);
+            }).filter(Boolean)
+          );
+
+          for (const conv of dedupedConversations) {
+            const p10 = normalizeIndianPhone(conv.contactPhone || conv.contactId?.phone);
+            const isAlreadyMarkedDeleted = conv.isDeleted === true ||
+              conv.contactId?.isDeleted === true ||
+              (Array.isArray(conv.contactId?.tags) && conv.contactId.tags.includes('deleted'));
+
+            if ((p10 && deletedPhoneSet.has(p10)) || isAlreadyMarkedDeleted) {
+              conv.isDeleted = true;
+              if (conv.contactId) {
+                conv.contactId.isDeleted = true;
+              }
+            }
+          }
+        } else {
+          for (const conv of dedupedConversations) {
+            if (conv.contactId?.isDeleted === true || (Array.isArray(conv.contactId?.tags) && conv.contactId.tags.includes('deleted'))) {
+              conv.isDeleted = true;
+            }
+          }
+        }
+      }
+    } catch (enrichErr) {
+      console.warn('[getConversations] Deleted enrichment warning:', enrichErr.message);
+    }
+
     res.json({
       success: true,
       data: dedupedConversations,
@@ -820,9 +866,24 @@ const startConversation = async (req, res) => {
       await conversation.save();
     }
 
-    const populated = await Conversation.findById(conversation._id)
+    let populated = await Conversation.findById(conversation._id)
       .populate('contactId')
-      .populate('assignedTo', 'firstName lastName email');
+      .populate('assignedTo', 'firstName lastName email')
+      .lean();
+
+    if (existingUser?.isDeleted) {
+      populated.isDeleted = true;
+      if (populated.contactId) populated.contactId.isDeleted = true;
+    } else {
+      const userDel = await User.findOne({
+        phoneNumber: new RegExp('^' + cleanPhone),
+        isDeleted: true
+      }).select('isDeleted').lean();
+      if (userDel) {
+        populated.isDeleted = true;
+        if (populated.contactId) populated.contactId.isDeleted = true;
+      }
+    }
 
     res.json({ success: true, data: populated });
   } catch (error) {

@@ -53,6 +53,11 @@ const conversationSchema = new mongoose.Schema({
   contactPhone: {
     type: String,
     trim: true
+  },
+  isDeleted: {
+    type: Boolean,
+    default: false,
+    index: true
   }
 }, { timestamps: true });
 
