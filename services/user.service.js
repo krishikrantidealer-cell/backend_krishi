@@ -53,6 +53,15 @@ class UserService {
     if (filters.salesScopeCondition) {
       andConditions.push(filters.salesScopeCondition);
     }
+    if (filters.hasMyOperator === 'true' || filters.hasMyOperator === true) {
+      andConditions.push({
+        $or: [
+          { 'myoperatorConfig.companyId': { $exists: true, $nin: [null, ''] } },
+          { 'myoperatorConfig.token': { $exists: true, $nin: [null, ''] } },
+          { 'myoperatorConfig.did': { $exists: true, $nin: [null, ''] } }
+        ]
+      });
+    }
 
     // Support database keyword search
     if (filters.search) {

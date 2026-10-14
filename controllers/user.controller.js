@@ -233,6 +233,7 @@ exports.getAllUsers = async (req, res, next) => {
       search: req.query.search,
       startDate: req.query.startDate,
       endDate: req.query.endDate,
+      hasMyOperator: req.query.hasMyOperator,
       page: req.query.page,
       limit: req.query.limit
     };
@@ -269,7 +270,7 @@ exports.getAllUsers = async (req, res, next) => {
       }
     }
     const { users, totalCount, hasMore } = await userService.getAllUsers(filters);
-    res.json({ success: true, users, totalCount, hasMore });
+    res.json({ success: true, users, data: users, totalCount, hasMore });
   } catch (error) {
     next(error);
   }
