@@ -94,6 +94,71 @@ const syncCallLogs = async (req, res) => {
   }
 };
 
+
+// ── Strict IST (UTC+05:30) Timezone Date Resolver ───────────────────────────
+function resolveDateRange({ date, startDate, endDate, timeframe }) {
+  if (timeframe === 'All Time' || timeframe === 'all') return null;
+
+  if (startDate || endDate) {
+    let start = startDate ? new Date(startDate) : new Date(0);
+    let end = endDate ? new Date(endDate) : new Date();
+    if (typeof startDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(startDate.trim())) {
+      start = new Date(startDate.trim() + 'T00:00:00.000+05:30');
+    }
+    if (typeof endDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(endDate.trim())) {
+      end = new Date(endDate.trim() + 'T23:59:59.999+05:30');
+    }
+    return { start, end };
+  }
+
+  const now = new Date();
+  const istOffsetMs = 5.5 * 60 * 60 * 1000;
+  const istNow = new Date(now.getTime() + istOffsetMs);
+  const yyyy = istNow.getUTCFullYear();
+  const mm = String(istNow.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(istNow.getUTCDate()).padStart(2, '0');
+  const todayStr = yyyy + '-' + mm + '-' + dd;
+
+  if (date === 'today' || timeframe === 'today' || timeframe === 'Today' || date === todayStr) {
+    return {
+      start: new Date(todayStr + 'T00:00:00.000+05:30'),
+      end: new Date(todayStr + 'T23:59:59.999+05:30')
+    };
+  }
+
+  if (date === 'yesterday' || timeframe === 'yesterday' || timeframe === 'Yesterday') {
+    const istYesterday = new Date(istNow.getTime() - 24 * 60 * 60 * 1000);
+    const yStr = istYesterday.getUTCFullYear() + '-' + String(istYesterday.getUTCMonth() + 1).padStart(2, '0') + '-' + String(istYesterday.getUTCDate()).padStart(2, '0');
+    return {
+      start: new Date(yStr + 'T00:00:00.000+05:30'),
+      end: new Date(yStr + 'T23:59:59.999+05:30')
+    };
+  }
+
+  if (timeframe === 'week' || timeframe === 'Last 1 Week' || timeframe === 'last_7_days') {
+    return {
+      start: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000),
+      end: now
+    };
+  }
+
+  if (timeframe === 'month' || timeframe === 'Last 1 Month' || timeframe === 'last_30_days') {
+    return {
+      start: new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000),
+      end: now
+    };
+  }
+
+  if (date && /^\d{4}-\d{2}-\d{2}$/.test(date.trim())) {
+    return {
+      start: new Date(date.trim() + 'T00:00:00.000+05:30'),
+      end: new Date(date.trim() + 'T23:59:59.999+05:30')
+    };
+  }
+
+  return null;
+}
+
 /**
  * Fetch Call Logs with Aggregated Telephony Metrics & Leaderboards
  */
@@ -101,10 +166,25 @@ const getCallLogs = async (req, res) => {
   try {
     // Proactively kick off sync in background
     triggerBackgroundSync();
-    const { search, customerPhone, agentId, type, status, view, includeDeleted, page = 1, limit = 25 } = req.query;
+    const {
+      search,
+      customerPhone,
+      agentId,
+      type,
+      status,
+      view,
+      includeDeleted,
+      date,
+      startDate,
+      endDate,
+      timeframe,
+      page = 1,
+      limit = 25
+    } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
     const andConditions = [];
+    const dateRange = resolveDateRange({ date, startDate, endDate, timeframe });
 
     // ── Industrial Soft Delete Filter ──────────────────────────────────────────
     if (view === 'trash' || view === 'deleted') {
@@ -163,8 +243,16 @@ const getCallLogs = async (req, res) => {
       }
     }
 
+    // ── Strict IST Timeframe / Date Range Filter ─────────────────────────────
+    if (dateRange && dateRange.start && dateRange.end) {
+      andConditions.push({ createdAt: { $gte: dateRange.start, $lte: dateRange.end } });
+    }
+
     // Role Security: Sales agents strictly ONLY see calls they made (outbound) or received (inbound)
     let metricsMatch = { isDeleted: { $ne: true } };
+    if (dateRange && dateRange.start && dateRange.end) {
+      metricsMatch.createdAt = { $gte: dateRange.start, $lte: dateRange.end };
+    }
 
     if (req.user.role === 'sales') {
       const agentUser = await User.findById(req.user.id);
@@ -202,14 +290,14 @@ const getCallLogs = async (req, res) => {
 
       // Metrics strictly scoped to sales agent's own calls
       metricsMatch = {
-        isDeleted: { $ne: true },
+        ...metricsMatch,
         $or: salesAgentOr
       };
-    } else if (agentId && agentId !== 'null' && agentId !== 'undefined' && agentId.trim() !== '') {
+    } else if (agentId && agentId !== 'null' && agentId !== 'undefined' && agentId.trim() !== '' && agentId !== 'all') {
       andConditions.push({ agentId });
       if (mongoose.Types.ObjectId.isValid(agentId)) {
         metricsMatch = {
-          isDeleted: { $ne: true },
+          ...metricsMatch,
           agentId: new mongoose.Types.ObjectId(agentId)
         };
       }
@@ -219,7 +307,7 @@ const getCallLogs = async (req, res) => {
 
     const [callLogs, total, summaryResult, leaderboardResult] = await Promise.all([
       CallLog.find(query)
-        .populate('agentId', 'firstName lastName email phoneNumber')
+        .populate('agentId', 'firstName lastName email phoneNumber myoperatorConfig')
         .populate('contactId', 'name phone preferredLanguage')
         .sort({ createdAt: -1, _id: -1 })
         .skip(skip)
@@ -252,12 +340,45 @@ const getCallLogs = async (req, res) => {
                 ]
               }
             },
+            answeredCount: {
+              $sum: {
+                $cond: [
+                  {
+                    $or: [
+                      { $eq: ['$status', 'answered'] },
+                      { $gt: ['$durationSeconds', 0] }
+                    ]
+                  },
+                  1,
+                  0
+                ]
+              }
+            },
             missedCount: {
               $sum: {
                 $cond: [{ $in: ['$status', ['missed', 'no-answer']] }, 1, 0]
               }
             },
-            totalSeconds: { $sum: { $ifNull: ['$durationSeconds', 0] } }
+            totalSeconds: { $sum: { $ifNull: ['$durationSeconds', 0] } },
+            uniqueCustomers: { $addToSet: '$customerPhone' }
+          }
+        },
+        {
+          $project: {
+            totalCalls: 1,
+            inboundCount: 1,
+            outboundCount: 1,
+            answeredCount: 1,
+            missedCount: 1,
+            totalSeconds: 1,
+            uniqueCustomersCount: { $size: '$uniqueCustomers' },
+            answerRatePercent: {
+              $cond: [
+                { $gt: ['$totalCalls', 0] },
+                { $round: [{ $multiply: [{ $divide: ['$answeredCount', '$totalCalls'] }, 100] }, 1] },
+                0
+              ]
+            }
           }
         }
       ]),
@@ -270,8 +391,45 @@ const getCallLogs = async (req, res) => {
             totalCalls: { $sum: 1 },
             talkTimeSeconds: { $sum: { $ifNull: ['$durationSeconds', 0] } },
             answeredCalls: {
-              $sum: { $cond: [{ $eq: ['$status', 'answered'] }, 1, 0] }
-            }
+              $sum: {
+                $cond: [
+                  {
+                    $or: [
+                      { $eq: ['$status', 'answered'] },
+                      { $gt: ['$durationSeconds', 0] }
+                    ]
+                  },
+                  1,
+                  0
+                ]
+              }
+            },
+            outboundCalls: {
+              $sum: {
+                $cond: [
+                  { $in: ['$direction', ['outbound']] },
+                  1,
+                  { $cond: [{ $eq: ['$type', 'outbound'] }, 1, 0] }
+                ]
+              }
+            },
+            inboundCalls: {
+              $sum: {
+                $cond: [
+                  { $in: ['$direction', ['inbound']] },
+                  1,
+                  { $cond: [{ $eq: ['$type', 'inbound'] }, 1, 0] }
+                ]
+              }
+            },
+            missedCalls: {
+              $sum: {
+                $cond: [{ $in: ['$status', ['missed', 'no-answer']] }, 1, 0]
+              }
+            },
+            firstCallAt: { $min: '$createdAt' },
+            lastCallAt: { $max: '$createdAt' },
+            uniqueCustomers: { $addToSet: '$customerPhone' }
           }
         },
         {
@@ -297,13 +455,36 @@ const getCallLogs = async (req, res) => {
                 }
               }
             },
+            agentEmail: { $ifNull: ['$agent.email', ''] },
+            agentPhone: { $ifNull: ['$agent.phoneNumber', ''] },
+            myoperatorConfig: '$agent.myoperatorConfig',
             totalCalls: 1,
+            outboundCalls: 1,
+            inboundCalls: 1,
+            answeredCalls: 1,
+            missedCalls: 1,
             talkTimeSeconds: 1,
-            answeredCalls: 1
+            avgHandleTimeSeconds: {
+              $cond: [
+                { $gt: ['$answeredCalls', 0] },
+                { $round: [{ $divide: ['$talkTimeSeconds', '$answeredCalls'] }, 0] },
+                0
+              ]
+            },
+            answerRatePercent: {
+              $cond: [
+                { $gt: ['$totalCalls', 0] },
+                { $round: [{ $multiply: [{ $divide: ['$answeredCalls', '$totalCalls'] }, 100] }, 1] },
+                0
+              ]
+            },
+            firstCallAt: 1,
+            lastCallAt: 1,
+            uniqueCustomersCount: { $size: '$uniqueCustomers' }
           }
         },
-        { $sort: { talkTimeSeconds: -1 } },
-        { $limit: 25 }
+        { $sort: { talkTimeSeconds: -1, totalCalls: -1 } },
+        { $limit: 50 }
       ])
     ]);
 
@@ -346,8 +527,11 @@ const getCallLogs = async (req, res) => {
       totalCalls: 0,
       inboundCount: 0,
       outboundCount: 0,
+      answeredCount: 0,
       missedCount: 0,
-      totalSeconds: 0
+      totalSeconds: 0,
+      uniqueCustomersCount: 0,
+      answerRatePercent: 0
     };
 
     res.json({
@@ -358,9 +542,17 @@ const getCallLogs = async (req, res) => {
         totalCalls: metricsSummary.totalCalls || 0,
         inboundCount: metricsSummary.inboundCount || 0,
         outboundCount: metricsSummary.outboundCount || 0,
+        answeredCount: metricsSummary.answeredCount || 0,
         missedCount: metricsSummary.missedCount || 0,
         totalSeconds: metricsSummary.totalSeconds || 0,
-        leaderboard: leaderboardResult || []
+        uniqueCustomersCount: metricsSummary.uniqueCustomersCount || 0,
+        answerRatePercent: metricsSummary.answerRatePercent || 0,
+        leaderboard: leaderboardResult || [],
+        dateRange: dateRange ? {
+          start: dateRange.start,
+          end: dateRange.end,
+          timeframe: timeframe || date || null
+        } : null
       }
     });
   } catch (error) {
@@ -368,9 +560,6 @@ const getCallLogs = async (req, res) => {
   }
 };
 
-/**
- * Save Post-Call Disposition & Schedule Follow-Up (Feature #1)
- */
 const saveCallDisposition = async (req, res) => {
   try {
     const { callLogId, userDisposition, followUpDate, followUpNote, notes } = req.body;
@@ -1439,9 +1628,265 @@ const clearAllCallLogs = async (req, res) => {
   }
 };
 
+
+/**
+ * Industrial CSV Export for Telephony:
+ * reportType = 'agent_summary' -> 1 row per agent for the selected date
+ * reportType = 'all_calls'     -> All raw call detail records (up to 10k)
+ */
+const exportCallLogs = async (req, res) => {
+  try {
+    const {
+      reportType = 'agent_summary',
+      date,
+      startDate,
+      endDate,
+      timeframe,
+      agentId,
+      type,
+      status,
+      search
+    } = req.query;
+
+    const dateRange = resolveDateRange({ date, startDate, endDate, timeframe });
+    let metricsMatch = { isDeleted: { $ne: true } };
+
+    if (dateRange && dateRange.start && dateRange.end) {
+      metricsMatch.createdAt = { $gte: dateRange.start, $lte: dateRange.end };
+    }
+
+    if (req.user.role === 'sales') {
+      metricsMatch.agentId = new mongoose.Types.ObjectId(req.user.id);
+    } else if (agentId && agentId !== 'all' && mongoose.Types.ObjectId.isValid(agentId)) {
+      metricsMatch.agentId = new mongoose.Types.ObjectId(agentId);
+    }
+
+    const formatDuration = (secs) => {
+      if (!secs || secs <= 0) return '0s';
+      const h = Math.floor(secs / 3600);
+      const m = Math.floor((secs % 3600) / 60);
+      const s = secs % 60;
+      if (h > 0) return `${h}h ${m}m ${s}s`;
+      if (m > 0) return `${m}m ${s}s`;
+      return `${s}s`;
+    };
+
+    const formatIst = (d) => {
+      if (!d) return 'N/A';
+      try {
+        return new Date(d).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true });
+      } catch (_) {
+        return String(d);
+      }
+    };
+
+    const escapeCsv = (str) => {
+      if (str === null || str === undefined) return '""';
+      const s = String(str).replace(/"/g, '""');
+      return `"${s}"`;
+    };
+
+    if (reportType === 'agent_summary') {
+      const summaryList = await CallLog.aggregate([
+        { $match: { ...metricsMatch, agentId: { $ne: null } } },
+        {
+          $group: {
+            _id: '$agentId',
+            totalCalls: { $sum: 1 },
+            talkTimeSeconds: { $sum: { $ifNull: ['$durationSeconds', 0] } },
+            answeredCalls: {
+              $sum: {
+                $cond: [
+                  { $or: [{ $eq: ['$status', 'answered'] }, { $gt: ['$durationSeconds', 0] }] },
+                  1,
+                  0
+                ]
+              }
+            },
+            outboundCalls: {
+              $sum: {
+                $cond: [
+                  { $in: ['$direction', ['outbound']] },
+                  1,
+                  { $cond: [{ $eq: ['$type', 'outbound'] }, 1, 0] }
+                ]
+              }
+            },
+            inboundCalls: {
+              $sum: {
+                $cond: [
+                  { $in: ['$direction', ['inbound']] },
+                  1,
+                  { $cond: [{ $eq: ['$type', 'inbound'] }, 1, 0] }
+                ]
+              }
+            },
+            missedCalls: {
+              $sum: { $cond: [{ $in: ['$status', ['missed', 'no-answer']] }, 1, 0] }
+            },
+            firstCallAt: { $min: '$createdAt' },
+            lastCallAt: { $max: '$createdAt' },
+            uniqueCustomers: { $addToSet: '$customerPhone' }
+          }
+        },
+        {
+          $lookup: {
+            from: 'users',
+            localField: '_id',
+            foreignField: '_id',
+            as: 'agent'
+          }
+        },
+        { $unwind: { path: '$agent', preserveNullAndEmptyArrays: true } },
+        {
+          $project: {
+            agentName: {
+              $trim: {
+                input: {
+                  $concat: [{ $ifNull: ['$agent.firstName', ''] }, ' ', { $ifNull: ['$agent.lastName', ''] }]
+                }
+              }
+            },
+            agentEmail: { $ifNull: ['$agent.email', ''] },
+            agentPhone: { $ifNull: ['$agent.phoneNumber', ''] },
+            totalCalls: 1,
+            outboundCalls: 1,
+            inboundCalls: 1,
+            answeredCalls: 1,
+            missedCalls: 1,
+            talkTimeSeconds: 1,
+            firstCallAt: 1,
+            lastCallAt: 1,
+            uniqueCustomersCount: { $size: '$uniqueCustomers' }
+          }
+        },
+        { $sort: { talkTimeSeconds: -1, totalCalls: -1 } }
+      ]);
+
+      const headers = [
+        'Agent Name',
+        'Phone Number',
+        'Email',
+        'Total Calls',
+        'Outbound Dials',
+        'Inbound Calls',
+        'Answered Calls',
+        'Missed / Unanswered',
+        'Answer Rate %',
+        'Total Talk Time',
+        'Avg Handle Time (AHT)',
+        'Shift First Call (IST)',
+        'Shift Last Call (IST)',
+        'Unique Leads Contacted'
+      ];
+
+      const rows = summaryList.map(a => {
+        const ansRate = a.totalCalls > 0 ? ((a.answeredCalls / a.totalCalls) * 100).toFixed(1) + '%' : '0%';
+        const aht = a.answeredCalls > 0 ? Math.round(a.talkTimeSeconds / a.answeredCalls) + 's' : '0s';
+        return [
+          escapeCsv(a.agentName || 'Agent'),
+          escapeCsv(a.agentPhone),
+          escapeCsv(a.agentEmail),
+          a.totalCalls,
+          a.outboundCalls,
+          a.inboundCalls,
+          a.answeredCalls,
+          a.missedCalls,
+          escapeCsv(ansRate),
+          escapeCsv(formatDuration(a.talkTimeSeconds)),
+          escapeCsv(aht),
+          escapeCsv(formatIst(a.firstCallAt)),
+          escapeCsv(formatIst(a.lastCallAt)),
+          a.uniqueCustomersCount
+        ].join(',');
+      });
+
+      const csvContent = [headers.join(','), ...rows].join('\n');
+      const filename = `sales_agents_daily_report_${(date || timeframe || 'summary').replace(/[^a-zA-Z0-9_-]/g, '_')}.csv`;
+
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      return res.status(200).send(csvContent);
+    }
+
+    // Default: Export All Raw Call Detail Records for the date
+    const andConditions = [{ isDeleted: { $ne: true } }];
+    if (dateRange && dateRange.start && dateRange.end) {
+      andConditions.push({ createdAt: { $gte: dateRange.start, $lte: dateRange.end } });
+    }
+    if (req.user.role === 'sales') {
+      andConditions.push({ agentId: req.user.id });
+    } else if (agentId && agentId !== 'all' && mongoose.Types.ObjectId.isValid(agentId)) {
+      andConditions.push({ agentId });
+    }
+    if (type && type !== 'all') {
+      andConditions.push({ $or: [{ direction: type }, { type: type }] });
+    }
+    if (status && status !== 'all') {
+      if (status === 'missed') andConditions.push({ status: { $in: ['missed', 'no-answer'] } });
+      else if (status === 'answered') andConditions.push({ $or: [{ status: 'answered' }, { durationSeconds: { $gt: 0 } }] });
+      else andConditions.push({ status });
+    }
+
+    const logs = await CallLog.find({ $and: andConditions })
+      .populate('agentId', 'firstName lastName email phoneNumber')
+      .populate('contactId', 'name phone')
+      .sort({ createdAt: -1 })
+      .limit(10000)
+      .lean();
+
+    const cdrHeaders = [
+      'Call Date & Time (IST)',
+      'Direction',
+      'Customer Phone',
+      'Customer Name',
+      'Sales Agent Name',
+      'Sales Agent Phone',
+      'Call Status',
+      'Duration (Mins:Secs)',
+      'Duration (Seconds)',
+      'Outcome Disposition',
+      'Follow Up Date',
+      'Agent Notes',
+      'Recording URL'
+    ];
+
+    const cdrRows = logs.map(l => {
+      const agentName = l.agentId ? `${l.agentId.firstName || ''} ${l.agentId.lastName || ''}`.trim() : (l.agentPhone || 'Unassigned');
+      const contactName = l.contactId?.name || '';
+      return [
+        escapeCsv(formatIst(l.createdAt)),
+        escapeCsv(l.direction || l.type || 'outbound'),
+        escapeCsv(l.customerPhone),
+        escapeCsv(contactName),
+        escapeCsv(agentName),
+        escapeCsv(l.agentPhone || l.agentId?.phoneNumber || ''),
+        escapeCsv(l.status),
+        escapeCsv(formatDuration(l.durationSeconds)),
+        l.durationSeconds || 0,
+        escapeCsv(l.userDisposition || l.disposition || ''),
+        escapeCsv(formatIst(l.followUpDate)),
+        escapeCsv((l.notes || l.callSummary || '').replace(/\n/g, ' ')),
+        escapeCsv(l.recordingUrl || '')
+      ].join(',');
+    });
+
+    const csvContent = [cdrHeaders.join(','), ...cdrRows].join('\n');
+    const filename = `call_records_${(date || timeframe || 'export').replace(/[^a-zA-Z0-9_-]/g, '_')}.csv`;
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    return res.status(200).send(csvContent);
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+
 module.exports = {
   triggerOutboundCall,
   getCallLogs,
+  exportCallLogs,
   syncCallLogs,
   saveCallDisposition,
   handleCallWebhook,

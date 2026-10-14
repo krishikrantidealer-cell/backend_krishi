@@ -31,6 +31,8 @@ router.get('/webhooks/myoperator/calls', (req, res) => res.status(200).send('OK'
 router.use(protect);
 router.get('/', controller.getCallLogs);
 router.get('/logs', controller.getCallLogs);
+router.get('/export', controller.exportCallLogs);
+router.get('/logs/export', controller.exportCallLogs);
 router.post('/trigger', controller.triggerOutboundCall);
 router.post('/outbound', controller.triggerOutboundCall);
 router.post('/end', controller.endCall);
