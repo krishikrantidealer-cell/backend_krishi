@@ -592,7 +592,12 @@ const saveCallDisposition = async (req, res) => {
     }
 
     if (userDisposition) callLog.userDisposition = userDisposition;
-    if (followUpDate) callLog.followUpDate = new Date(followUpDate);
+    if (followUpDate) {
+      callLog.followUpDate = new Date(followUpDate);
+      // A newly scheduled follow-up is pending again
+      callLog.followUpCompletedAt = null;
+      callLog.followUpCompletedBy = null;
+    }
     if (followUpNote) callLog.followUpNote = followUpNote;
     if (notes) callLog.notes = notes;
 
@@ -1883,6 +1888,231 @@ const exportCallLogs = async (req, res) => {
 };
 
 
+// ═════════════════════════════════════════════════════════════════════════════
+// FOLLOW-UP TRACKER
+// A follow-up is PENDING when:
+//   • it is the most recent scheduled follow-up for that customer (older ones are superseded),
+//   • it was not manually closed (followUpCompletedAt == null), and
+//   • no ANSWERED call to the same customer happened after it was scheduled (auto-resolved).
+// Buckets (IST): overdue = due time already passed, today = due later today, upcoming = after today.
+// ═════════════════════════════════════════════════════════════════════════════
+
+async function buildSalesAgentScope(userId) {
+  const agentUser = await User.findById(userId).lean();
+  const scope = [{ agentId: new mongoose.Types.ObjectId(userId) }];
+  const phoneDigits = agentUser?.phoneNumber ? agentUser.phoneNumber.replace(/\D/g, '').replace(/^91/, '') : '';
+  if (phoneDigits) scope.push({ agentPhone: { $regex: phoneDigits } });
+  return scope;
+}
+
+function istEndOfToday() {
+  const istNow = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+  const ymd = istNow.toISOString().slice(0, 10);
+  return new Date(`${ymd}T23:59:59.999+05:30`);
+}
+
+const getFollowUps = async (req, res) => {
+  try {
+    const { agentId, bucket = 'all', limit = 200 } = req.query;
+    const now = new Date();
+    const endOfToday = istEndOfToday();
+
+    const match = {
+      isDeleted: { $ne: true },
+      followUpDate: { $ne: null },
+      followUpCompletedAt: null
+    };
+
+    // Role security: sales agents only see their own follow-ups
+    if (req.user.role === 'sales') {
+      match.$or = await buildSalesAgentScope(req.user.id);
+    } else if (agentId && agentId !== 'all' && mongoose.Types.ObjectId.isValid(agentId)) {
+      match.agentId = new mongoose.Types.ObjectId(agentId);
+    }
+
+    const itemsMatch = ['overdue', 'today', 'upcoming'].includes(bucket) ? { bucket } : {};
+
+    const [result] = await CallLog.aggregate([
+      { $match: match },
+      { $sort: { createdAt: -1 } },
+      {
+        $addFields: {
+          phoneKey: {
+            $let: {
+              vars: { p: { $ifNull: ['$customerPhone', ''] } },
+              in: {
+                $substrCP: [
+                  '$$p',
+                  { $max: [0, { $subtract: [{ $strLenCP: '$$p' }, 10] }] },
+                  10
+                ]
+              }
+            }
+          }
+        }
+      },
+      // Keep only the latest scheduled follow-up per customer
+      { $group: { _id: '$phoneKey', doc: { $first: '$$ROOT' } } },
+      { $replaceRoot: { newRoot: '$doc' } },
+      // Auto-resolve: was there an answered call to this customer after it was scheduled?
+      {
+        $lookup: {
+          from: CallLog.collection.name,
+          let: { phone: '$customerPhone', key: '$phoneKey', scheduledAt: '$updatedAt' },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    {
+                      $in: ['$customerPhone', [
+                        '$$phone',
+                        '$$key',
+                        { $concat: ['91', '$$key'] },
+                        { $concat: ['+91', '$$key'] },
+                        { $concat: ['0', '$$key'] }
+                      ]]
+                    },
+                    { $gt: ['$createdAt', '$$scheduledAt'] },
+                    { $ne: ['$isDeleted', true] },
+                    { $or: [{ $eq: ['$status', 'answered'] }, { $gt: ['$durationSeconds', 0] }] }
+                  ]
+                }
+              }
+            },
+            { $limit: 1 },
+            { $project: { _id: 1 } }
+          ],
+          as: 'resolvedBy'
+        }
+      },
+      { $match: { resolvedBy: { $size: 0 } } },
+      {
+        $addFields: {
+          bucket: {
+            $switch: {
+              branches: [
+                { case: { $lt: ['$followUpDate', now] }, then: 'overdue' },
+                { case: { $lte: ['$followUpDate', endOfToday] }, then: 'today' }
+              ],
+              default: 'upcoming'
+            }
+          }
+        }
+      },
+      {
+        $facet: {
+          counts: [{ $group: { _id: '$bucket', count: { $sum: 1 } } }],
+          byAgent: [
+            {
+              $group: {
+                _id: '$agentId',
+                overdue: { $sum: { $cond: [{ $eq: ['$bucket', 'overdue'] }, 1, 0] } },
+                today: { $sum: { $cond: [{ $eq: ['$bucket', 'today'] }, 1, 0] } },
+                upcoming: { $sum: { $cond: [{ $eq: ['$bucket', 'upcoming'] }, 1, 0] } }
+              }
+            },
+            { $lookup: { from: User.collection.name, localField: '_id', foreignField: '_id', as: 'agent' } },
+            {
+              $project: {
+                agentId: '$_id',
+                _id: 0,
+                overdue: 1,
+                today: 1,
+                upcoming: 1,
+                agentName: {
+                  $trim: {
+                    input: {
+                      $concat: [
+                        { $ifNull: [{ $arrayElemAt: ['$agent.firstName', 0] }, 'Unassigned'] },
+                        ' ',
+                        { $ifNull: [{ $arrayElemAt: ['$agent.lastName', 0] }, ''] }
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            { $sort: { overdue: -1, today: -1 } }
+          ],
+          items: [
+            { $match: itemsMatch },
+            { $sort: { followUpDate: 1 } },
+            { $limit: Math.min(parseInt(limit) || 200, 500) },
+            { $lookup: { from: Contact.collection.name, localField: 'contactId', foreignField: '_id', as: 'contact' } },
+            { $lookup: { from: User.collection.name, localField: 'agentId', foreignField: '_id', as: 'agent' } },
+            {
+              $project: {
+                _id: 1,
+                customerPhone: 1,
+                followUpDate: 1,
+                followUpNote: 1,
+                userDisposition: 1,
+                notes: 1,
+                status: 1,
+                createdAt: 1,
+                bucket: 1,
+                contactName: { $arrayElemAt: ['$contact.name', 0] },
+                agentId: 1,
+                agentName: {
+                  $trim: {
+                    input: {
+                      $concat: [
+                        { $ifNull: [{ $arrayElemAt: ['$agent.firstName', 0] }, ''] },
+                        ' ',
+                        { $ifNull: [{ $arrayElemAt: ['$agent.lastName', 0] }, ''] }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    ]);
+
+    const counts = { overdue: 0, today: 0, upcoming: 0 };
+    (result?.counts || []).forEach((c) => { counts[c._id] = c.count; });
+
+    res.json({
+      success: true,
+      data: {
+        summary: { ...counts, total: counts.overdue + counts.today + counts.upcoming },
+        byAgent: result?.byAgent || [],
+        items: result?.items || []
+      }
+    });
+  } catch (error) {
+    console.error('[getFollowUps] Error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const completeFollowUp = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: 'Invalid call log ID' });
+    }
+    const callLog = await CallLog.findById(id);
+    if (!callLog || callLog.isDeleted) {
+      return res.status(404).json({ success: false, message: 'Call log not found' });
+    }
+    if (req.user.role === 'sales' && (!callLog.agentId || callLog.agentId.toString() !== req.user.id.toString())) {
+      return res.status(403).json({ success: false, message: 'Access Denied: You can only close your own follow-ups.' });
+    }
+
+    callLog.followUpCompletedAt = new Date();
+    callLog.followUpCompletedBy = req.user.id;
+    await callLog.save();
+
+    res.json({ success: true, message: 'Follow-up marked as done', data: { _id: callLog._id } });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 module.exports = {
   triggerOutboundCall,
   getCallLogs,
@@ -1898,5 +2128,7 @@ module.exports = {
   deleteCallLog,
   restoreCallLog,
   bulkDeleteCallLogs,
-  clearAllCallLogs
+  clearAllCallLogs,
+  getFollowUps,
+  completeFollowUp
 };

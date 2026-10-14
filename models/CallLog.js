@@ -95,6 +95,17 @@ const callLogSchema = new mongoose.Schema({
     type: String,
     default: null
   },
+  // Set when an agent/admin manually closes the follow-up ("Mark Done").
+  // Follow-ups are also auto-resolved when a later answered call to the same customer exists.
+  followUpCompletedAt: {
+    type: Date,
+    default: null
+  },
+  followUpCompletedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
+  },
   notes: {
     type: String
   },
@@ -140,5 +151,6 @@ callLogSchema.index({ direction: 1, status: 1, isDeleted: 1, createdAt: -1 });
 callLogSchema.index({ status: 1, isDeleted: 1, createdAt: -1 });
 callLogSchema.index({ contactId: 1, isDeleted: 1, createdAt: -1 });
 callLogSchema.index({ isDeleted: 1, createdAt: -1 });
+callLogSchema.index({ followUpDate: 1, isDeleted: 1, followUpCompletedAt: 1 });
 
 module.exports = mongoose.model('CallLog', callLogSchema);

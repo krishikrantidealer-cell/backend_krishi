@@ -47,6 +47,12 @@ router.get('/sync', controller.syncCallLogs);
 router.get('/recordings/:callId/url', controller.getRecordingPlaybackUrl);
 router.put('/agent/status', controller.setAgentStatus);
 
+// Smart Follow-up Tracker Routes
+router.get('/follow-ups', controller.getFollowUps);
+router.get('/followups', controller.getFollowUps);
+router.patch('/follow-ups/:id/complete', controller.completeFollowUp);
+router.post('/follow-ups/:id/complete', controller.completeFollowUp);
+
 // Admin-Only Soft Delete, Restore & Cleanup Routes
 router.delete('/clear', authorizeRoles('admin'), controller.clearAllCallLogs);
 router.post('/clear', authorizeRoles('admin'), controller.clearAllCallLogs);
