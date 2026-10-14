@@ -40,7 +40,7 @@ class MyOperatorService {
   /**
    * Send WhatsApp Message via MyOperator WABA Public API (/chat/messages)
    */
-  async sendMessage({ agentId, assignedAgentId, phone, countryCode = '91', type = 'Text', textBody = '', templateName = '', languageCode = 'en', bodyValues = [], mediaUrl = '', mediaType = 'Image', contextMessageId = '', replyToMessageId = '' }) {
+  async sendMessage({ agentId, assignedAgentId, activeWabaPhoneNumberId, activeCompanyId, lastIncomingMessageAt, phone, countryCode = '91', type = 'Text', textBody = '', templateName = '', languageCode = 'en', bodyValues = [], mediaUrl = '', mediaType = 'Image', contextMessageId = '', replyToMessageId = '' }) {
     if (!this.wabaKey) {
       console.warn('[MyOperator WABA] API Key missing. Check MYOPERATOR_WABA_KEY env var.');
       return null;
@@ -86,23 +86,44 @@ class MyOperatorService {
         targetWabaKey = process.env.MYOPERATOR_WABA_KEY || accountsConfig.main?.wabaKey || 'Ypgfegpk54lFXvWTk4bLHvvJuDElnOPhsDp2M3MgRx';
         targetCompanyId = process.env.MYOPERATOR_COMPANY_ID || accountsConfig.main?.companyId || '6ab0de5d51766538';
       } else {
-        // Freeform message: Route to assigned dedicated agent WABA line
-        targetPhoneNumId = targetUser?.myoperatorConfig?.wabaPhoneNumberId ||
-          matchedConfig?.wabaPhoneNumberId ||
-          accountsConfig.agents?.[0]?.wabaPhoneNumberId ||
-          (await this.getPhoneNumberId()) ||
-          this.phoneNumberId ||
-          '1307352865799863';
+        // Freeform message: If customer sent an incoming message within 24 hours on a specific WABA line, Meta's 24h window is open ON THAT EXACT LINE!
+        const hasRecentIncoming = lastIncomingMessageAt && (Date.now() - new Date(lastIncomingMessageAt).getTime() < 24 * 60 * 60 * 1000);
 
-        targetWabaKey = targetUser?.myoperatorConfig?.wabaKey ||
-          matchedConfig?.wabaKey ||
-          accountsConfig.agents?.[0]?.wabaKey ||
-          this.wabaKey;
+        if (hasRecentIncoming && activeWabaPhoneNumberId) {
+          const mainPhoneId = process.env.MYOPERATOR_PHONE_NUMBER_ID || accountsConfig.main?.wabaPhoneNumberId || '1307352865799863';
+          if (activeWabaPhoneNumberId.toString() === mainPhoneId.toString()) {
+            targetPhoneNumId = activeWabaPhoneNumberId.toString();
+            targetWabaKey = process.env.MYOPERATOR_WABA_KEY || accountsConfig.main?.wabaKey || 'Ypgfegpk54lFXvWTk4bLHvvJuDElnOPhsDp2M3MgRx';
+            targetCompanyId = activeCompanyId || process.env.MYOPERATOR_COMPANY_ID || accountsConfig.main?.companyId || '6ab0de5d51766538';
+          } else {
+            const agentLine = (accountsConfig.agents || []).find(a => a.wabaPhoneNumberId === activeWabaPhoneNumberId.toString());
+            if (agentLine) {
+              targetPhoneNumId = agentLine.wabaPhoneNumberId;
+              targetWabaKey = agentLine.wabaKey;
+              targetCompanyId = agentLine.companyId;
+            }
+          }
+        }
 
-        targetCompanyId = targetUser?.myoperatorConfig?.companyId ||
-          matchedConfig?.companyId ||
-          accountsConfig.agents?.[0]?.companyId ||
-          this.companyId;
+        // If not determined by active incoming window, route to assigned dedicated agent WABA line
+        if (!targetPhoneNumId) {
+          targetPhoneNumId = targetUser?.myoperatorConfig?.wabaPhoneNumberId ||
+            matchedConfig?.wabaPhoneNumberId ||
+            accountsConfig.agents?.[0]?.wabaPhoneNumberId ||
+            (await this.getPhoneNumberId()) ||
+            this.phoneNumberId ||
+            '1307352865799863';
+
+          targetWabaKey = targetUser?.myoperatorConfig?.wabaKey ||
+            matchedConfig?.wabaKey ||
+            accountsConfig.agents?.[0]?.wabaKey ||
+            this.wabaKey;
+
+          targetCompanyId = targetUser?.myoperatorConfig?.companyId ||
+            matchedConfig?.companyId ||
+            accountsConfig.agents?.[0]?.companyId ||
+            this.companyId;
+        }
       }
 
       const headers = this.getHeaders(targetWabaKey, targetCompanyId);

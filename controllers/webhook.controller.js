@@ -292,29 +292,10 @@ async function processIncomingMessage({ phone, name, messageObj, phoneNumberId, 
   const phoneVariants = getPhoneQueryVariants(phone);
   const cleanReceiver = receiver ? normalizeIndianPhone(receiver) : '';
 
-  // 1. Resolve Assigned Sales Agent
+  // 1. Resolve Assigned Sales Agent (CRITICAL: Only assign valid sales agents or admins, NEVER random customer users!)
   let assignedAgentId = null;
 
-  // A. Try resolving agent by WABA Phone Number ID, Virtual DID Line, or MyOperator Company ID
-  if (phoneNumberId || cleanReceiver || companyId) {
-    const lineAgent = await User.findOne({
-      $or: [
-        ...(phoneNumberId ? [{ 'myoperatorConfig.wabaPhoneNumberId': phoneNumberId.toString() }] : []),
-        ...(cleanReceiver ? [
-          { 'myoperatorConfig.virtualNumber': cleanReceiver },
-          { 'myoperatorConfig.virtualNumber': `91${cleanReceiver}` },
-          { 'myoperatorConfig.virtualNumber': `+91${cleanReceiver}` }
-        ] : []),
-        ...(companyId ? [{ 'myoperatorConfig.companyId': companyId.toString() }] : [])
-      ]
-    });
-    if (lineAgent) {
-      assignedAgentId = lineAgent._id;
-      console.log(`[MyOperator Webhook] 🎯 Routed to dedicated agent line: ${lineAgent.firstName} ${lineAgent.lastName} (${lineAgent.email})`);
-    }
-  }
-
-  // B. Check existing User (Lead/Dealer profile)
+  // A. Priority 1: Check existing Lead/Dealer profile in User collection
   const existingUser = await User.findOne({
     $or: [
       { phoneNumber: { $in: phoneVariants } },
@@ -323,8 +304,51 @@ async function processIncomingMessage({ phone, name, messageObj, phoneNumberId, 
     ]
   }).populate('assignedAgent');
 
-  if (!assignedAgentId && existingUser?.assignedAgent) {
-    assignedAgentId = existingUser.assignedAgent._id || existingUser.assignedAgent;
+  if (existingUser?.assignedAgent && (existingUser.assignedAgent.role === 'sales' || existingUser.assignedAgent.role === 'admin')) {
+    assignedAgentId = existingUser.assignedAgent._id;
+  }
+
+  // B. Priority 2: Check existing Contact
+  if (!assignedAgentId) {
+    const existingContact = await Contact.findOne({
+      $or: [
+        { phone: { $in: phoneVariants } },
+        { phone: cleanPhone },
+        { phone: phone }
+      ]
+    });
+    if (existingContact?.assignedTo) {
+      const validAgent = await User.findOne({ _id: existingContact.assignedTo, role: { $in: ['sales', 'admin'] }, isDeleted: false });
+      if (validAgent) {
+        assignedAgentId = validAgent._id;
+      }
+    }
+  }
+
+  // C. Priority 3: Try resolving dedicated agent by dedicated agent line (excluding main company account)
+  const mainCompanyId = '6ab0de5d51766538';
+  const mainPhoneId = '1307352865799863';
+  const isMainLine = (phoneNumberId && phoneNumberId.toString() === mainPhoneId) ||
+                     (companyId && companyId.toString() === mainCompanyId);
+
+  if (!assignedAgentId && (phoneNumberId || cleanReceiver || (companyId && companyId !== mainCompanyId)) && !isMainLine) {
+    const lineAgent = await User.findOne({
+      role: 'sales',
+      myoperator: true,
+      $or: [
+        ...(phoneNumberId ? [{ 'myoperatorConfig.wabaPhoneNumberId': phoneNumberId.toString() }] : []),
+        ...(cleanReceiver ? [
+          { 'myoperatorConfig.virtualNumber': cleanReceiver },
+          { 'myoperatorConfig.virtualNumber': `91${cleanReceiver}` },
+          { 'myoperatorConfig.virtualNumber': `+91${cleanReceiver}` }
+        ] : []),
+        ...(companyId && companyId !== mainCompanyId ? [{ 'myoperatorConfig.companyId': companyId.toString() }] : [])
+      ]
+    });
+    if (lineAgent) {
+      assignedAgentId = lineAgent._id;
+      console.log(`[MyOperator Webhook] 🎯 Routed to dedicated agent line: ${lineAgent.firstName} ${lineAgent.lastName} (${lineAgent.email})`);
+    }
   }
 
   // 2. Find or Create Contact
@@ -395,12 +419,26 @@ async function processIncomingMessage({ phone, name, messageObj, phoneNumberId, 
       contactName: contact.name,
       contactPhone: cleanPhone,
       status: 'open',
-      unreadCount: 0
+      unreadCount: 0,
+      activeWabaPhoneNumberId: phoneNumberId ? String(phoneNumberId).trim() : undefined,
+      activeCompanyId: companyId ? String(companyId).trim() : undefined
     });
     await conversation.save();
-  } else if (String(conversation.contactId) !== String(contact._id)) {
-    conversation.contactId = contact._id;
-    await conversation.save();
+  } else {
+    let convNeedsSave = false;
+    if (String(conversation.contactId) !== String(contact._id)) {
+      conversation.contactId = contact._id;
+      convNeedsSave = true;
+    }
+    if (phoneNumberId && conversation.activeWabaPhoneNumberId !== String(phoneNumberId).trim()) {
+      conversation.activeWabaPhoneNumberId = String(phoneNumberId).trim();
+      convNeedsSave = true;
+    }
+    if (companyId && conversation.activeCompanyId !== String(companyId).trim()) {
+      conversation.activeCompanyId = String(companyId).trim();
+      convNeedsSave = true;
+    }
+    if (convNeedsSave) await conversation.save();
   }
 
   // 4. Extract Message Type, Content & Media
@@ -592,7 +630,9 @@ async function processIncomingMessage({ phone, name, messageObj, phoneNumberId, 
     contactType: contactType,
     contactName: contact.name,
     contactPhone: cleanPhone,
-    ...(contact.assignedTo ? { assignedTo: contact.assignedTo } : {})
+    ...(contact.assignedTo ? { assignedTo: contact.assignedTo } : {}),
+    ...(phoneNumberId ? { activeWabaPhoneNumberId: String(phoneNumberId).trim() } : {}),
+    ...(companyId ? { activeCompanyId: String(companyId).trim() } : {})
   };
   if (isNewerOrEqual) {
     updateFields.lastMessageAt = parsedTimestamp;

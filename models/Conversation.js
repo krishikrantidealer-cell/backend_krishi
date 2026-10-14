@@ -58,6 +58,15 @@ const conversationSchema = new mongoose.Schema({
     type: Boolean,
     default: false,
     index: true
+  },
+  activeWabaPhoneNumberId: {
+    type: String,
+    trim: true,
+    index: true
+  },
+  activeCompanyId: {
+    type: String,
+    trim: true
   }
 }, { timestamps: true });
 

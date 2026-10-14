@@ -219,7 +219,7 @@ const getConversations = async (req, res) => {
       dedupedConversations.push(conv);
     }
 
-    // Enrich with soft-deleted status from User collection for complete consistency
+    // Enrich with soft-deleted status and real-time assignedAgent from User collection for complete consistency
     try {
       const cleanPhones = dedupedConversations
         .map(c => normalizeIndianPhone(c.contactPhone || c.contactId?.phone))
@@ -228,41 +228,51 @@ const getConversations = async (req, res) => {
       if (cleanPhones.length > 0) {
         const regexList = cleanPhones.map(p => new RegExp('^' + p));
         const matchedUsers = await User.find({
-          phoneNumber: { $in: regexList },
-          isDeleted: true
-        }).select('phoneNumber isDeleted').lean();
+          phoneNumber: { $in: regexList }
+        }).select('phoneNumber isDeleted assignedAgent')
+          .populate('assignedAgent', 'firstName lastName email phoneNumber role')
+          .lean();
 
-        if (matchedUsers.length > 0) {
-          const deletedPhoneSet = new Set(
-            matchedUsers.map(u => {
-              const raw = String(u.phoneNumber || '').split('_deleted_')[0];
-              return normalizeIndianPhone(raw);
-            }).filter(Boolean)
-          );
+        const userMap = new Map();
+        for (const u of matchedUsers) {
+          const raw = String(u.phoneNumber || '').split('_deleted_')[0];
+          const clean = normalizeIndianPhone(raw);
+          if (clean && !userMap.has(clean)) {
+            userMap.set(clean, u);
+          }
+        }
 
-          for (const conv of dedupedConversations) {
-            const p10 = normalizeIndianPhone(conv.contactPhone || conv.contactId?.phone);
-            const isAlreadyMarkedDeleted = conv.isDeleted === true ||
-              conv.contactId?.isDeleted === true ||
-              (Array.isArray(conv.contactId?.tags) && conv.contactId.tags.includes('deleted'));
+        for (const conv of dedupedConversations) {
+          const p10 = normalizeIndianPhone(conv.contactPhone || conv.contactId?.phone);
+          const matchedUser = p10 ? userMap.get(p10) : null;
 
-            if ((p10 && deletedPhoneSet.has(p10)) || isAlreadyMarkedDeleted) {
-              conv.isDeleted = true;
-              if (conv.contactId) {
-                conv.contactId.isDeleted = true;
-              }
+          // 1. Soft-deleted check
+          const isUserDeleted = matchedUser?.isDeleted === true;
+          const isAlreadyMarkedDeleted = conv.isDeleted === true ||
+            conv.contactId?.isDeleted === true ||
+            (Array.isArray(conv.contactId?.tags) && conv.contactId.tags.includes('deleted'));
+
+          if (isUserDeleted || isAlreadyMarkedDeleted) {
+            conv.isDeleted = true;
+            if (conv.contactId) {
+              conv.contactId.isDeleted = true;
             }
           }
-        } else {
-          for (const conv of dedupedConversations) {
-            if (conv.contactId?.isDeleted === true || (Array.isArray(conv.contactId?.tags) && conv.contactId.tags.includes('deleted'))) {
-              conv.isDeleted = true;
+
+          // 2. Real-time Assigned Agent sync from Lead profile in CRM
+          if (matchedUser?.assignedAgent && (matchedUser.assignedAgent.role === 'sales' || matchedUser.assignedAgent.role === 'admin')) {
+            conv.assignedTo = matchedUser.assignedAgent;
+            if (conv.contactId) {
+              conv.contactId.assignedTo = matchedUser.assignedAgent._id;
             }
+          } else if (conv.assignedTo && conv.assignedTo.role !== 'sales' && conv.assignedTo.role !== 'admin') {
+            // Guard: Clear out any invalid non-sales users that may have been saved previously
+            conv.assignedTo = null;
           }
         }
       }
     } catch (enrichErr) {
-      console.warn('[getConversations] Deleted enrichment warning:', enrichErr.message);
+      console.warn('[getConversations] Enrichment warning:', enrichErr.message);
     }
 
     res.json({
@@ -573,6 +583,9 @@ const sendConversationMessage = async (req, res, next) => {
     const myopResponse = await myoperatorService.sendMessage({
       agentId: req.user.id,
       assignedAgentId: conversation.assignedTo || conversation.contactId?.assignedTo,
+      activeWabaPhoneNumberId: conversation.activeWabaPhoneNumberId,
+      activeCompanyId: conversation.activeCompanyId,
+      lastIncomingMessageAt: conversation.lastIncomingMessageAt,
       phone: conversation.contactId.phone,
       type: normalizedType,
       mediaType: normalizedType,
