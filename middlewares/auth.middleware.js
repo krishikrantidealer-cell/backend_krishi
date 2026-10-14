@@ -82,7 +82,8 @@ const authorizeMyOperatorAgent = (req, res, next) => {
   if (!req.user) {
     return res.status(401).json({ success: false, message: 'Not authorized' });
   }
-  if (req.user.role === 'admin') {
+  // Dynamic MongoDB boolean check or admin role
+  if (req.user.role === 'admin' || req.user.myoperator === true) {
     return next();
   }
   const userEmail = (req.user.email || '').trim().toLowerCase();

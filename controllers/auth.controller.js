@@ -52,7 +52,8 @@ class AuthController {
           monthlyTarget: user.monthlyTarget,
           permissions: user.permissions,
           myoperatorConfig: user.myoperatorConfig,
-          isAvailableForCalls: user.isAvailableForCalls
+          isAvailableForCalls: user.isAvailableForCalls,
+          myoperator: user.myoperator === true || user.role === 'admin'
         },
         ...tokens
       });

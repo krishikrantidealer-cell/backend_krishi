@@ -229,6 +229,12 @@ const userSchema = new mongoose.Schema({
     type: Number,
     default: 500000
   },
+  // Dynamic MyOperator Access Toggle (Sales Agents with MyOperator enabled)
+  myoperator: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
   // Dedicated MyOperator Agent Account Configuration (DID, VID, Extension, Credentials)
   myoperatorConfig: {
     did: { type: String, trim: true, index: true }, // Dedicated Inward/Outward Number (e.g. 9112345678)
