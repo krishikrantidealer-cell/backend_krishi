@@ -1432,6 +1432,51 @@ const getMediaUploadUrl = async (req, res) => {
   }
 };
 
+/**
+ * Proxy media files (S3, MyOperator, etc.) with CORS headers for Flutter Web
+ */
+const proxyMedia = async (req, res) => {
+  try {
+    const rawUrl = req.query.url;
+    if (!rawUrl) {
+      return res.status(400).send('Missing url parameter');
+    }
+
+    const targetUrl = decodeURIComponent(rawUrl);
+    const parsed = new URL(targetUrl);
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      return res.status(400).send('Invalid protocol');
+    }
+
+    const axios = require('axios');
+    const response = await axios({
+      method: 'get',
+      url: targetUrl,
+      responseType: 'stream',
+      timeout: 15000,
+      headers: {
+        'User-Agent': 'KrishiKranti-MediaProxy/1.0'
+      }
+    });
+
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.setHeader('Cache-Control', 'public, max-age=604800, s-maxage=604800');
+
+    if (response.headers['content-type']) {
+      res.setHeader('Content-Type', response.headers['content-type']);
+    }
+    if (response.headers['content-length']) {
+      res.setHeader('Content-Length', response.headers['content-length']);
+    }
+
+    response.data.pipe(res);
+  } catch (err) {
+    console.error('[MediaProxy Error]:', err.message);
+    res.status(502).send('Error fetching media');
+  }
+};
+
 module.exports = {
   getConversations,
   syncRoster,
@@ -1446,6 +1491,7 @@ module.exports = {
   markAsUnread,
   uploadMedia,
   getMediaUploadUrl,
+  proxyMedia,
   getTemplates,
   createTemplate,
   deleteTemplate,

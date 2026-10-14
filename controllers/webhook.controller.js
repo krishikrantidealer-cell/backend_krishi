@@ -124,6 +124,23 @@ const handleWebhook = async (req, res) => {
       messageData.sender ||
       messageData.phone;
 
+    const isCallEvent =
+      eventType.includes('call') ||
+      eventType.includes('ring') ||
+      eventType.includes('dial') ||
+      eventType.includes('answer') ||
+      eventType.includes('hang') ||
+      eventType.includes('bridge') ||
+      eventType.includes('ivr') ||
+      String(payload.channel || '').toLowerCase() === 'call' ||
+      Boolean(payload.legs || payload.call_id || payload.recording_url || payload.recording_filename || payload.cli);
+
+    if (isCallEvent) {
+      console.log(`[MyOperator Webhook] Diverting call event "${eventType}" away from WhatsApp CRM to callController`);
+      const callController = require('./call.controller');
+      return callController.handleCallWebhook(req, res);
+    }
+
     const isStatusUpdate =
       eventType.includes('sent') ||
       eventType.includes('delivered') ||
@@ -132,14 +149,15 @@ const handleWebhook = async (req, res) => {
       eventType.startsWith('message_api_') ||
       (payload.status && !rawPhone);
 
-    const isIncomingMessage = !isStatusUpdate && (
+    const isIncomingMessage = !isStatusUpdate && !isCallEvent && (
       eventType === 'message.received' ||
       eventType === 'message_received' ||
       eventType === 'customer_message_received' ||
       eventType === 'message_api_received' ||
       eventType === 'incoming_message' ||
       (eventType.includes('message') && (eventType.includes('receive') || eventType.includes('inbound'))) ||
-      Boolean(rawPhone)
+      String(payload.channel || '').toLowerCase() === 'whatsapp' ||
+      (Boolean(rawPhone) && (messageData.data != null || messageData.text != null || messageData.body != null || messageData.message != null || messageData.image != null || messageData.document != null || messageData.media_url != null))
     );
 
     if (isIncomingMessage && rawPhone) {
@@ -384,7 +402,8 @@ async function processIncomingMessage({ phone, name, messageObj, phoneNumberId, 
   }
 
   // 4. Extract Message Type, Content & Media
-  let msgType = messageObj.message_type || messageObj.type || messageObj.msg_type || 'text';
+  const mediaContext = messageObj.data?.context || messageObj.context || messageObj.data || {};
+  let rawType = String(messageObj.data?.type || messageObj.message_type || messageObj.type || messageObj.msg_type || 'text').toLowerCase();
   let content = '';
 
   if (messageObj.button_reply?.title) {
@@ -435,28 +454,47 @@ async function processIncomingMessage({ phone, name, messageObj, phoneNumberId, 
     } catch (_) {}
   }
 
+  let msgType = rawType;
   let mediaUrl = null;
-  if (messageObj.image) {
+  const mediaLink =
+    mediaContext.link ||
+    mediaContext.url ||
+    mediaContext.media_url ||
+    messageObj.media_url ||
+    messageObj.mediaUrl ||
+    null;
+
+  const rawMime = String(mediaContext.mime_type || '').toLowerCase();
+
+  if (rawType === 'image' || messageObj.image || rawMime.startsWith('image/')) {
     msgType = 'image';
-    mediaUrl = typeof messageObj.image === 'string' ? messageObj.image : (messageObj.image.url || messageObj.image.link);
-    content = messageObj.image.caption || content || '';
-  } else if (messageObj.document) {
+    mediaUrl = typeof messageObj.image === 'string'
+      ? messageObj.image
+      : (messageObj.image?.url || messageObj.image?.link || mediaLink);
+    content = messageObj.image?.caption || mediaContext.caption || content || '';
+  } else if (rawType === 'document' || messageObj.document || rawMime.includes('pdf') || mediaContext.filename) {
     msgType = 'document';
-    mediaUrl = typeof messageObj.document === 'string' ? messageObj.document : (messageObj.document.url || messageObj.document.link);
-    content = messageObj.document.caption || messageObj.document.filename || content || '';
-  } else if (messageObj.video) {
+    mediaUrl = typeof messageObj.document === 'string'
+      ? messageObj.document
+      : (messageObj.document?.url || messageObj.document?.link || mediaLink);
+    content = messageObj.document?.caption || messageObj.document?.filename || mediaContext.caption || mediaContext.filename || content || '';
+  } else if (rawType === 'video' || messageObj.video || rawMime.startsWith('video/')) {
     msgType = 'video';
-    mediaUrl = typeof messageObj.video === 'string' ? messageObj.video : (messageObj.video.url || messageObj.video.link);
-    content = messageObj.video.caption || content || '';
-  } else if (messageObj.audio || messageObj.voice) {
+    mediaUrl = typeof messageObj.video === 'string'
+      ? messageObj.video
+      : (messageObj.video?.url || messageObj.video?.link || mediaLink);
+    content = messageObj.video?.caption || mediaContext.caption || content || '';
+  } else if (rawType === 'audio' || messageObj.audio || messageObj.voice || rawMime.startsWith('audio/')) {
     msgType = 'audio';
     const audioObj = messageObj.audio || messageObj.voice;
-    mediaUrl = typeof audioObj === 'string' ? audioObj : (audioObj.url || audioObj.link);
-  } else if (messageObj.media_url || messageObj.mediaUrl) {
-    mediaUrl = messageObj.media_url || messageObj.mediaUrl;
+    mediaUrl = typeof audioObj === 'string'
+      ? audioObj
+      : (audioObj?.url || audioObj?.link || mediaLink);
+  } else if (mediaLink) {
+    mediaUrl = mediaLink;
   }
 
-  if (!mediaUrl || typeof mediaUrl !== 'string' || !mediaUrl.trim()) {
+  if (!mediaUrl || typeof mediaUrl !== 'string' || !mediaUrl.trim() || mediaUrl === 'null' || mediaUrl === 'undefined') {
     mediaUrl = null;
   }
 
@@ -496,7 +534,7 @@ async function processIncomingMessage({ phone, name, messageObj, phoneNumberId, 
   if (orLookup.length > 0) {
     const existingMsg = await Message.findOne({ $or: orLookup });
     if (existingMsg) {
-      console.log(`[MyOperator Webhook] Message ${cleanMsgId || cleanWabaId} already processed, updating IDs if missing.`);
+      console.log(`[MyOperator Webhook] Message ${cleanMsgId || cleanWabaId} already found, checking for updates.`);
       let needsSave = false;
       if (cleanMsgId && cleanMsgId.length <= 40 && !cleanMsgId.startsWith('wamid.') && existingMsg.myoperatorMessageId !== cleanMsgId) {
         existingMsg.myoperatorMessageId = cleanMsgId;
@@ -506,11 +544,44 @@ async function processIncomingMessage({ phone, name, messageObj, phoneNumberId, 
         existingMsg.wabaMessageId = cleanWabaId;
         needsSave = true;
       }
+      // If the incoming webhook brings a media URL and the existing message lacked it (two-phase MyOperator webhook)
+      if (mediaUrl && (!existingMsg.mediaUrl || existingMsg.mediaUrl !== mediaUrl)) {
+        existingMsg.mediaUrl = mediaUrl;
+        if (msgType && msgType !== 'text') existingMsg.type = msgType;
+        if (content && !existingMsg.content) existingMsg.content = content;
+        needsSave = true;
+      }
       if (needsSave) {
         await existingMsg.save().catch(() => {});
+        conversation.lastMessage = {
+          type: existingMsg.type,
+          content: existingMsg.content || (existingMsg.mediaUrl ? `[${existingMsg.type}]` : ''),
+          mediaUrl: existingMsg.mediaUrl
+        };
+        await conversation.save().catch(() => {});
+
+        const populatedMessage = await Message.findById(existingMsg._id).populate('sentBy', 'firstName lastName');
+        const populatedConversation = await Conversation.findById(conversation._id).populate(['contactId', 'assignedTo']);
+        const broadcastPayload = {
+          type: 'NEW_MESSAGE',
+          data: {
+            conversation: populatedConversation,
+            message: populatedMessage
+          }
+        };
+        if (contact.assignedTo) {
+          wsService.sendToUser(contact.assignedTo.toString(), broadcastPayload);
+        }
+        wsService.broadcastToRoles(['admin', 'sales'], broadcastPayload);
       }
       return;
     }
+  }
+
+  // Drop phantom blank messages with no content and no media
+  if (!content?.trim() && !mediaUrl && !['image', 'document', 'audio', 'video'].includes(msgType)) {
+    console.warn(`[MyOperator Webhook] Dropping blank message from ${phone} (no content, no media)`);
+    return;
   }
 
   const isNewerOrEqual = !conversation.lastMessageAt || parsedTimestamp.getTime() >= new Date(conversation.lastMessageAt).getTime();

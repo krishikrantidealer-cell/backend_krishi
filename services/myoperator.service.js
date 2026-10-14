@@ -571,6 +571,25 @@ class MyOperatorService {
               });
             }
 
+            const mediaContext = m.data?.context || m.context || m.data || {};
+            let rawType = String(m.data?.type || m.type || 'text').toLowerCase();
+            let mediaUrl = mediaContext.link || mediaContext.url || mediaContext.media_url || m.media_url || m.mediaUrl || null;
+            if (typeof mediaUrl === 'string' && (mediaUrl === 'null' || mediaUrl === 'undefined' || !mediaUrl.trim())) {
+              mediaUrl = null;
+            }
+            let msgType = rawType;
+            if (rawType === 'image' || mediaContext.mime_type?.startsWith('image/')) {
+              msgType = 'image';
+            } else if (rawType === 'document' || mediaContext.mime_type?.includes('pdf') || mediaContext.filename) {
+              msgType = 'document';
+            } else if (rawType === 'video' || mediaContext.mime_type?.startsWith('video/')) {
+              msgType = 'video';
+            } else if (rawType === 'audio' || mediaContext.mime_type?.startsWith('audio/')) {
+              msgType = 'audio';
+            } else if (rawType === 'template') {
+              msgType = 'template';
+            }
+
             if (existing) {
               let needsSave = false;
               if (myopMsgId && String(myopMsgId).length <= 40 && !String(myopMsgId).startsWith('wamid.') && existing.myoperatorMessageId !== String(myopMsgId)) {
@@ -585,17 +604,22 @@ class MyOperatorService {
                 existing.status = m.status;
                 needsSave = true;
               }
+              if (mediaUrl && (!existing.mediaUrl || existing.mediaUrl !== mediaUrl)) {
+                existing.mediaUrl = mediaUrl;
+                if (msgType && msgType !== 'text') existing.type = msgType;
+                needsSave = true;
+              }
               if (needsSave) {
                 await existing.save().catch(() => {});
               }
-            } else if (content) {
-              const msgType = m.data?.type === 'template' ? 'template' : (m.data?.type || 'text');
+            } else if (content || mediaUrl) {
               const newMsg = new Message({
                 conversationId: conversation._id,
                 contactId: contact._id,
                 direction: direction,
                 type: ['text', 'image', 'document', 'audio', 'video', 'template'].includes(msgType) ? msgType : 'text',
-                content: content,
+                content: content || (mediaUrl ? `[${msgType}]` : ''),
+                mediaUrl: mediaUrl,
                 replyTo: replyToObj,
                 myoperatorMessageId: (myopMsgId && String(myopMsgId).length <= 40 && !String(myopMsgId).startsWith('wamid.')) ? String(myopMsgId) : undefined,
                 wabaMessageId: m.metadata?.waba_msg_id || (myopMsgId?.startsWith('wamid.') ? myopMsgId : undefined),

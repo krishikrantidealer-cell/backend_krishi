@@ -11,6 +11,7 @@ router.get('/conversations/:id/messages', protect, controller.getMessages);
 router.post('/conversations/start', protect, controller.startConversation);
 router.post('/messages/send', protect, controller.sendConversationMessage);
 router.post('/messages/send-template', protect, controller.sendConversationMessage);
+router.get('/conversations/media-proxy', controller.proxyMedia);
 router.post('/conversations/media/upload-url', protect, controller.getMediaUploadUrl);
 router.post('/conversations/media/upload', protect, upload.single('file'), controller.uploadMedia);
 router.post('/conversations/assign', protect, authorizeRoles('admin'), controller.assignConversation);
