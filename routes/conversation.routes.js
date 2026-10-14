@@ -1,25 +1,25 @@
 const express = require('express');
 const router = express.Router();
 const controller = require('../controllers/conversation.controller');
-const { protect, authorizeRoles } = require('../middlewares/auth.middleware');
+const { protect, authorizeRoles, authorizeMyOperatorAgent } = require('../middlewares/auth.middleware');
 const upload = require('../middlewares/upload.middleware');
 
-// Conversational Endpoints (Protected)
-router.get('/conversations', protect, controller.getConversations);
-router.post('/conversations/sync-roster', protect, controller.syncRoster);
-router.get('/conversations/:id/messages', protect, controller.getMessages);
-router.post('/conversations/start', protect, controller.startConversation);
-router.post('/messages/send', protect, controller.sendConversationMessage);
-router.post('/messages/send-template', protect, controller.sendConversationMessage);
+// Conversational Endpoints (Protected & Authorized for MyOperator Sales Agents / Admin)
+router.get('/conversations', protect, authorizeMyOperatorAgent, controller.getConversations);
+router.post('/conversations/sync-roster', protect, authorizeMyOperatorAgent, controller.syncRoster);
+router.get('/conversations/:id/messages', protect, authorizeMyOperatorAgent, controller.getMessages);
+router.post('/conversations/start', protect, authorizeMyOperatorAgent, controller.startConversation);
+router.post('/messages/send', protect, authorizeMyOperatorAgent, controller.sendConversationMessage);
+router.post('/messages/send-template', protect, authorizeMyOperatorAgent, controller.sendConversationMessage);
 router.get('/conversations/media-proxy', controller.proxyMedia);
-router.post('/conversations/media/upload-url', protect, controller.getMediaUploadUrl);
-router.post('/conversations/media/upload', protect, upload.single('file'), controller.uploadMedia);
+router.post('/conversations/media/upload-url', protect, authorizeMyOperatorAgent, controller.getMediaUploadUrl);
+router.post('/conversations/media/upload', protect, authorizeMyOperatorAgent, upload.single('file'), controller.uploadMedia);
 router.post('/conversations/assign', protect, authorizeRoles('admin'), controller.assignConversation);
-router.post('/notes', protect, controller.addNote);
-router.put('/conversations/:id/status', protect, controller.updateConversationStatus);
-router.put('/conversations/:id/language', protect, controller.updateConversationLanguage);
-router.put('/conversations/:id/read', protect, controller.markAsRead);
-router.put('/conversations/:id/unread', protect, controller.markAsUnread);
+router.post('/notes', protect, authorizeMyOperatorAgent, controller.addNote);
+router.put('/conversations/:id/status', protect, authorizeMyOperatorAgent, controller.updateConversationStatus);
+router.put('/conversations/:id/language', protect, authorizeMyOperatorAgent, controller.updateConversationLanguage);
+router.put('/conversations/:id/read', protect, authorizeMyOperatorAgent, controller.markAsRead);
+router.put('/conversations/:id/unread', protect, authorizeMyOperatorAgent, controller.markAsUnread);
 
 // WhatsApp Templates (Protected)
 router.get('/templates', protect, controller.getTemplates);

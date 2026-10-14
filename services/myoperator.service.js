@@ -67,6 +67,7 @@ class MyOperatorService {
       let matchedConfig = null;
       if (targetUser) {
         matchedConfig = (accountsConfig.agents || []).find(a =>
+          (targetUser.email && a.email && a.email.toLowerCase() === targetUser.email.toLowerCase()) ||
           (targetUser.phone && a.phone === targetUser.phone) ||
           (targetUser.firstName && a.agentName && a.agentName.toLowerCase().includes(targetUser.firstName.toLowerCase())) ||
           (targetUser.myoperatorConfig?.companyId && a.companyId === targetUser.myoperatorConfig.companyId) ||

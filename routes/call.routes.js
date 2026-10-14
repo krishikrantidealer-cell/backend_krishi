@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const controller = require('../controllers/call.controller');
-const { protect, authorizeRoles } = require('../middlewares/auth.middleware');
+const { protect, authorizeRoles, authorizeMyOperatorAgent } = require('../middlewares/auth.middleware');
 
 // Public Webhook Endpoints for MyOperator Calls (No Auth required)
 router.post('/webhook', controller.handleCallWebhook);
@@ -29,6 +29,7 @@ router.get('/webhooks/myoperator/calls', (req, res) => res.status(200).send('OK'
 
 // Protected Call Endpoints
 router.use(protect);
+router.use(authorizeMyOperatorAgent);
 router.get('/', controller.getCallLogs);
 router.get('/logs', controller.getCallLogs);
 router.get('/export', controller.exportCallLogs);
