@@ -574,11 +574,10 @@ class MyOperatorService {
         });
 
         if (!contact) {
-          const defaultAgent = await this.assignNextSalesAgent();
           contact = new Contact({
             name: customerName,
             phone: cleanPhone,
-            assignedTo: defaultAgent,
+            assignedTo: null,
             tags: ['myoperator-lead']
           });
           await contact.save();
@@ -740,10 +739,12 @@ class MyOperatorService {
                   message: populatedMessage
                 }
               };
-              if (contact.assignedTo) {
-                wsService.sendToUser(contact.assignedTo.toString(), broadcastPayload);
+              const targetAgentId = contact?.assignedTo || conversation?.assignedTo;
+              if (targetAgentId) {
+                const agentIdStr = targetAgentId._id ? targetAgentId._id.toString() : targetAgentId.toString();
+                wsService.sendToUser(agentIdStr, broadcastPayload);
               }
-              wsService.broadcastToRoles(['admin', 'sales'], broadcastPayload);
+              wsService.broadcastToRoles(['admin'], broadcastPayload);
             }
           }
           await conversation.save();

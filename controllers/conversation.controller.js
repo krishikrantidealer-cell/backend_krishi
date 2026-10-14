@@ -384,12 +384,11 @@ const getMessages = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Conversation not found' });
     }
 
-    // Role Security: Sales agents can ONLY view messages for leads/dealers assigned to them or unassigned
+    // Role Security: Sales agents can ONLY view messages for leads/dealers assigned to them
     if (req.user.role === 'sales') {
-      const isAssignedConv = conversation.assignedTo && String(conversation.assignedTo) === String(req.user.id);
-      const isAssignedContact = conversation.contactId?.assignedTo && String(conversation.contactId.assignedTo) === String(req.user.id);
-      const isUnassigned = !conversation.assignedTo && !conversation.contactId?.assignedTo;
-      if (!isAssignedConv && !isAssignedContact && !isUnassigned) {
+      const isAssignedConv = conversation.assignedTo && String(conversation.assignedTo._id || conversation.assignedTo) === String(req.user.id);
+      const isAssignedContact = conversation.contactId?.assignedTo && String(conversation.contactId.assignedTo._id || conversation.contactId.assignedTo) === String(req.user.id);
+      if (!isAssignedConv && !isAssignedContact) {
         return res.status(403).json({ success: false, message: 'Access Denied: You can only view chats assigned to you.' });
       }
     }
@@ -397,10 +396,16 @@ const getMessages = async (req, res) => {
     // Clean unread count and trigger blue tick read receipts on customer's WhatsApp
     await Conversation.findByIdAndUpdate(id, { unreadCount: 0 });
     sendReadReceiptsForConversation(id).catch(() => {});
-    wsService.broadcastToRoles(['admin', 'sales'], {
+    const targetAgentId = conversation.assignedTo || conversation.contactId?.assignedTo;
+    const readPayload = {
       type: 'CONVERSATION_READ',
       data: { conversationId: id }
-    });
+    };
+    if (targetAgentId) {
+      const agentIdStr = targetAgentId._id ? targetAgentId._id.toString() : targetAgentId.toString();
+      wsService.sendToUser(agentIdStr, readPayload);
+    }
+    wsService.broadcastToRoles(['admin'], readPayload);
 
     const messages = await Message.find({ conversationId: id })
       .populate('sentBy', 'firstName lastName')
@@ -501,13 +506,11 @@ const sendConversationMessage = async (req, res, next) => {
         }
       }
 
-      const isUnassigned = (!conversation.assignedTo && !conversation.contactId?.assignedTo);
-
-      if (!isAssignedConv && !isAssignedContact && !isAssignedLeadUser && !isUnassigned) {
+      if (!isAssignedConv && !isAssignedContact && !isAssignedLeadUser) {
         return res.status(403).json({ success: false, message: 'Access Denied: You can only chat with leads assigned to you.' });
       }
 
-      // Auto-assign conversation and contact to this sales agent if unassigned or lead matches
+      // Auto-assign conversation and contact to this sales agent if lead matches
       if (!isAssignedConv || !isAssignedContact) {
         conversation.assignedTo = req.user.id;
         await conversation.save();
@@ -857,13 +860,13 @@ const startConversation = async (req, res) => {
     let assignedAgentId = existingUser ? (existingUser.assignedAgent?._id || existingUser.assignedAgent) : null;
 
     if (!contact) {
-      if (!assignedAgentId) {
-        assignedAgentId = await myoperatorService.assignNextSalesAgent();
+      if (!assignedAgentId && req.user.role === 'sales') {
+        assignedAgentId = req.user.id;
       }
       contact = new Contact({
         name: name || (existingUser ? `${existingUser.firstName || ''} ${existingUser.lastName || ''}`.trim() || existingUser.shopName : null) || `User ${cleanPhone.slice(-4)}`,
         phone: cleanPhone,
-        assignedTo: assignedAgentId,
+        assignedTo: assignedAgentId || null,
         tags: ['myoperator-lead']
       });
       await contact.save();
@@ -892,8 +895,12 @@ const startConversation = async (req, res) => {
 
     // Role Security Check: If a sales agent tries to start/access a conversation assigned to someone else
     if (req.user.role === 'sales') {
-      if (conversation && conversation.assignedTo && String(conversation.assignedTo) !== String(req.user.id)) {
+      const assigned = conversation?.assignedTo || contact.assignedTo || assignedAgentId;
+      if (assigned && String(assigned._id || assigned) !== String(req.user.id)) {
         return res.status(403).json({ success: false, message: 'Access Denied: This lead/dealer is assigned to another sales agent.' });
+      }
+      if (!conversation && !assigned) {
+        return res.status(403).json({ success: false, message: 'Access Denied: You cannot start conversations with unassigned leads. Contact admin to assign this lead to you.' });
       }
     }
 
@@ -1327,13 +1334,19 @@ const markAsRead = async (req, res) => {
 
     sendReadReceiptsForConversation(id).catch(() => {});
 
-    wsService.broadcastToRoles(['admin', 'sales'], {
+    const targetAgentId = conversation.assignedTo || conversation.contactId?.assignedTo;
+    const readPayload = {
       type: 'CONVERSATION_READ',
       data: {
         conversationId: id,
         conversation
       }
-    });
+    };
+    if (targetAgentId) {
+      const agentIdStr = targetAgentId._id ? targetAgentId._id.toString() : targetAgentId.toString();
+      wsService.sendToUser(agentIdStr, readPayload);
+    }
+    wsService.broadcastToRoles(['admin'], readPayload);
 
     res.json({ success: true, data: conversation });
   } catch (error) {
@@ -1357,13 +1370,19 @@ const markAsUnread = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Conversation not found' });
     }
 
-    wsService.broadcastToRoles(['admin', 'sales'], {
+    const targetAgentId = conversation.assignedTo || conversation.contactId?.assignedTo;
+    const unreadPayload = {
       type: 'CONVERSATION_UNREAD',
       data: {
         conversationId: id,
         conversation
       }
-    });
+    };
+    if (targetAgentId) {
+      const agentIdStr = targetAgentId._id ? targetAgentId._id.toString() : targetAgentId.toString();
+      wsService.sendToUser(agentIdStr, unreadPayload);
+    }
+    wsService.broadcastToRoles(['admin'], unreadPayload);
 
     res.json({ success: true, data: conversation });
   } catch (error) {

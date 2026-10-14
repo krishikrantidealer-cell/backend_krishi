@@ -368,15 +368,12 @@ async function processIncomingMessage({ phone, name, messageObj, phoneNumberId, 
       : null);
 
   if (!contact) {
-    if (!assignedAgentId) {
-      assignedAgentId = await myoperatorService.assignNextSalesAgent();
-    }
     const computedName = resolvedName || `User ${cleanPhone.slice(-4)}`;
 
     contact = new Contact({
       name: computedName,
       phone: cleanPhone,
-      assignedTo: assignedAgentId,
+      assignedTo: assignedAgentId || null,
       tags: existingUser ? [existingUser.role === 'dealer' ? 'Dealer' : 'Lead'] : ['myoperator-lead']
     });
     await contact.save();
@@ -609,10 +606,12 @@ async function processIncomingMessage({ phone, name, messageObj, phoneNumberId, 
             message: populatedMessage
           }
         };
-        if (contact.assignedTo) {
-          wsService.sendToUser(contact.assignedTo.toString(), broadcastPayload);
+        const targetAgentId = contact?.assignedTo || conversation?.assignedTo;
+        if (targetAgentId) {
+          const agentIdStr = targetAgentId._id ? targetAgentId._id.toString() : targetAgentId.toString();
+          wsService.sendToUser(agentIdStr, broadcastPayload);
         }
-        wsService.broadcastToRoles(['admin', 'sales'], broadcastPayload);
+        wsService.broadcastToRoles(['admin'], broadcastPayload);
       }
       return;
     }
@@ -806,8 +805,13 @@ async function processIncomingMessage({ phone, name, messageObj, phoneNumberId, 
     }
   };
 
-  wsService.broadcastToRoles(['admin', 'sales'], broadcastPayload);
-  console.log(`[MyOperator Webhook] ✅ Broadcasted real-time NEW_MESSAGE for ${cleanPhone} to agent ${contact.assignedTo}`);
+  const targetAgentId = contact?.assignedTo || conversation?.assignedTo;
+  if (targetAgentId) {
+    const agentIdStr = targetAgentId._id ? targetAgentId._id.toString() : targetAgentId.toString();
+    wsService.sendToUser(agentIdStr, broadcastPayload);
+  }
+  wsService.broadcastToRoles(['admin'], broadcastPayload);
+  console.log(`[MyOperator Webhook] ✅ Broadcasted real-time NEW_MESSAGE for ${cleanPhone} to agent ${targetAgentId || 'NONE (Unassigned - Admin only)'}`);
 }
 
 /**
@@ -851,7 +855,15 @@ async function processMessageStatusUpdate({ messageId, status, wabaMessageId, er
         errorReason: errorReason || updatedMsg.errorReason
       }
     };
-    wsService.broadcastToRoles(['admin', 'sales'], broadcastPayload);
+    try {
+      const relatedConv = await Conversation.findById(updatedMsg.conversationId).select('assignedTo contactId').populate('contactId', 'assignedTo').lean();
+      const targetAgentId = relatedConv?.assignedTo || relatedConv?.contactId?.assignedTo;
+      if (targetAgentId) {
+        const agentIdStr = targetAgentId._id ? targetAgentId._id.toString() : targetAgentId.toString();
+        wsService.sendToUser(agentIdStr, broadcastPayload);
+      }
+    } catch (_) {}
+    wsService.broadcastToRoles(['admin'], broadcastPayload);
     console.log(`[MyOperator Webhook] ✅ Message ${cleanId || cleanWaba} status updated to ${cleanStatus}`);
   }
 }
