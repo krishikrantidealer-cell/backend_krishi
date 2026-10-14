@@ -12,8 +12,8 @@ module.exports = {
     callingXApiKey: 'oomfKA3I2K6TCJYistHyb7sDf0l0F6c8AZro5DJh',
     callingSecretKey: 'd1160ee08c6afe8984492e716ef062fbaf912e6f86cf851a94122c6a2aaaec25',
     callingToken: '3b48e781de1440f4d5d8666f118204fb',
-    wabaKey: 'U72TrbPzUxmP1C3AvdSS5VVwBGtFSwYJom3tnE20r4',
-    wabaPhoneNumberId: '1307352865799863',
+    wabaKey: process.env.MYOPERATOR_WABA_KEY || 'Ypgfegpk54lFXvWTk4bLHvvJuDElnOPhsDp2M3MgRx',
+    wabaPhoneNumberId: process.env.MYOPERATOR_PHONE_NUMBER_ID || '1307352865799863',
     whatsappNumber: '7316917246',
     extension: '10'
   },

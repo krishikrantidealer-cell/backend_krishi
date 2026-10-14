@@ -478,16 +478,32 @@ const sendConversationMessage = async (req, res, next) => {
     if (req.user.role === 'sales') {
       const isAssignedConv = conversation.assignedTo && String(conversation.assignedTo) === String(req.user.id);
       const isAssignedContact = conversation.contactId?.assignedTo && String(conversation.contactId.assignedTo) === String(req.user.id);
-      const isUnassigned = !conversation.assignedTo && !conversation.contactId?.assignedTo;
 
-      if (!isAssignedConv && !isAssignedContact && !isUnassigned) {
+      let isAssignedLeadUser = false;
+      const cleanPhone = normalizeIndianPhone(conversation.contactPhone || conversation.contactId?.phone);
+      if (cleanPhone) {
+        const phoneVariants = getPhoneQueryVariants(cleanPhone);
+        const leadUser = await User.findOne({
+          phoneNumber: { $in: phoneVariants }
+        }).select('assignedAgent').lean();
+        if (leadUser?.assignedAgent && String(leadUser.assignedAgent) === String(req.user.id)) {
+          isAssignedLeadUser = true;
+        }
+      }
+
+      const isUnassigned = (!conversation.assignedTo && !conversation.contactId?.assignedTo);
+
+      if (!isAssignedConv && !isAssignedContact && !isAssignedLeadUser && !isUnassigned) {
         return res.status(403).json({ success: false, message: 'Access Denied: You can only chat with leads assigned to you.' });
       }
 
-      // Auto-assign conversation to this sales agent if it was unassigned or only assigned on contact
-      if (!isAssignedConv) {
+      // Auto-assign conversation and contact to this sales agent if unassigned or lead matches
+      if (!isAssignedConv || !isAssignedContact) {
         conversation.assignedTo = req.user.id;
         await conversation.save();
+        if (conversation.contactId && String(conversation.contactId.assignedTo) !== String(req.user.id)) {
+          await Contact.findByIdAndUpdate(conversation.contactId._id || conversation.contactId, { assignedTo: req.user.id });
+        }
       }
     }
 
@@ -663,7 +679,15 @@ const sendConversationMessage = async (req, res, next) => {
     res.json({ success: true, data: message });
   } catch (error) {
     console.error('[sendConversationMessage Error]:', error);
-    res.status(500).json({ success: false, message: error.message });
+    const statusCode = error.statusCode || (error.response?.status) || 500;
+    const isWindowExpired = error.code === 'WINDOW_EXPIRED' ||
+      (typeof error.message === 'string' && (error.message.includes('24-hour') || error.message.includes('24 hours')));
+
+    res.status(statusCode >= 400 && statusCode < 600 ? statusCode : 500).json({
+      success: false,
+      code: isWindowExpired ? 'WINDOW_EXPIRED' : (error.code || 'SEND_FAILED'),
+      message: error.message || 'Failed to send message'
+    });
   }
 };
 

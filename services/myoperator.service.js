@@ -62,7 +62,6 @@ class MyOperatorService {
         }
       }
 
-      // Check config/myoperatorAccounts fallback if user.myoperatorConfig is incomplete
       const accountsConfig = require('../config/myoperatorAccounts');
       let matchedConfig = null;
       if (targetUser) {
@@ -75,19 +74,36 @@ class MyOperatorService {
         );
       }
 
-      const targetPhoneNumId = targetUser?.myoperatorConfig?.wabaPhoneNumberId ||
-        matchedConfig?.wabaPhoneNumberId ||
-        (await this.getPhoneNumberId()) ||
-        this.phoneNumberId ||
-        '1307352865799863';
+      const isTemplate = type?.toLowerCase() === 'template' || Boolean(templateName);
 
-      const targetWabaKey = targetUser?.myoperatorConfig?.wabaKey ||
-        matchedConfig?.wabaKey ||
-        this.wabaKey;
+      let targetPhoneNumId;
+      let targetWabaKey;
+      let targetCompanyId;
 
-      const targetCompanyId = targetUser?.myoperatorConfig?.companyId ||
-        matchedConfig?.companyId ||
-        this.companyId;
+      if (isTemplate) {
+        // Meta WhatsApp templates are registered on Krishikranti Organics Main WABA account
+        targetPhoneNumId = process.env.MYOPERATOR_PHONE_NUMBER_ID || accountsConfig.main?.wabaPhoneNumberId || '1307352865799863';
+        targetWabaKey = process.env.MYOPERATOR_WABA_KEY || accountsConfig.main?.wabaKey || 'Ypgfegpk54lFXvWTk4bLHvvJuDElnOPhsDp2M3MgRx';
+        targetCompanyId = process.env.MYOPERATOR_COMPANY_ID || accountsConfig.main?.companyId || '6ab0de5d51766538';
+      } else {
+        // Freeform message: Route to assigned dedicated agent WABA line
+        targetPhoneNumId = targetUser?.myoperatorConfig?.wabaPhoneNumberId ||
+          matchedConfig?.wabaPhoneNumberId ||
+          accountsConfig.agents?.[0]?.wabaPhoneNumberId ||
+          (await this.getPhoneNumberId()) ||
+          this.phoneNumberId ||
+          '1307352865799863';
+
+        targetWabaKey = targetUser?.myoperatorConfig?.wabaKey ||
+          matchedConfig?.wabaKey ||
+          accountsConfig.agents?.[0]?.wabaKey ||
+          this.wabaKey;
+
+        targetCompanyId = targetUser?.myoperatorConfig?.companyId ||
+          matchedConfig?.companyId ||
+          accountsConfig.agents?.[0]?.companyId ||
+          this.companyId;
+      }
 
       const headers = this.getHeaders(targetWabaKey, targetCompanyId);
 
@@ -107,8 +123,6 @@ class MyOperatorService {
         };
         payload.data.reply_to = replyContextId;
       }
-
-      const isTemplate = type?.toLowerCase() === 'template' || Boolean(templateName);
 
       if (isTemplate) {
         const validBodyParams = Array.isArray(bodyValues)
@@ -311,11 +325,20 @@ class MyOperatorService {
       }
 
       let extractedError = detailedError || errorData?.message || errorData?.error?.message || error.message;
-      if (extractedError && extractedError.includes('24 hours passed')) {
+      const isWindowExpired = extractedError && (
+        extractedError.includes('24 hours passed') ||
+        extractedError.includes('24 hours') ||
+        extractedError.includes('Message type text not allowed')
+      );
+
+      if (isWindowExpired) {
         extractedError = 'WhatsApp 24-hour window has expired. Please send an approved Template message first to contact this customer.';
       }
 
-      throw new Error(extractedError || 'Failed to dispatch WhatsApp message via MyOperator');
+      const dispatchErr = new Error(extractedError || 'Failed to dispatch WhatsApp message via MyOperator');
+      dispatchErr.statusCode = isWindowExpired ? 400 : (error.response?.status || 500);
+      dispatchErr.code = isWindowExpired ? 'WINDOW_EXPIRED' : (errorData?.code || 'SEND_FAILED');
+      throw dispatchErr;
     }
   }
 

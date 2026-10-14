@@ -68,26 +68,12 @@ const authorizeRoles = (...roles) => {
   };
 };
 
-const MYOPERATOR_AUTHORIZED_EMAILS = [
-  'admin@krishikranti.com',
-  'ebsale08@gmail.com',
-  'essentialsale14@gmail.com',
-  'essentialsale8@gmail.com',
-  'sales3.essential@gmail.com',
-  'essentialbiosciences12@gmail.com',
-  'sales6.essential@gmail.com'
-];
-
 const authorizeMyOperatorAgent = (req, res, next) => {
   if (!req.user) {
     return res.status(401).json({ success: false, message: 'Not authorized' });
   }
   // Dynamic MongoDB boolean check or admin role
   if (req.user.role === 'admin' || req.user.myoperator === true) {
-    return next();
-  }
-  const userEmail = (req.user.email || '').trim().toLowerCase();
-  if (MYOPERATOR_AUTHORIZED_EMAILS.includes(userEmail)) {
     return next();
   }
   return res.status(403).json({
@@ -99,6 +85,5 @@ const authorizeMyOperatorAgent = (req, res, next) => {
 module.exports = {
   protect,
   authorizeRoles,
-  authorizeMyOperatorAgent,
-  MYOPERATOR_AUTHORIZED_EMAILS
+  authorizeMyOperatorAgent
 };
