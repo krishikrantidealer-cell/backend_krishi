@@ -556,6 +556,7 @@ const sendConversationMessage = async (req, res, next) => {
     // Dispatches message to MyOperator WABA API with dedicated agent credentials
     const myopResponse = await myoperatorService.sendMessage({
       agentId: req.user.id,
+      assignedAgentId: conversation.assignedTo || conversation.contactId?.assignedTo,
       phone: conversation.contactId.phone,
       type: normalizedType,
       mediaType: normalizedType,

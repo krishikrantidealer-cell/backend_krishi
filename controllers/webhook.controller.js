@@ -229,6 +229,7 @@ const handleWebhook = async (req, res) => {
         messageId: rawMsgId,
         wabaMessageId: rawWabaId ? String(rawWabaId).trim() : undefined,
         timestamp: rawTs,
+        companyId: payload.company_id || innerPayload?.company_id,
         rawPayload: payload
       });
       return;
@@ -279,13 +280,13 @@ const handleWebhook = async (req, res) => {
 /**
  * Robust Inbound Message Processor with Direct Agent Line Mapping
  */
-async function processIncomingMessage({ phone, name, messageObj, phoneNumberId, receiver, messageId, wabaMessageId, timestamp, rawPayload }) {
+async function processIncomingMessage({ phone, name, messageObj, phoneNumberId, receiver, messageId, wabaMessageId, timestamp, rawPayload, companyId }) {
   if (!phone) {
     console.warn('[MyOperator Webhook] Missing phone number in incoming message');
     return;
   }
 
-  console.log(`[MyOperator Webhook] 📩 Inbound Message from ${phone} -> DID: ${receiver || 'N/A'}, PhoneID: ${phoneNumberId || 'N/A'}`);
+  console.log(`[MyOperator Webhook] 📩 Inbound Message from ${phone} -> DID: ${receiver || 'N/A'}, PhoneID: ${phoneNumberId || 'N/A'}, CompanyID: ${companyId || 'N/A'}`);
 
   const cleanPhone = normalizeIndianPhone(phone);
   const phoneVariants = getPhoneQueryVariants(phone);
@@ -294,8 +295,8 @@ async function processIncomingMessage({ phone, name, messageObj, phoneNumberId, 
   // 1. Resolve Assigned Sales Agent
   let assignedAgentId = null;
 
-  // A. Try resolving agent by WABA Phone Number ID or Virtual DID Line
-  if (phoneNumberId || cleanReceiver) {
+  // A. Try resolving agent by WABA Phone Number ID, Virtual DID Line, or MyOperator Company ID
+  if (phoneNumberId || cleanReceiver || companyId) {
     const lineAgent = await User.findOne({
       $or: [
         ...(phoneNumberId ? [{ 'myoperatorConfig.wabaPhoneNumberId': phoneNumberId.toString() }] : []),
@@ -303,7 +304,8 @@ async function processIncomingMessage({ phone, name, messageObj, phoneNumberId, 
           { 'myoperatorConfig.virtualNumber': cleanReceiver },
           { 'myoperatorConfig.virtualNumber': `91${cleanReceiver}` },
           { 'myoperatorConfig.virtualNumber': `+91${cleanReceiver}` }
-        ] : [])
+        ] : []),
+        ...(companyId ? [{ 'myoperatorConfig.companyId': companyId.toString() }] : [])
       ]
     });
     if (lineAgent) {

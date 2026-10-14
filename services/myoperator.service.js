@@ -12,18 +12,20 @@ class MyOperatorService {
     this.baseUrl = 'https://publicapi.myoperator.co';
   }
 
-  getHeaders() {
+  getHeaders(wabaKey = null, companyId = null) {
+    const key = wabaKey || this.wabaKey;
+    const cid = companyId || this.companyId;
     const headers = {
       'Content-Type': 'application/json',
       'Accept': 'application/json'
     };
-    if (this.wabaKey) {
-      headers['Authorization'] = `Bearer ${this.wabaKey}`;
-      headers['x-api-key'] = this.wabaKey;
+    if (key) {
+      headers['Authorization'] = `Bearer ${key}`;
+      headers['x-api-key'] = key;
     }
-    if (this.companyId) {
-      headers['X-MYOP-COMPANY-ID'] = this.companyId;
-      headers['x-myop-company-id'] = this.companyId;
+    if (cid) {
+      headers['X-MYOP-COMPANY-ID'] = cid;
+      headers['x-myop-company-id'] = cid;
     }
     return headers;
   }
@@ -38,7 +40,7 @@ class MyOperatorService {
   /**
    * Send WhatsApp Message via MyOperator WABA Public API (/chat/messages)
    */
-  async sendMessage({ agentId, phone, countryCode = '91', type = 'Text', textBody = '', templateName = '', languageCode = 'en', bodyValues = [], mediaUrl = '', mediaType = 'Image', contextMessageId = '', replyToMessageId = '' }) {
+  async sendMessage({ agentId, assignedAgentId, phone, countryCode = '91', type = 'Text', textBody = '', templateName = '', languageCode = 'en', bodyValues = [], mediaUrl = '', mediaType = 'Image', contextMessageId = '', replyToMessageId = '' }) {
     if (!this.wabaKey) {
       console.warn('[MyOperator WABA] API Key missing. Check MYOPERATOR_WABA_KEY env var.');
       return null;
@@ -47,14 +49,46 @@ class MyOperatorService {
     try {
       const cleanPhone = normalizeIndianPhone(phone);
       
-      // Check agent identity
-      let agentUser = null;
-      if (agentId) {
-        agentUser = await User.findById(agentId);
+      // 1. Resolve agent identity for dedicated WABA account credentials
+      // Prioritize the conversation owner (assignedAgentId), fallback to sender (agentId)
+      let targetUser = null;
+      if (assignedAgentId) {
+        targetUser = await User.findById(assignedAgentId);
       }
-      
-      // Always use verified master WABA phone number ID for WhatsApp messaging
-      const targetPhoneNumId = (await this.getPhoneNumberId()) || this.phoneNumberId || '1307352865799863';
+      if (!targetUser?.myoperatorConfig?.wabaPhoneNumberId && agentId) {
+        const sendingUser = await User.findById(agentId);
+        if (sendingUser?.myoperatorConfig?.wabaPhoneNumberId) {
+          targetUser = sendingUser;
+        }
+      }
+
+      // Check config/myoperatorAccounts fallback if user.myoperatorConfig is incomplete
+      const accountsConfig = require('../config/myoperatorAccounts');
+      let matchedConfig = null;
+      if (targetUser) {
+        matchedConfig = (accountsConfig.agents || []).find(a =>
+          (targetUser.phone && a.phone === targetUser.phone) ||
+          (targetUser.firstName && a.agentName && a.agentName.toLowerCase().includes(targetUser.firstName.toLowerCase())) ||
+          (targetUser.myoperatorConfig?.companyId && a.companyId === targetUser.myoperatorConfig.companyId) ||
+          (targetUser.myoperatorConfig?.whatsappNumber && a.whatsappNumber === targetUser.myoperatorConfig.whatsappNumber)
+        );
+      }
+
+      const targetPhoneNumId = targetUser?.myoperatorConfig?.wabaPhoneNumberId ||
+        matchedConfig?.wabaPhoneNumberId ||
+        (await this.getPhoneNumberId()) ||
+        this.phoneNumberId ||
+        '1307352865799863';
+
+      const targetWabaKey = targetUser?.myoperatorConfig?.wabaKey ||
+        matchedConfig?.wabaKey ||
+        this.wabaKey;
+
+      const targetCompanyId = targetUser?.myoperatorConfig?.companyId ||
+        matchedConfig?.companyId ||
+        this.companyId;
+
+      const headers = this.getHeaders(targetWabaKey, targetCompanyId);
 
       let payload = {
         phone_number_id: targetPhoneNumId,
@@ -101,13 +135,11 @@ class MyOperatorService {
         };
 
         console.log(`[MyOperator WABA] Dispatching Template (${templateName}) to +${countryCode}${cleanPhone}:`, JSON.stringify(payload));
-        const headers = this.getHeaders();
         const response = await axios.post(`${this.baseUrl}/chat/messages`, payload, { headers });
         return response.data;
       } else if (mediaUrl && mediaUrl.toString().trim().length > 0) {
         // Freeform Media Message (Image, Document, Audio, Video)
         const cleanMediaUrl = mediaUrl.toString().trim();
-        const headers = this.getHeaders();
         const rawType = (mediaType || type || 'image').toLowerCase();
         let resolvedType = 'image';
         if (rawType.includes('doc') || rawType.includes('pdf') || rawType.includes('xls') || rawType.includes('csv') || rawType.includes('sheet') || rawType.includes('word') || rawType.includes('file')) {
@@ -257,7 +289,6 @@ class MyOperatorService {
 
         console.log(`[MyOperator WABA] Dispatching Text to +${countryCode}${cleanPhone}:`, JSON.stringify(payload));
 
-        const headers = this.getHeaders();
         const response = await axios.post(`${this.baseUrl}/chat/messages`, payload, { headers });
 
         return response.data;
@@ -266,9 +297,23 @@ class MyOperatorService {
       const errorData = error.response?.data;
       console.error('[MyOperator WABA API Error Status]:', error.response?.status);
       console.error('[MyOperator WABA API Error Details]:', JSON.stringify(errorData || error.message));
-      const extractedError = (errorData && typeof errorData === 'object')
-        ? (errorData.message || errorData.error?.message || (Array.isArray(errorData.errors) ? errorData.errors.map(e => e.message || JSON.stringify(e)).join(', ') : (errorData.errors ? JSON.stringify(errorData.errors) : null)) || error.message)
-        : error.message;
+
+      let detailedError = '';
+      if (errorData?.errors?.detail && Array.isArray(errorData.errors.detail)) {
+        detailedError = errorData.errors.detail.join(', ');
+      } else if (errorData?.errors?.customer_number && Array.isArray(errorData.errors.customer_number)) {
+        detailedError = errorData.errors.customer_number.join(', ');
+      } else if (typeof errorData?.errors === 'string') {
+        detailedError = errorData.errors;
+      } else if (errorData?.errors && typeof errorData.errors === 'object') {
+        detailedError = JSON.stringify(errorData.errors);
+      }
+
+      let extractedError = detailedError || errorData?.message || errorData?.error?.message || error.message;
+      if (extractedError && extractedError.includes('24 hours passed')) {
+        extractedError = 'WhatsApp 24-hour window has expired. Please send an approved Template message first to contact this customer.';
+      }
+
       throw new Error(extractedError || 'Failed to dispatch WhatsApp message via MyOperator');
     }
   }
