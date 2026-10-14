@@ -221,6 +221,7 @@ class UserService {
     // Only allow specific fields to be updated
     const allowedUpdates = [
       'permissions',
+      'myoperator',
       'firstName',
       'lastName',
       'profileImage',
@@ -512,7 +513,7 @@ class UserService {
   }
 
   async createSalesAgent(agentData) {
-    const { firstName, lastName, email, phoneNumber, password, monthlyTarget, permissions } = agentData;
+    const { firstName, lastName, email, phoneNumber, password, monthlyTarget, permissions, myoperator } = agentData;
 
     if (!firstName || !lastName || !email || !phoneNumber || !password) {
       throw new Error('All fields (first name, last name, email, phone number, password) are required');
@@ -537,14 +538,16 @@ class UserService {
       monthlyTarget: monthlyTarget || 500000,
       role: 'sales',
       isVerified: true,
-      isProfileComplete: true
+      isProfileComplete: true,
+      ...(permissions ? { permissions } : {}),
+      myoperator: myoperator === true
     });
 
     return user;
   }
 
   async updateSalesAgent(agentId, updateData) {
-    const { firstName, lastName, email, phoneNumber, password, monthlyTarget, permissions } = updateData;
+    const { firstName, lastName, email, phoneNumber, password, monthlyTarget, permissions, myoperator } = updateData;
 
     const user = await User.findById(agentId);
     if (!user) throw new Error('Sales agent not found');
@@ -568,6 +571,7 @@ class UserService {
     if (lastName) user.lastName = lastName;
     if (monthlyTarget !== undefined) user.monthlyTarget = monthlyTarget;
     if (permissions !== undefined) user.permissions = permissions;
+    if (myoperator !== undefined) user.myoperator = Boolean(myoperator);
 
     if (password && password.trim() !== '') {
       const { hashData } = require('../utils/hash');

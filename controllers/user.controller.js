@@ -520,7 +520,8 @@ exports.adminCreateSalesAgent = async (req, res, next) => {
         phoneNumber: user.phoneNumber,
         monthlyTarget: user.monthlyTarget,
         role: user.role,
-        permissions: user.permissions
+        permissions: user.permissions,
+        myoperator: user.myoperator === true
       }
     });
   } catch (error) {
@@ -558,7 +559,8 @@ exports.adminUpdateSalesAgent = async (req, res, next) => {
         phoneNumber: user.phoneNumber,
         monthlyTarget: user.monthlyTarget,
         role: user.role,
-        permissions: user.permissions
+        permissions: user.permissions,
+        myoperator: user.myoperator === true
       }
     });
   } catch (error) {
