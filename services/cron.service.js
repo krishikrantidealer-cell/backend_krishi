@@ -2,6 +2,7 @@ const Order = require('../models/Order');
 const Cart = require('../models/Cart');
 const CheckoutSession = require('../models/CheckoutSession');
 const User = require('../models/User');
+const CallLog = require('../models/CallLog');
 const NotificationCampaign = require('../models/NotificationCampaign');
 const orderService = require('./order.service');
 const notificationService = require('./notification.service');
@@ -368,11 +369,121 @@ const runWhatsAppMessageSync = async () => {
   }
 };
 
+// 8. 2-Tier Automated Task Reminder Notifications for Sales Agents
+// 1st Notification: 30 minutes before the scheduled task reminder
+// 2nd Notification: At the exact scheduled task reminder time
+const runTaskReminderNotifications = async () => {
+  try {
+    const now = new Date();
+
+    // ── Tier 1: 30 Minutes Before Reminder ─────────────────────────────────
+    // Window: taskReminderDate is within 30 minutes from now (and not overdue by > 2 hours)
+    // Condition: now >= (taskReminderDate - 30 mins) AND reminder30MinSent !== true
+    const windowStart30 = new Date(now.getTime() - 2 * 60 * 60 * 1000);
+    const windowEnd30 = new Date(now.getTime() + 30 * 60 * 1000);
+
+    const pending30MinReminders = await CallLog.find({
+      taskReminderDate: { $gte: windowStart30, $lte: windowEnd30 },
+      reminder30MinSent: { $ne: true },
+      isDeleted: { $ne: true }
+    }).populate('agentId', 'firstName lastName email phoneNumber fcmToken')
+      .populate('contactId', 'name phone');
+
+    for (const callLog of pending30MinReminders) {
+      const reminderTime = new Date(callLog.taskReminderDate).getTime();
+      const thirtyMinsBefore = reminderTime - 30 * 60 * 1000;
+
+      if (now.getTime() >= thirtyMinsBefore) {
+        let targetAgentId = callLog.agentId?._id || callLog.agentId;
+        if (!targetAgentId && callLog.agentPhone) {
+          const cleanPhone = callLog.agentPhone.replace(/\D/g, '').replace(/^91/, '');
+          const foundAgent = await User.findOne({
+            $or: [{ phoneNumber: cleanPhone }, { phoneNumber: `91${cleanPhone}` }, { phoneNumber: `+91${cleanPhone}` }]
+          });
+          if (foundAgent) targetAgentId = foundAgent._id;
+        }
+
+        if (targetAgentId) {
+          const customerDisplay = callLog.contactId?.name || (callLog.customerPhone ? `+91 ${callLog.customerPhone.replace(/\D/g, '').slice(-10)}` : 'Customer');
+          const taskTitle = callLog.taskReminderTitle || 'Upcoming Call Task';
+          const title = `⏰ Reminder in 30 Mins: ${taskTitle}`;
+          const body = `Scheduled task for ${customerDisplay}: ${callLog.taskReminderNote || taskTitle}`;
+
+          try {
+            await notificationService.sendUtilityNotification(
+              targetAgentId,
+              title,
+              body,
+              '/call-logs',
+              null,
+              'View Call',
+              'Dismiss'
+            );
+          } catch (notifErr) {
+            console.error('[Task Reminder] Failed sending 30m notification:', notifErr.message);
+          }
+        }
+
+        callLog.reminder30MinSent = true;
+        await callLog.save();
+      }
+    }
+
+    // ── Tier 2: At The Scheduled Reminder Time ──────────────────────────────
+    // Condition: now >= taskReminderDate AND reminderAtTimeSent !== true
+    const windowStartDue = new Date(now.getTime() - 2 * 60 * 60 * 1000);
+    const pendingDueReminders = await CallLog.find({
+      taskReminderDate: { $gte: windowStartDue, $lte: now },
+      reminderAtTimeSent: { $ne: true },
+      isDeleted: { $ne: true }
+    }).populate('agentId', 'firstName lastName email phoneNumber fcmToken')
+      .populate('contactId', 'name phone');
+
+    for (const callLog of pendingDueReminders) {
+      let targetAgentId = callLog.agentId?._id || callLog.agentId;
+      if (!targetAgentId && callLog.agentPhone) {
+        const cleanPhone = callLog.agentPhone.replace(/\D/g, '').replace(/^91/, '');
+        const foundAgent = await User.findOne({
+          $or: [{ phoneNumber: cleanPhone }, { phoneNumber: `91${cleanPhone}` }, { phoneNumber: `+91${cleanPhone}` }]
+        });
+        if (foundAgent) targetAgentId = foundAgent._id;
+      }
+
+      if (targetAgentId) {
+        const customerDisplay = callLog.contactId?.name || (callLog.customerPhone ? `+91 ${callLog.customerPhone.replace(/\D/g, '').slice(-10)}` : 'Customer');
+        const taskTitle = callLog.taskReminderTitle || 'Call Task Due Now';
+        const title = `🔔 Task Due Now: ${taskTitle}`;
+        const body = `Task is due now for ${customerDisplay}: ${callLog.taskReminderNote || taskTitle}`;
+
+        try {
+          await notificationService.sendUtilityNotification(
+            targetAgentId,
+            title,
+            body,
+            '/call-logs',
+            null,
+            'View Call',
+            'Dismiss'
+          );
+        } catch (notifErr) {
+          console.error('[Task Reminder] Failed sending due notification:', notifErr.message);
+        }
+      }
+
+      callLog.reminder30MinSent = true;
+      callLog.reminderAtTimeSent = true;
+      await callLog.save();
+    }
+  } catch (err) {
+    console.error('[Cron] Error in runTaskReminderNotifications:', err);
+  }
+};
+
 /**
  * Initialize Fallback Interval-Based Cron Jobs (for local development/persistent server)
  */
 exports.initCronJobs = () => {
-  console.log('--- Background Services Initialized (Orders, Carts, WhatsApp Live Sync & Push Campaigns) ---');
+  console.log('--- Background Services Initialized (Orders, Carts, WhatsApp Live Sync, Push Campaigns & Task Reminders) ---');
 
   // Execute on startup
   runOrderSync();
@@ -382,6 +493,7 @@ exports.initCronJobs = () => {
   runScheduledSegmentNotifications();
   runWhatsAppAutomation();
   runWhatsAppMessageSync();
+  runTaskReminderNotifications();
 
   // Set intervals
   setInterval(runOrderSync, 20 * 60 * 1000);
@@ -391,6 +503,7 @@ exports.initCronJobs = () => {
   setInterval(() => runScheduledSegmentNotifications(), 10 * 1000);
   setInterval(runWhatsAppAutomation, 60 * 60 * 1000);
   setInterval(runWhatsAppMessageSync, 5 * 60 * 1000); // 5-minute fallback sync loop (real-time events handled via webhooks)
+  setInterval(runTaskReminderNotifications, 60 * 1000); // 1-minute interval for precise 2-tier task notifications
 };
 
 // Export individual tasks for router triggering
@@ -402,5 +515,6 @@ module.exports = {
   runKycUrgencyCheck,
   runScheduledSegmentNotifications,
   runWhatsAppAutomation,
-  runWhatsAppMessageSync
+  runWhatsAppMessageSync,
+  runTaskReminderNotifications
 };

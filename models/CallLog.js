@@ -109,6 +109,30 @@ const callLogSchema = new mongoose.Schema({
   notes: {
     type: String
   },
+  // ── Task Reminder & 2-Tier Automated Agent Notifications ───────────────────
+  taskReminderDate: {
+    type: Date,
+    default: null,
+    index: true
+  },
+  taskReminderTitle: {
+    type: String,
+    default: null
+  },
+  taskReminderNote: {
+    type: String,
+    default: null
+  },
+  reminder30MinSent: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
+  reminderAtTimeSent: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
   tags: {
     type: [String],
     default: []

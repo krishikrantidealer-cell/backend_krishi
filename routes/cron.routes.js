@@ -39,12 +39,26 @@ router.get('/trigger', verifyCronAuth, async (req, res) => {
       cronService.runAbandonedCheckoutCheck().catch(e => console.error('[Cron Route Error] runAbandonedCheckoutCheck:', e.message));
       cronService.runKycUrgencyCheck().catch(e => console.error('[Cron Route Error] runKycUrgencyCheck:', e.message));
       cronService.runWhatsAppAutomation().catch(e => console.error('[Cron Route Error] runWhatsAppAutomation:', e.message));
+      cronService.runTaskReminderNotifications().catch(e => console.error('[Cron Route Error] runTaskReminderNotifications:', e.message));
     }
 
     return res.status(200).json({
       success: true,
       message: `Cron tasks triggered successfully (Job: ${job || 'Scheduled window / ALL'})`
     });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+/**
+ * @route   GET /api/cron/task-reminders
+ * @desc    Triggers 2-tier task reminder notification checks (30m before & at scheduled time)
+ */
+router.get('/task-reminders', verifyCronAuth, async (req, res) => {
+  try {
+    await cronService.runTaskReminderNotifications();
+    return res.status(200).json({ success: true, message: 'Task reminders processed successfully' });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }

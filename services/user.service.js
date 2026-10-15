@@ -55,11 +55,7 @@ class UserService {
     }
     if (filters.hasMyOperator === 'true' || filters.hasMyOperator === true) {
       andConditions.push({
-        $or: [
-          { 'myoperatorConfig.companyId': { $exists: true, $nin: [null, ''] } },
-          { 'myoperatorConfig.token': { $exists: true, $nin: [null, ''] } },
-          { 'myoperatorConfig.did': { $exists: true, $nin: [null, ''] } }
-        ]
+        myoperator: true
       });
     }
 

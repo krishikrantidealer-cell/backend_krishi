@@ -316,13 +316,67 @@ const getCallLogs = async (req, res) => {
           $or: salesAgentOr
         };
       }
-    } else if (agentId && agentId !== 'null' && agentId !== 'undefined' && agentId.trim() !== '' && agentId !== 'all') {
-      andConditions.push({ agentId });
-      if (mongoose.Types.ObjectId.isValid(agentId)) {
-        metricsMatch = {
-          ...metricsMatch,
-          agentId: new mongoose.Types.ObjectId(agentId)
-        };
+    } else {
+      // ── Admin / Manager Telephony Role Filtering ───────────────────────────
+      // If MyOperator permission is toggled OFF for any sales agent, exclude their
+      // call recordings, logs, and leaderboard metrics from the admin view.
+      const disabledSalesAgents = await User.find({
+        role: 'sales',
+        $or: [
+          { myoperator: { $ne: true } },
+          { 'permissions.myoperator': false },
+          { isBlocked: true },
+          { isDeleted: true }
+        ]
+      }).select('_id phoneNumber email').lean();
+
+      let disabledExcludeOr = [];
+      let disabledIds = [];
+      if (disabledSalesAgents.length > 0) {
+        disabledIds = disabledSalesAgents.map(a => a._id);
+        const disabledPhoneSubstrings = disabledSalesAgents
+          .map(a => (a.phoneNumber || '').replace(/\D/g, '').replace(/^91/, ''))
+          .filter(p => p.length >= 6);
+
+        const disabledEmails = disabledSalesAgents.map(a => (a.email || '').toLowerCase()).filter(Boolean);
+        const disabledAccounts = TELEPHONY_ACCOUNTS.filter(acc =>
+          disabledEmails.includes(acc.email.toLowerCase()) ||
+          disabledPhoneSubstrings.some(p => acc.mobileNumber && acc.mobileNumber.includes(p))
+        );
+        const disabledCompanyIds = disabledAccounts.map(a => a.companyId).filter(Boolean);
+        const disabledDids = disabledAccounts.map(a => (a.did || '').replace(/\D/g, '').replace(/^0+/, '')).filter(Boolean);
+
+        disabledExcludeOr = [
+          { agentId: { $in: disabledIds } },
+          ...(disabledPhoneSubstrings.length > 0 ? [{ agentPhone: { $regex: disabledPhoneSubstrings.join('|') } }] : []),
+          ...(disabledCompanyIds.length > 0 ? [{ 'metadata.companyId': { $in: disabledCompanyIds } }] : []),
+          ...(disabledDids.length > 0 ? [
+            { 'metadata.matchedDid': { $regex: disabledDids.join('|') } },
+            { 'metadata.agentDid': { $regex: disabledDids.join('|') } },
+            { 'metadata.received_on': { $regex: disabledDids.join('|') } }
+          ] : [])
+        ];
+      }
+
+      if (agentId && agentId !== 'null' && agentId !== 'undefined' && agentId.trim() !== '' && agentId !== 'all') {
+        const isAgentDisabled = disabledIds.some(dId => dId.toString() === agentId.toString());
+        if (isAgentDisabled) {
+          // If the admin queried a disabled agent specifically, return no calls
+          andConditions.push({ _id: null });
+          metricsMatch.agentId = new mongoose.Types.ObjectId();
+        } else {
+          andConditions.push({ agentId });
+          if (mongoose.Types.ObjectId.isValid(agentId)) {
+            metricsMatch = {
+              ...metricsMatch,
+              agentId: new mongoose.Types.ObjectId(agentId)
+            };
+          }
+        }
+      } else if (disabledExcludeOr.length > 0) {
+        // Exclude all calls from disabled agents when admin views all calls
+        andConditions.push({ $nor: disabledExcludeOr });
+        metricsMatch.$nor = disabledExcludeOr;
       }
     }
 
@@ -585,15 +639,46 @@ const getCallLogs = async (req, res) => {
 
 const saveCallDisposition = async (req, res) => {
   try {
-    const { callLogId, userDisposition, followUpDate, followUpNote, notes } = req.body;
+    const {
+      callLogId,
+      customerPhone,
+      userDisposition,
+      followUpDate,
+      followUpNote,
+      notes,
+      taskReminderDate,
+      taskReminderTitle,
+      taskReminderNote
+    } = req.body;
 
-    if (!callLogId) {
-      return res.status(400).json({ success: false, message: 'Call log ID is required' });
+    let callLog;
+    if (callLogId && callLogId !== 'new' && callLogId !== 'manual') {
+      try {
+        callLog = await CallLog.findById(callLogId);
+      } catch (_) {}
     }
 
-    const callLog = await CallLog.findById(callLogId);
+    if (!callLog && customerPhone) {
+      const cleanPhone = customerPhone.replace(/\D/g, '').replace(/^91/, '');
+      if (cleanPhone.length >= 5) {
+        callLog = await CallLog.findOne({
+          customerPhone: { $regex: cleanPhone },
+          isDeleted: { $ne: true }
+        }).sort({ createdAt: -1 });
+
+        if (!callLog) {
+          callLog = new CallLog({
+            customerPhone: cleanPhone,
+            direction: 'outbound',
+            status: 'ended',
+            agentId: req.user?.id
+          });
+        }
+      }
+    }
+
     if (!callLog) {
-      return res.status(404).json({ success: false, message: 'Call log not found' });
+      return res.status(400).json({ success: false, message: 'Valid call log ID or customer phone is required' });
     }
 
     // Role Security: Sales agents can only update dispositions on their own calls
@@ -623,6 +708,33 @@ const saveCallDisposition = async (req, res) => {
     }
     if (followUpNote) callLog.followUpNote = followUpNote;
     if (notes) callLog.notes = notes;
+
+    // ── Task Reminder & 2-Tier Automated Notification Flags ─────────────────
+    if (taskReminderDate !== undefined) {
+      if (taskReminderDate) {
+        const parsedReminder = new Date(taskReminderDate);
+        if (!isNaN(parsedReminder.getTime())) {
+          callLog.taskReminderDate = parsedReminder;
+          callLog.reminder30MinSent = false;
+          callLog.reminderAtTimeSent = false;
+        }
+      } else {
+        callLog.taskReminderDate = null;
+        callLog.reminder30MinSent = false;
+        callLog.reminderAtTimeSent = false;
+      }
+    }
+    if (taskReminderTitle !== undefined) {
+      callLog.taskReminderTitle = taskReminderTitle ? taskReminderTitle.trim() : null;
+    }
+    if (taskReminderNote !== undefined) {
+      callLog.taskReminderNote = taskReminderNote ? taskReminderNote.trim() : null;
+    }
+
+    // Ensure agent attribution if missing
+    if (!callLog.agentId && req.user && req.user.id) {
+      callLog.agentId = req.user.id;
+    }
 
     await callLog.save();
 
@@ -1443,17 +1555,31 @@ const getTelephonyAgents = async (req, res) => {
         { email: { $in: emails } },
         { phoneNumber: { $in: phones } }
       ]
-    }).select('_id firstName lastName email phoneNumber role').lean();
+    }).select('_id firstName lastName email phoneNumber role myoperator permissions isBlocked isDeleted').lean();
 
-    const merged = TELEPHONY_ACCOUNTS.map(acc => {
+    const merged = [];
+    for (const acc of TELEPHONY_ACCOUNTS) {
       const match = userDocs.find(u => 
         (u.email && u.email.toLowerCase() === acc.email.toLowerCase()) ||
         (u.phoneNumber && u.phoneNumber.includes(acc.mobileNumber))
       );
-      return {
+
+      // If matched with a sales agent, verify MyOperator is enabled and agent is active
+      if (match && match.role === 'sales') {
+        const isMyOpEnabled = match.myoperator === true && match.permissions?.myoperator !== false;
+        const isActive = !match.isBlocked && !match.isDeleted;
+        if (!isMyOpEnabled || !isActive) {
+          continue; // Omit agents whose MyOperator is OFF or who are blocked/deleted
+        }
+      } else if (!match && acc.role === 'sales') {
+        // If an account in TELEPHONY_ACCOUNTS is a sales line but no active user with MyOperator is found, skip it
+        continue;
+      }
+
+      merged.push({
         _id: match?._id ? match._id.toString() : null,
-        firstName: acc.name,
-        lastName: '',
+        firstName: match?.firstName || acc.name,
+        lastName: match?.lastName || '',
         name: acc.name,
         email: acc.email,
         phoneNumber: acc.outboundNumber,
@@ -1463,8 +1589,8 @@ const getTelephonyAgents = async (req, res) => {
         did: acc.did,
         role: acc.role,
         isAdmin: !!acc.isAdmin
-      };
-    });
+      });
+    }
 
     res.json({
       success: true,
@@ -1969,8 +2095,27 @@ const getFollowUps = async (req, res) => {
     // Role security: sales agents only see their own follow-ups
     if (req.user.role === 'sales') {
       match.$or = await buildSalesAgentScope(req.user.id);
-    } else if (agentId && agentId !== 'all' && mongoose.Types.ObjectId.isValid(agentId)) {
-      match.agentId = new mongoose.Types.ObjectId(agentId);
+    } else {
+      const disabledSalesAgents = await User.find({
+        role: 'sales',
+        $or: [
+          { myoperator: { $ne: true } },
+          { 'permissions.myoperator': false },
+          { isBlocked: true },
+          { isDeleted: true }
+        ]
+      }).select('_id').lean();
+      const disabledIds = disabledSalesAgents.map(a => a._id);
+
+      if (agentId && agentId !== 'all' && mongoose.Types.ObjectId.isValid(agentId)) {
+        if (disabledIds.some(id => id.toString() === agentId.toString())) {
+          match.agentId = new mongoose.Types.ObjectId(); // matches nothing
+        } else {
+          match.agentId = new mongoose.Types.ObjectId(agentId);
+        }
+      } else if (disabledIds.length > 0) {
+        match.agentId = { $nin: disabledIds };
+      }
     }
 
     const itemsMatch = ['overdue', 'today', 'upcoming'].includes(bucket) ? { bucket } : {};
