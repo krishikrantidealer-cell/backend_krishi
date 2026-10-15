@@ -767,6 +767,16 @@ const TELEPHONY_ACCOUNTS = [
     mobileNumber: '9399022063'
   },
   {
+    name: 'Jaspal Rajput',
+    email: 'ebsale01@gmail.com',
+    role: 'sales',
+    accountName: 'Ram Ji Shukla - 6 (6abceacb44b44323)',
+    companyId: '6abceacb44b44323',
+    did: '07316917216',
+    outboundNumber: '+91 7316917216',
+    mobileNumber: '9399022061'
+  },
+  {
     name: 'Garima Gokulpure',
     email: 'essentialbiosciences12@gmail.com',
     role: 'sales',

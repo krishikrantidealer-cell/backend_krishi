@@ -24,6 +24,7 @@ const getTemplates = async (req, res) => {
     // ── 0. Live Sync from MyOperator Provider (On-demand or Force) ────────────
     if (sync === 'true' || sync === true) {
       try {
+        const accountsConfig = require('../config/myoperatorAccounts');
         const providerTemplates = await myoperatorService.getTemplates();
         if (Array.isArray(providerTemplates) && providerTemplates.length > 0) {
           for (const pt of providerTemplates) {
@@ -36,10 +37,14 @@ const getTemplates = async (req, res) => {
 
             let headerType = "NONE";
             let headerText = "";
+            let headerMediaUrl = "";
             const headerComp = components.find(c => (c.type || "").toUpperCase() === "HEADER");
             if (headerComp) {
               headerType = (headerComp.format || "TEXT").toUpperCase();
               headerText = headerComp.text || "";
+              if (headerComp.media_id) {
+                headerMediaUrl = headerComp.media_id;
+              }
             }
 
             let body = pt.body || pt.data?.body || "";
@@ -53,26 +58,78 @@ const getTemplates = async (req, res) => {
             const footerComp = components.find(c => (c.type || "").toUpperCase() === "FOOTER");
             if (footerComp && footerComp.text) footer = footerComp.text;
 
+            // Extract buttons (Quick reply, Call, URL)
+            let buttons = [];
+            const buttonComp = components.find(c => (c.type || "").toUpperCase() === "BUTTONS");
+            if (buttonComp && Array.isArray(buttonComp.buttons)) {
+              buttons = buttonComp.buttons.map(b => ({
+                type: (b.type || 'QUICK_REPLY').toUpperCase(),
+                text: b.text || '',
+                url: b.url || '',
+                phoneNumber: b.phone_number || b.phoneNumber || ''
+              }));
+            }
+
+            // Extract sample variables if provided
+            let sampleVariables = [];
+            if (bodyComp?.example?.body_text && Array.isArray(bodyComp.example.body_text[0])) {
+              sampleVariables = bodyComp.example.body_text[0];
+            }
+
             let ptStatus = "APPROVED";
             const rawStatus = (pt.waba_template_status || pt.status || "").toUpperCase();
             if (rawStatus.includes("REJECT")) ptStatus = "REJECTED";
             else if (rawStatus.includes("PEND")) ptStatus = "PENDING_APPROVAL";
+            else if (rawStatus.includes("ACTIV") || rawStatus.includes("APPROV")) ptStatus = "APPROVED";
+
+            const isMain = !pt.companyId || pt.companyId === accountsConfig.main?.companyId;
+            let targetAgentId = null;
+            let targetAgentPhone = pt.whatsappNumber || '';
+            let targetAccountName = pt.accountName || (isMain ? 'Krishikranti Organics (Main)' : '');
+
+            // Match agent user from User collection
+            if (!isMain) {
+              const matchedUser = await User.findOne({
+                $or: [
+                  ...(pt.companyId ? [{ 'myoperatorConfig.companyId': pt.companyId }] : []),
+                  ...(pt.whatsappNumber ? [{ 'myoperatorConfig.whatsappNumber': pt.whatsappNumber }] : []),
+                  ...(pt.agentName ? [{ firstName: new RegExp(pt.agentName.split(' ')[0], 'i') }] : [])
+                ]
+              }).select('_id phoneNumber');
+              if (matchedUser) {
+                targetAgentId = matchedUser._id;
+                targetAgentPhone = matchedUser.phoneNumber || targetAgentPhone;
+              }
+            }
+
+            const upsertFilter = {
+              name,
+              language,
+              companyId: pt.companyId || (isMain ? accountsConfig.main?.companyId : '')
+            };
 
             await WhatsAppTemplate.findOneAndUpdate(
-              { name, language, isGlobal: true },
+              upsertFilter,
               {
                 $set: {
                   name,
                   title: name.replace(/_/g, " ").replace(/\b\w/g, l => l.toUpperCase()),
                   category: validCategory,
                   language,
-                  headerType: ["NONE", "TEXT", "IMAGE", "DOCUMENT", "VIDEO"].includes(headerType) ? headerType : "NONE",
+                  headerType: ["NONE", "TEXT", "IMAGE", "DOCUMENT", "VIDEO", "MEDIA"].includes(headerType) ? headerType : "NONE",
                   headerText,
+                  headerMediaUrl,
                   body,
                   footer,
+                  buttons,
+                  sampleVariables,
                   status: ptStatus,
-                  isGlobal: true,
-                  providerTemplateId: pt.waba_template_id || pt.id
+                  isGlobal: isMain,
+                  accountName: targetAccountName,
+                  companyId: pt.companyId || (isMain ? accountsConfig.main?.companyId : ''),
+                  agentId: targetAgentId,
+                  agentPhone: targetAgentPhone,
+                  providerTemplateId: pt.waba_template_id || pt.id || pt.uuid
                 },
                 $setOnInsert: {
                   createdBy: req.user.id
@@ -264,15 +321,35 @@ const createTemplate = async (req, res) => {
     let providerTemplateId = null;
     let metaRejectionReason = null;
 
-    // 1. Submit directly via MyOperator WABA Provider API
-    if (myoperatorService.wabaKey) {
+    const accountsConfig = require('../config/myoperatorAccounts');
+    let targetWabaKey = null;
+    let targetCompanyId = null;
+    let targetAccountName = '';
+
+    if (assignedCompanyId) {
+      const matchedAgent = (accountsConfig.agents || []).find(a => a.companyId === assignedCompanyId);
+      if (matchedAgent) {
+        targetWabaKey = matchedAgent.wabaKey;
+        targetCompanyId = matchedAgent.companyId;
+        targetAccountName = matchedAgent.accountName;
+      }
+    }
+
+    if (!targetCompanyId) {
+      targetWabaKey = accountsConfig.main?.wabaKey || myoperatorService.wabaKey;
+      targetCompanyId = accountsConfig.main?.companyId || myoperatorService.companyId;
+      targetAccountName = accountsConfig.main?.name || 'Krishikranti Organics (Main)';
+    }
+
+    // 1. Submit directly via MyOperator WABA Provider API with account-specific credentials
+    if (targetWabaKey) {
       try {
         const myopRes = await myoperatorService.createTemplate({
           name: formattedName,
           category: category.toUpperCase(),
           language,
           components: metaComponents
-        });
+        }, targetWabaKey, targetCompanyId);
         if (myopRes?.id || myopRes?.template_id || myopRes?.data?.id) {
           providerTemplateId = myopRes.id || myopRes.template_id || myopRes.data?.id;
           initialStatus = (myopRes.status || myopRes.data?.status || 'PENDING_APPROVAL').toUpperCase();
@@ -330,9 +407,10 @@ const createTemplate = async (req, res) => {
       sampleVariables,
       status: initialStatus,
       isGlobal: effectiveIsGlobal,
+      accountName: targetAccountName,
       agentId: assignedAgentId,
       agentPhone: assignedAgentPhone,
-      companyId: assignedCompanyId,
+      companyId: targetCompanyId || assignedCompanyId,
       providerTemplateId,
       metaRejectionReason,
       createdBy: req.user.id
@@ -386,6 +464,25 @@ const deleteTemplate = async (req, res) => {
                       (template.agentId && template.agentId.toString() === req.user.id);
       if (!isOwner) {
         return res.status(403).json({ success: false, message: 'Not authorized to delete this template' });
+      }
+    }
+
+    const accountsConfig = require('../config/myoperatorAccounts');
+    let targetWabaKey = null;
+    let targetCompanyId = null;
+    if (template.companyId) {
+      const matchedAgent = (accountsConfig.agents || []).find(a => a.companyId === template.companyId);
+      if (matchedAgent) {
+        targetWabaKey = matchedAgent.wabaKey;
+        targetCompanyId = matchedAgent.companyId;
+      }
+    }
+
+    if (template.providerTemplateId) {
+      try {
+        await myoperatorService.deleteTemplate(template.providerTemplateId, targetWabaKey, targetCompanyId);
+      } catch (delErr) {
+        console.warn('[MyOperator Template Deletion Note]:', delErr.message);
       }
     }
 

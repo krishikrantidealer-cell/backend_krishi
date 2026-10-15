@@ -27,11 +27,25 @@ const AGENT_TELEPHONY_REGISTRY = {
   '7316917246': {
     name: 'Yashraj Singh (Admin)',
     accountName: 'Main Account',
-    did: '07316917246',
-    companyId: '6ab0de5d51766538',
+    did: '07316917208',
+    companyId: '6abcea80a6fa9438',
     callingXApiKey: 'oomfKA3I2K6TCJYistHyb7sDf0l0F6c8AZro5DJh',
-    callingSecretKey: 'd1160ee08c6afe8984492e716ef062fbaf912e6f86cf851a94122c6a2aaaec25',
-    callingToken: '3b48e781de1440f4d5d8666f118204fb',
+    callingSecretKey: 'e4703ff3d78eda3f7016cedb5e8ef313eb2aa851149c164ff9791f85b2261da5',
+    callingToken: '817c3545b32f7df16784c2416d467a9b',
+    publicIvrId: '6abf9971d5b34126',
+    userUuid: '6abe40026e466397',
+    extension: '11',
+  },
+  '9098544263': {
+    name: 'Yashraj Singh (Admin)',
+    accountName: 'Main Account',
+    did: '07316917208',
+    companyId: '6abcea80a6fa9438',
+    callingXApiKey: 'oomfKA3I2K6TCJYistHyb7sDf0l0F6c8AZro5DJh',
+    callingSecretKey: 'e4703ff3d78eda3f7016cedb5e8ef313eb2aa851149c164ff9791f85b2261da5',
+    callingToken: '817c3545b32f7df16784c2416d467a9b',
+    publicIvrId: '6abf9971d5b34126',
+    userUuid: '6abe40026e466397',
     extension: '11',
   },
   // Ram Ji Shukla - 2 (Anshika Gupta)
@@ -99,6 +113,32 @@ const AGENT_TELEPHONY_REGISTRY = {
     userUuid: '6abe41494bcb1499',
     extension: '11',
   },
+  // Ram Ji Shukla - 6 (Garima Gokulpure)
+  '9201896603': {
+    name: 'Garima Gokulpure',
+    accountName: 'Ram Ji Shukla - 6',
+    did: '07316917216',
+    companyId: '6abceacb44b44323',
+    callingXApiKey: 'oomfKA3I2K6TCJYistHyb7sDf0l0F6c8AZro5DJh',
+    callingSecretKey: 'fb3c759e39ad53a6b3e811e0f203fa5ca53db295225f9d33c140c0f5eab80760',
+    callingToken: '55182190d578a476bc2b813ac804a294',
+    publicIvrId: '6ac3932d1bae5749',
+    userUuid: '6abe41494bcb1499',
+    extension: '11',
+  },
+  // Ram Ji Shukla - 6 (Eram Istiyaque)
+  '9201896608': {
+    name: 'Eram Istiyaque',
+    accountName: 'Ram Ji Shukla - 6',
+    did: '07316917216',
+    companyId: '6abceacb44b44323',
+    callingXApiKey: 'oomfKA3I2K6TCJYistHyb7sDf0l0F6c8AZro5DJh',
+    callingSecretKey: 'fb3c759e39ad53a6b3e811e0f203fa5ca53db295225f9d33c140c0f5eab80760',
+    callingToken: '55182190d578a476bc2b813ac804a294',
+    publicIvrId: '6ac3932d1bae5749',
+    userUuid: '6abe41494bcb1499',
+    extension: '11',
+  },
 };
 
 class MyOperatorCallService {
@@ -149,10 +189,18 @@ class MyOperatorCallService {
     const dedicatedVid = agentConfig.vid || registryMatch.extension || agentConfig.extension || '11';
     const agentUuid = agentConfig.uuid || agentConfig.userId || registryMatch.userUuid || '6abe40026e466397';
 
+    const hasAgentPair = agentConfig.companyId && agentConfig.publicIvrId;
+    const hasRegistryPair = registryMatch.companyId && registryMatch.publicIvrId;
+
+    const companyId = hasAgentPair 
+      ? agentConfig.companyId 
+      : (hasRegistryPair ? registryMatch.companyId : (process.env.MYOPERATOR_PUBLIC_IVR_ID ? (process.env.MYOPERATOR_COMPANY_ID || '6abcea80a6fa9438') : '6abcea80a6fa9438'));
+    const publicIvrId = hasAgentPair 
+      ? agentConfig.publicIvrId 
+      : (hasRegistryPair ? registryMatch.publicIvrId : (process.env.MYOPERATOR_PUBLIC_IVR_ID || '6abf9971d5b34126'));
+
     const apiKey = agentConfig.callingXApiKey || agentConfig.apiKey || registryMatch.callingXApiKey || registryMatch.apiKey || this.callingXApiKey;
-    const secretKey = agentConfig.callingSecretKey || agentConfig.secretKey || registryMatch.callingSecretKey || registryMatch.secretKey || this.callingSecretKey;
-    const companyId = agentConfig.companyId || registryMatch.companyId || process.env.MYOPERATOR_COMPANY_ID || '6abcea80a6fa9438';
-    const publicIvrId = agentConfig.publicIvrId || registryMatch.publicIvrId || process.env.MYOPERATOR_PUBLIC_IVR_ID || '6abf9971d5b34126';
+    const secretKey = agentConfig.callingSecretKey || agentConfig.secretKey || registryMatch.callingSecretKey || registryMatch.secretKey || (hasRegistryPair ? registryMatch.callingSecretKey : 'e4703ff3d78eda3f7016cedb5e8ef313eb2aa851149c164ff9791f85b2261da5');
 
     let responseData = null;
 

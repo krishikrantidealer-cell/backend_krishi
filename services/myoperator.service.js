@@ -81,10 +81,35 @@ class MyOperatorService {
       let targetCompanyId;
 
       if (isTemplate) {
-        // Meta WhatsApp templates are registered on Krishikranti Organics Main WABA account
-        targetPhoneNumId = process.env.MYOPERATOR_PHONE_NUMBER_ID || accountsConfig.main?.wabaPhoneNumberId || '1307352865799863';
-        targetWabaKey = process.env.MYOPERATOR_WABA_KEY || accountsConfig.main?.wabaKey || 'Ypgfegpk54lFXvWTk4bLHvvJuDElnOPhsDp2M3MgRx';
-        targetCompanyId = process.env.MYOPERATOR_COMPANY_ID || accountsConfig.main?.companyId || '6ab0de5d51766538';
+        let matchedAccount = null;
+        try {
+          const WhatsAppTemplate = require('../models/WhatsAppTemplate');
+          const tplDoc = await WhatsAppTemplate.findOne({
+            name: templateName,
+            status: { $in: ['APPROVED', 'active', 'approved'] }
+          }).sort({ companyId: -1 }).lean();
+
+          if (tplDoc?.companyId) {
+            matchedAccount = (accountsConfig.agents || []).find(a => a.companyId === tplDoc.companyId);
+            if (!matchedAccount && accountsConfig.main?.companyId === tplDoc.companyId) {
+              matchedAccount = accountsConfig.main;
+            }
+          }
+        } catch (_) {}
+
+        if (matchedAccount) {
+          targetPhoneNumId = matchedAccount.wabaPhoneNumberId;
+          targetWabaKey = matchedAccount.wabaKey;
+          targetCompanyId = matchedAccount.companyId;
+        } else if (matchedConfig?.wabaPhoneNumberId && matchedConfig?.wabaKey) {
+          targetPhoneNumId = matchedConfig.wabaPhoneNumberId;
+          targetWabaKey = matchedConfig.wabaKey;
+          targetCompanyId = matchedConfig.companyId;
+        } else {
+          targetPhoneNumId = process.env.MYOPERATOR_PHONE_NUMBER_ID || accountsConfig.main?.wabaPhoneNumberId || '1307352865799863';
+          targetWabaKey = process.env.MYOPERATOR_WABA_KEY || accountsConfig.main?.wabaKey || 'Ypgfegpk54lFXvWTk4bLHvvJuDElnOPhsDp2M3MgRx';
+          targetCompanyId = process.env.MYOPERATOR_COMPANY_ID || accountsConfig.main?.companyId || '6ab0de5d51766538';
+        }
       } else {
         // Freeform message: If customer sent an incoming message within 24 hours on a specific WABA line, Meta's 24h window is open ON THAT EXACT LINE!
         const hasRecentIncoming = lastIncomingMessageAt && (Date.now() - new Date(lastIncomingMessageAt).getTime() < 24 * 60 * 60 * 1000);
@@ -403,17 +428,96 @@ class MyOperatorService {
   }
 
   /**
-   * List approved WhatsApp templates from MyOperator
+   * List approved WhatsApp templates from MyOperator.
+   * If wabaKey & companyId provided, queries that specific account.
+   * Otherwise queries ALL configured accounts (Main + all 5 dedicated sales lines)
+   * in parallel and aggregates the templates, tagging each with its account and credentials.
    */
-  async getTemplates() {
-    if (!this.wabaKey) return [];
+  async getTemplates(wabaKey = null, companyId = null) {
+    if (wabaKey && companyId) {
+      return this._fetchTemplatesForAccount({ wabaKey, companyId, accountName: 'Target Account' });
+    }
+
+    const accountsConfig = require('../config/myoperatorAccounts');
+    const mainAcc = accountsConfig.main || {};
+    const agentAccs = accountsConfig.agents || [];
+
+    const allAccounts = [
+      {
+        accountName: mainAcc.name || 'Krishikranti Organics (Main)',
+        agentName: mainAcc.agentName || 'Yashraj Singh',
+        role: 'admin',
+        companyId: mainAcc.companyId || this.companyId,
+        wabaKey: mainAcc.wabaKey || this.wabaKey,
+        wabaPhoneNumberId: mainAcc.wabaPhoneNumberId || this.phoneNumberId,
+        whatsappNumber: mainAcc.whatsappNumber,
+        isGlobal: true
+      },
+      ...agentAccs.map(a => ({
+        accountName: a.accountName,
+        agentName: a.agentName,
+        role: 'sales',
+        email: a.email,
+        phone: a.phone,
+        companyId: a.companyId,
+        wabaKey: a.wabaKey,
+        wabaPhoneNumberId: a.wabaPhoneNumberId,
+        whatsappNumber: a.whatsappNumber,
+        isGlobal: false
+      }))
+    ];
+
+    // Deduplicate by companyId so shared lines (e.g. Ram Ji Shukla - 6) are not called twice
+    const uniqueAccounts = [];
+    const seenCids = new Set();
+    for (const acc of allAccounts) {
+      if (acc.companyId && acc.wabaKey && !seenCids.has(acc.companyId)) {
+        seenCids.add(acc.companyId);
+        uniqueAccounts.push(acc);
+      }
+    }
+
+    const settled = await Promise.allSettled(
+      uniqueAccounts.map(acc => this._fetchTemplatesForAccount(acc))
+    );
+
+    const aggregated = [];
+    settled.forEach((res, idx) => {
+      if (res.status === 'fulfilled' && Array.isArray(res.value)) {
+        aggregated.push(...res.value);
+      } else {
+        console.warn(`[MyOperator] Could not load templates for ${uniqueAccounts[idx]?.accountName}:`, res.reason?.message);
+      }
+    });
+
+    return aggregated;
+  }
+
+  /**
+   * Internal helper to fetch templates from a specific account
+   */
+  async _fetchTemplatesForAccount(account) {
+    if (!account.wabaKey || !account.companyId) return [];
     try {
+      const headers = this.getHeaders(account.wabaKey, account.companyId);
       const response = await axios.get(`${this.baseUrl}/chat/templates?limit=100&offset=0`, {
-        headers: this.getHeaders()
+        headers,
+        timeout: 25000
       });
-      return response.data?.data?.results || response.data?.data || response.data || [];
+      const list = response.data?.data?.results || response.data?.data || response.data || [];
+      if (!Array.isArray(list)) return [];
+
+      return list.map(t => ({
+        ...t,
+        companyId: account.companyId,
+        accountName: account.accountName,
+        agentName: account.agentName,
+        wabaPhoneNumberId: account.wabaPhoneNumberId,
+        whatsappNumber: account.whatsappNumber,
+        isGlobal: account.isGlobal ?? false
+      }));
     } catch (error) {
-      console.error('[MyOperator WABA Templates Error]:', error.response?.data || error.message);
+      console.warn(`[MyOperator Templates Error for ${account.accountName || account.companyId}]:`, error.response?.data || error.message);
       return [];
     }
   }
@@ -478,14 +582,15 @@ class MyOperatorService {
   /**
    * Create a new WhatsApp Template at Meta via MyOperator API
    */
-  async createTemplate(templatePayload) {
-    if (!this.wabaKey) {
+  async createTemplate(templatePayload, wabaKey = null, companyId = null) {
+    const key = wabaKey || this.wabaKey;
+    if (!key) {
       throw new Error('MYOPERATOR_WABA_KEY is required to create templates.');
     }
 
     try {
       const response = await axios.post(`${this.baseUrl}/chat/templates`, templatePayload, {
-        headers: this.getHeaders()
+        headers: this.getHeaders(key, companyId)
       });
       return response.data;
     } catch (error) {
@@ -497,12 +602,13 @@ class MyOperatorService {
   /**
    * Delete a WhatsApp Template from MyOperator
    */
-  async deleteTemplate(templateId) {
-    if (!this.wabaKey || !templateId) return false;
+  async deleteTemplate(templateId, wabaKey = null, companyId = null) {
+    const key = wabaKey || this.wabaKey;
+    if (!key || !templateId) return false;
 
     try {
       const response = await axios.delete(`${this.baseUrl}/chat/templates/${templateId}`, {
-        headers: this.getHeaders()
+        headers: this.getHeaders(key, companyId)
       });
       return response.data?.status === 'success' || response.status === 200;
     } catch (error) {

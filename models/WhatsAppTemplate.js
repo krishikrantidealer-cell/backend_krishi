@@ -68,6 +68,10 @@ const whatsAppTemplateSchema = new mongoose.Schema({
     default: false,
     index: true
   },
+  accountName: {
+    type: String,
+    default: ''
+  },
   agentId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -79,7 +83,8 @@ const whatsAppTemplateSchema = new mongoose.Schema({
   },
   companyId: {
     type: String,
-    default: ''
+    default: '',
+    index: true
   },
   providerTemplateId: {
     type: String,
@@ -95,7 +100,8 @@ const whatsAppTemplateSchema = new mongoose.Schema({
   }
 }, { timestamps: true });
 
-// Compound index to ensure uniqueness per agent/WABA account and language
+// Compound indexes to ensure uniqueness per agent/account and language
 whatsAppTemplateSchema.index({ name: 1, language: 1, agentId: 1 });
+whatsAppTemplateSchema.index({ name: 1, language: 1, companyId: 1 });
 
 module.exports = mongoose.model('WhatsAppTemplate', whatsAppTemplateSchema);

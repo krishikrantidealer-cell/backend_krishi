@@ -1051,15 +1051,37 @@ const getTemplates = async (req, res) => {
     if (Array.isArray(providerTemplates)) {
       for (const pt of providerTemplates) {
         const name = pt.name || pt.element_name;
-        if (name && !combined.some(c => c.name === name)) {
+        const ptCid = pt.companyId || '';
+        if (name && !combined.some(c => c.name === name && (c.companyId || '') === ptCid)) {
+          const rawStatus = (pt.waba_template_status || pt.status || 'APPROVED').toUpperCase();
+          let status = 'APPROVED';
+          if (rawStatus.includes('REJECT')) status = 'REJECTED';
+          else if (rawStatus.includes('PEND')) status = 'PENDING_APPROVAL';
+
+          // Extract buttons
+          let buttons = [];
+          const components = Array.isArray(pt.components) ? pt.components : [];
+          const btnComp = components.find(c => (c.type || '').toUpperCase() === 'BUTTONS');
+          if (btnComp && Array.isArray(btnComp.buttons)) {
+            buttons = btnComp.buttons.map(b => ({
+              type: (b.type || 'QUICK_REPLY').toUpperCase(),
+              text: b.text || '',
+              url: b.url || '',
+              phoneNumber: b.phone_number || b.phoneNumber || ''
+            }));
+          }
+
           combined.push({
             name,
-            category: pt.category || 'UTILITY',
+            title: name.replace(/_/g, " ").replace(/\b\w/g, l => l.toUpperCase()),
+            category: (pt.category || 'UTILITY').toUpperCase(),
             language: pt.language || 'en',
-            body: pt.body || pt.data?.body || (pt.components?.find(c => c.type === 'BODY')?.text) || name,
-            status: pt.status || 'APPROVED',
-            providerTemplateId: pt.id || pt.uuid,
-            buttons: pt.buttons || []
+            body: pt.body || pt.data?.body || (components.find(c => (c.type || '').toUpperCase() === 'BODY')?.text) || name,
+            status,
+            providerTemplateId: pt.id || pt.uuid || pt.waba_template_id,
+            buttons,
+            companyId: ptCid,
+            accountName: pt.accountName || ''
           });
         }
       }
@@ -1132,8 +1154,29 @@ const createTemplate = async (req, res) => {
     let providerResponse = null;
     let initialStatus = 'PENDING_APPROVAL';
 
+    const accountsConfig = require('../config/myoperatorAccounts');
+    let targetWabaKey = null;
+    let targetCompanyId = null;
+    let targetAccountName = '';
+
+    const agentUser = await User.findById(req.user.id).lean();
+    if (agentUser?.myoperatorConfig?.companyId) {
+      const matched = (accountsConfig.agents || []).find(a => a.companyId === agentUser.myoperatorConfig.companyId);
+      if (matched) {
+        targetWabaKey = matched.wabaKey;
+        targetCompanyId = matched.companyId;
+        targetAccountName = matched.accountName;
+      }
+    }
+
+    if (!targetCompanyId) {
+      targetWabaKey = accountsConfig.main?.wabaKey || myoperatorService.wabaKey;
+      targetCompanyId = accountsConfig.main?.companyId || myoperatorService.companyId;
+      targetAccountName = accountsConfig.main?.name || 'Krishikranti Organics (Main)';
+    }
+
     try {
-      providerResponse = await myoperatorService.createTemplate(providerPayload);
+      providerResponse = await myoperatorService.createTemplate(providerPayload, targetWabaKey, targetCompanyId);
       if (providerResponse?.status === 'APPROVED' || providerResponse?.status === 'approved') {
         initialStatus = 'APPROVED';
       }
@@ -1143,6 +1186,7 @@ const createTemplate = async (req, res) => {
 
     const templateDoc = await WhatsAppTemplate.create({
       name: cleanName,
+      title: cleanName.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
       category: category.toUpperCase(),
       language,
       headerType,
@@ -1152,6 +1196,10 @@ const createTemplate = async (req, res) => {
       buttons,
       sampleVariables,
       status: initialStatus,
+      isGlobal: targetCompanyId === accountsConfig.main?.companyId,
+      accountName: targetAccountName,
+      companyId: targetCompanyId,
+      agentId: req.user.role === 'sales' ? req.user.id : null,
       providerTemplateId: providerResponse?.id || providerResponse?.template_id || null,
       createdBy: req.user.id
     });
