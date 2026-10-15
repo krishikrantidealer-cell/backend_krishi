@@ -42,8 +42,14 @@ const getCustomerTimeline = async (req, res) => {
       }).populate('assignedAgent', 'firstName lastName email phoneNumber');
     }
 
-    // Role Security: If sales rep, ensure they have access if assigned
-    if (req.user.role === 'sales' && user && user.assignedAgent) {
+    // Role Security: If sales rep, ensure they have access if assigned (Unassigned customers are strictly for Admin)
+    if (req.user.role === 'sales') {
+      if (!user || !user.assignedAgent) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access Denied: You can only view timeline for leads/dealers assigned to you.'
+        });
+      }
       const assignedId = user.assignedAgent._id?.toString() || user.assignedAgent.toString();
       if (assignedId !== req.user.id.toString()) {
         return res.status(403).json({

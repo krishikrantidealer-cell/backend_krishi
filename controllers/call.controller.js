@@ -286,13 +286,36 @@ const getCallLogs = async (req, res) => {
         );
       }
 
-      andConditions.push({ $or: salesAgentOr });
+      if (customerPhone && customerPhone.trim() !== '') {
+        const cleanCustomerDigits = customerPhone.replace(/\D/g, '').replace(/^91/, '');
+        const isCustomerAssigned = await User.findOne({
+          $or: [
+            { phoneNumber: { $regex: cleanCustomerDigits } },
+            { phone: { $regex: cleanCustomerDigits } }
+          ],
+          assignedAgent: req.user.id,
+          isDeleted: { $ne: true }
+        }).select('_id').lean();
 
-      // Metrics strictly scoped to sales agent's own calls
-      metricsMatch = {
-        ...metricsMatch,
-        $or: salesAgentOr
-      };
+        if (isCustomerAssigned) {
+          metricsMatch = {
+            ...metricsMatch,
+            customerPhone: { $regex: cleanCustomerDigits, $options: 'i' }
+          };
+        } else {
+          andConditions.push({ $or: salesAgentOr });
+          metricsMatch = {
+            ...metricsMatch,
+            $or: salesAgentOr
+          };
+        }
+      } else {
+        andConditions.push({ $or: salesAgentOr });
+        metricsMatch = {
+          ...metricsMatch,
+          $or: salesAgentOr
+        };
+      }
     } else if (agentId && agentId !== 'null' && agentId !== 'undefined' && agentId.trim() !== '' && agentId !== 'all') {
       andConditions.push({ agentId });
       if (mongoose.Types.ObjectId.isValid(agentId)) {
