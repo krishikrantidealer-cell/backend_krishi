@@ -809,6 +809,35 @@ async function processIncomingMessage({ phone, name, messageObj, phoneNumberId, 
   if (targetAgentId) {
     const agentIdStr = targetAgentId._id ? targetAgentId._id.toString() : targetAgentId.toString();
     wsService.sendToUser(agentIdStr, broadcastPayload);
+
+    // Send Panel & Browser Notification to assigned sales agent with 15-minute anti-spam cooldown per conversation
+    try {
+      const notificationService = require('../services/notification.service');
+      const senderDisplay = contact?.name || `+91 ${cleanPhone}`;
+      const previewText = (content && content.trim())
+        ? (content.trim().length > 90 ? `${content.trim().substring(0, 90)}...` : content.trim())
+        : `Sent a ${msgType || 'media'} attachment`;
+
+      notificationService.sendPanelAlert({
+        userId: agentIdStr,
+        title: `💬 New WhatsApp from ${senderDisplay}`,
+        body: previewText,
+        actionRoute: '/whatsapp-crm',
+        type: 'whatsapp_inbound',
+        priority: 'normal',
+        entityId: conversation._id.toString(),
+        entityType: 'conversation',
+        metadata: {
+          conversationId: conversation._id.toString(),
+          contactId: contact?._id ? contact._id.toString() : null,
+          customerName: senderDisplay,
+          phoneNumber: cleanPhone
+        },
+        cooldownMinutes: 15
+      }).catch(err => console.warn('[Webhook WA Alert Warning]:', err.message));
+    } catch (notifErr) {
+      console.warn('[Webhook WA Alert Error]:', notifErr.message);
+    }
   }
   wsService.broadcastToRoles(['admin'], broadcastPayload);
   console.log(`[MyOperator Webhook] ✅ Broadcasted real-time NEW_MESSAGE for ${cleanPhone} to agent ${targetAgentId || 'NONE (Unassigned - Admin only)'}`);

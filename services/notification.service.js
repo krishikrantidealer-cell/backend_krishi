@@ -35,27 +35,76 @@ function interpolateUserPlaceholders(text, user) {
 }
 
 class NotificationService {
-  async sendUtilityNotification(userId, title, body, actionRoute, imageUrl, btn1Text = "⚡ Open Offer", btn2Text = "📞 Call Support") {
+  async sendUtilityNotification(userId, title, body, actionRoute, imageUrl, btn1Text = "⚡ Open Offer", btn2Text = "📞 Call Support", options = {}) {
     try {
       const user = await User.findById(userId);
       const resolvedTitle = interpolateUserPlaceholders(title, user);
       const resolvedBody = interpolateUserPlaceholders(body, user);
 
-      // 1. Save to Database (Enterprise Persistent Log)
-      const dbNotification = await Notification.create({
-        user: userId,
-        title: resolvedTitle,
-        body: resolvedBody,
-        category: 'utility',
-        actionRoute: actionRoute || '/',
-        ...(imageUrl && { imageUrl: imageUrl })
-      });
-      console.log(`Notification logged to database with ID: ${dbNotification._id}`);
+      const {
+        type = 'general',
+        priority = 'normal',
+        entityId = null,
+        entityType = null,
+        metadata = {},
+        cooldownMinutes = 0
+      } = options || {};
 
-      // Real-time WebSocket sync
+      let dbNotification = null;
+
+      // Optional Anti-Spam Cooldown Check (update existing unread alert instead of duplicating)
+      if (cooldownMinutes > 0 && type !== 'general') {
+        const cutoff = new Date(Date.now() - cooldownMinutes * 60 * 1000);
+        const query = {
+          user: userId,
+          type,
+          isRead: false,
+          createdAt: { $gte: cutoff }
+        };
+        if (entityId) query.entityId = String(entityId);
+
+        dbNotification = await Notification.findOneAndUpdate(
+          query,
+          {
+            $set: {
+              title: resolvedTitle,
+              body: resolvedBody,
+              priority,
+              actionRoute: actionRoute || '/',
+              metadata: { ...metadata, updatedCount: true }
+            }
+          },
+          { new: true }
+        );
+      }
+
+      // 1. Save to Database (Enterprise Persistent Log) if not coalesced by cooldown
+      if (!dbNotification) {
+        dbNotification = await Notification.create({
+          user: userId,
+          title: resolvedTitle,
+          body: resolvedBody,
+          category: 'utility',
+          type,
+          priority,
+          actionRoute: actionRoute || '/',
+          entityId: entityId ? String(entityId) : null,
+          entityType,
+          metadata,
+          ...(imageUrl && { imageUrl: imageUrl })
+        });
+        console.log(`Notification logged to database with ID: ${dbNotification._id} [type=${type}, priority=${priority}]`);
+      } else {
+        console.log(`Notification coalesced under cooldown with ID: ${dbNotification._id} [type=${type}]`);
+      }
+
+      // Real-time WebSocket sync (include notification payload for 0ms client ingestion)
       try {
         const { sendToUser } = require('./websocket.service');
-        sendToUser(userId.toString(), { type: 'NOTIFICATION_RECEIVED' });
+        sendToUser(userId.toString(), {
+          type: 'NOTIFICATION_RECEIVED',
+          notification: dbNotification.toObject ? dbNotification.toObject() : dbNotification
+        });
       } catch (wsErr) {
         console.error('[WS] Failed to send NOTIFICATION_RECEIVED:', wsErr.message);
       }
@@ -222,18 +271,43 @@ class NotificationService {
     }
   }
 
-  async notifyAdmins(title, body, actionRoute) {
+  async sendPanelAlert({
+    userId,
+    title,
+    body,
+    actionRoute = '/',
+    type = 'general',
+    priority = 'normal',
+    entityId = null,
+    entityType = null,
+    metadata = {},
+    cooldownMinutes = 0
+  }) {
+    if (!userId) return null;
+    return this.sendUtilityNotification(
+      userId,
+      title,
+      body,
+      actionRoute,
+      null,
+      null,
+      null,
+      { type, priority, entityId, entityType, metadata, cooldownMinutes }
+    );
+  }
+
+  async notifyAdmins(title, body, actionRoute, options = {}) {
     try {
       const admins = await User.find({ role: 'admin', isDeleted: { $ne: true } });
       for (const adminUser of admins) {
-        await this.sendUtilityNotification(adminUser._id, title, body, actionRoute);
+        await this.sendUtilityNotification(adminUser._id, title, body, actionRoute, null, undefined, undefined, options);
       }
     } catch (error) {
       console.error('Error in notifyAdmins:', error);
     }
   }
 
-  async notifyAdminsAndAgent(agentId, title, body, actionRoute) {
+  async notifyAdminsAndAgent(agentId, title, body, actionRoute, options = {}) {
     try {
       let recipients;
       if (agentId) {
@@ -248,7 +322,7 @@ class NotificationService {
       }
 
       for (const recipient of recipients) {
-        await this.sendUtilityNotification(recipient._id, title, body, actionRoute);
+        await this.sendUtilityNotification(recipient._id, title, body, actionRoute, null, undefined, undefined, options);
       }
     } catch (error) {
       console.error('Error in notifyAdminsAndAgent:', error);

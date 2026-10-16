@@ -261,27 +261,55 @@ const runKycUrgencyCheck = async () => {
 
     if (usersToRemind.length === 0) {
       console.log('[Cron] No users to notify for KYC Urgency.');
-      return;
-    }
+    } else {
+      console.log(`[Cron] Found ${usersToRemind.length} users for KYC Urgency reminder. Sending...`);
+      for (let user of usersToRemind) {
+        try {
+          await notificationService.sendUtilityNotification(
+            user._id,
+            "⏳ अभी तक KYC पूरा नहीं किया?",
+            "बस Shop Photo और License Upload करें और Wholesale Rates का फायदा उठाएँ।",
+            "/kyc"
+          );
 
-    console.log(`[Cron] Found ${usersToRemind.length} users for KYC Urgency reminder. Sending...`);
-    for (let user of usersToRemind) {
-      try {
-        await notificationService.sendUtilityNotification(
-          user._id,
-          "⏳ अभी तक KYC पूरा नहीं किया?",
-          "बस Shop Photo और License Upload करें और Wholesale Rates का फायदा उठाएँ।",
-          "/kyc"
-        );
-
-        user.lastKycReminderSentAt = new Date();
-        user.kycReminderCount = (user.kycReminderCount || 0) + 1;
-        await user.save();
-      } catch (err) {
-        console.error(`[Cron] Failed to send KYC reminder to user ${user._id}:`, err.message);
+          user.lastKycReminderSentAt = new Date();
+          user.kycReminderCount = (user.kycReminderCount || 0) + 1;
+          await user.save();
+        } catch (err) {
+          console.error(`[Cron] Failed to send KYC reminder to user ${user._id}:`, err.message);
+        }
       }
+      console.log('[Cron] KYC Urgency reminders sent.');
     }
-    console.log('[Cron] KYC Urgency reminders sent.');
+
+    // Admin SLA Check: Alert Admins if submitted KYC applications are waiting > 48 hours (6-hour cooldown)
+    try {
+      const fortyEightHoursAgo = new Date(Date.now() - 48 * 60 * 60 * 1000);
+      const staleSubmittedKycs = await User.countDocuments({
+        role: 'user',
+        isDeleted: { $ne: true },
+        kycStatus: { $in: ['submitted', 'processing'] },
+        updatedAt: { $lte: fortyEightHoursAgo }
+      });
+
+      if (staleSubmittedKycs > 0) {
+        await notificationService.notifyAdmins(
+          '🚨 KYC Verification SLA Breach (>48h)',
+          `${staleSubmittedKycs} dealer KYC submission${staleSubmittedKycs > 1 ? 's have' : ' has'} been waiting over 48 hours for verification.`,
+          '/leads',
+          {
+            type: 'kyc_sla_breach',
+            priority: 'critical',
+            entityId: 'kyc_sla_48h',
+            entityType: 'lead',
+            metadata: { pendingCount: staleSubmittedKycs, filter: 'kyc_submitted' },
+            cooldownMinutes: 360
+          }
+        );
+      }
+    } catch (slaErr) {
+      console.warn('[Cron] KYC SLA check warning:', slaErr.message);
+    }
   } catch (error) {
     console.error('[Cron] Error in KYC Urgency cron job:', error);
   }
@@ -410,15 +438,24 @@ const runTaskReminderNotifications = async () => {
           const body = `Scheduled task for ${customerDisplay}: ${callLog.taskReminderNote || taskTitle}`;
 
           try {
-            await notificationService.sendUtilityNotification(
-              targetAgentId,
+            await notificationService.sendPanelAlert({
+              userId: targetAgentId,
               title,
               body,
-              '/call-logs',
-              null,
-              'View Call',
-              'Dismiss'
-            );
+              actionRoute: '/call-logs',
+              type: 'task_reminder',
+              priority: 'high',
+              entityId: callLog._id.toString(),
+              entityType: 'call_log',
+              metadata: {
+                callLogId: callLog._id.toString(),
+                customerName: customerDisplay,
+                phoneNumber: callLog.customerPhone || '',
+                taskTitle,
+                taskNote: callLog.taskReminderNote || '',
+                taskReminderDate: callLog.taskReminderDate
+              }
+            });
           } catch (notifErr) {
             console.error('[Task Reminder] Failed sending 30m notification:', notifErr.message);
           }
@@ -456,15 +493,24 @@ const runTaskReminderNotifications = async () => {
         const body = `Task is due now for ${customerDisplay}: ${callLog.taskReminderNote || taskTitle}`;
 
         try {
-          await notificationService.sendUtilityNotification(
-            targetAgentId,
+          await notificationService.sendPanelAlert({
+            userId: targetAgentId,
             title,
             body,
-            '/call-logs',
-            null,
-            'View Call',
-            'Dismiss'
-          );
+            actionRoute: '/call-logs',
+            type: 'task_due_now',
+            priority: 'critical',
+            entityId: callLog._id.toString(),
+            entityType: 'call_log',
+            metadata: {
+              callLogId: callLog._id.toString(),
+              customerName: customerDisplay,
+              phoneNumber: callLog.customerPhone || '',
+              taskTitle,
+              taskNote: callLog.taskReminderNote || '',
+              taskReminderDate: callLog.taskReminderDate
+            }
+          });
         } catch (notifErr) {
           console.error('[Task Reminder] Failed sending due notification:', notifErr.message);
         }

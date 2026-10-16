@@ -34,6 +34,30 @@ exports.completeProfile = async (req, res, next) => {
   try {
     const user = await userService.completeProfile(req.user._id, req.body);
     contactSyncService.syncUserToContactAndConversation(user, { broadcastWs: true }).catch(() => {});
+
+    // Notify Admins of new unassigned lead inflow (with 5-min anti-spam batch cooldown)
+    if (user && !user.assignedAgent && user.role === 'user') {
+      try {
+        const nameStr = (user.firstName || user.lastName)
+          ? `${user.firstName || ''} ${user.lastName || ''}`.trim()
+          : user.shopName || user.phoneNumber;
+        const notificationService = require('../services/notification.service');
+        notificationService.notifyAdmins(
+          'New Unassigned Lead Registered 🌱',
+          `${nameStr} (${user.phoneNumber || ''}) registered on the app and needs agent assignment.`,
+          '/leads/profile',
+          {
+            type: 'unassigned_lead_inflow',
+            priority: 'normal',
+            entityId: user._id.toString(),
+            entityType: 'lead',
+            metadata: { customerName: nameStr, phoneNumber: user.phoneNumber, shopName: user.shopName },
+            cooldownMinutes: 5
+          }
+        ).catch(() => {});
+      } catch (_) {}
+    }
+
     res.json({
       success: true,
       message: 'Account created successfully',
@@ -118,19 +142,29 @@ exports.submitKyc = async (req, res, next) => {
       const whatsappService = require('../services/whatsapp.service');
       whatsappService.notifyKycSubmissionToAdmin(user);
 
-      // Notify Admin via Database Notifications
+      // Notify Admin & Assigned Sales Agent via Database Notifications
       try {
         const nameStr = (user.firstName || user.lastName)
           ? `${user.firstName || ''} ${user.lastName || ''}`.trim()
           : user.shopName || user.phoneNumber;
+        const shopInfo = user.shopName ? ` (${user.shopName})` : '';
         const notificationService = require('../services/notification.service');
-        await notificationService.notifyAdmins(
+        await notificationService.notifyAdminsAndAgent(
+          user.assignedAgent || null,
           'New KYC Submission 📄',
-          `${nameStr} has submitted KYC documents for verification.`,
-          '/leads'
+          `${nameStr}${shopInfo} has submitted KYC documents for verification.`,
+          '/leads/profile',
+          {
+            type: 'kyc_submitted',
+            priority: 'high',
+            entityId: user._id.toString(),
+            entityType: 'lead',
+            metadata: { customerName: nameStr, phoneNumber: user.phoneNumber, shopName: user.shopName },
+            cooldownMinutes: 15
+          }
         );
       } catch (notifErr) {
-        console.error('[Notification] Failed to notify admins on KYC submission:', notifErr.message);
+        console.error('[Notification] Failed to notify admins/agent on KYC submission:', notifErr.message);
       }
     } catch (wsErr) {}
 
@@ -391,6 +425,35 @@ exports.adminUpdateKycStatus = async (req, res, next) => {
       if (user.assignedAgent) {
         sendToUser(user.assignedAgent.toString(), { type: 'LEADS_UPDATE' });
         sendToUser(user.assignedAgent.toString(), { type: 'DEALERS_UPDATE' });
+
+        // Notify assigned sales agent when their lead's KYC is approved or rejected
+        if (['verified', 'rejected'].includes(status)) {
+          const notificationService = require('../services/notification.service');
+          const nameStr = (user.firstName || user.lastName)
+            ? `${user.firstName || ''} ${user.lastName || ''}`.trim()
+            : user.shopName || user.phoneNumber;
+          const shopInfo = user.shopName ? ` (${user.shopName})` : '';
+          const isApproved = status === 'verified';
+
+          await notificationService.sendPanelAlert({
+            userId: user.assignedAgent,
+            title: isApproved ? 'Lead Converted to Verified Dealer! 🎉' : 'Assigned Lead KYC Rejected ⚠️',
+            body: isApproved
+              ? `${nameStr}${shopInfo}'s KYC has been verified. Follow up to pitch their first order!`
+              : `${nameStr}${shopInfo}'s KYC was rejected${reason ? `: "${reason}"` : ''}. Follow up for document re-upload.`,
+            actionRoute: isApproved ? '/dealers/profile' : '/leads/profile',
+            type: isApproved ? 'kyc_verified' : 'kyc_rejected',
+            priority: 'high',
+            entityId: user._id.toString(),
+            entityType: isApproved ? 'dealer' : 'lead',
+            metadata: {
+              customerName: nameStr,
+              phoneNumber: user.phoneNumber,
+              shopName: user.shopName,
+              reason: reason || ''
+            }
+          });
+        }
       }
     } catch (wsErr) {
       console.error('[WS] Failed to broadcast KYC status update:', wsErr.message);
@@ -459,31 +522,39 @@ exports.adminAssignAgent = async (req, res, next) => {
 
     try {
       const { broadcastToRoles, sendToUser } = require('../services/websocket.service');
+      const notificationService = require('../services/notification.service');
       broadcastToRoles(['admin', 'sales'], { type: 'LEADS_UPDATE' });
       broadcastToRoles(['admin', 'sales'], { type: 'DEALERS_UPDATE' });
       if (agentId) {
         sendToUser(agentId, { type: 'LEADS_UPDATE' });
         sendToUser(agentId, { type: 'DEALERS_UPDATE' });
 
-        // Create database notification for the sales agent
+        // Create structured panel alert for the assigned sales agent
         const isDealer = user.kycStatus === 'verified';
         const title = isDealer ? 'New Dealer Assigned 🤝' : 'New Lead Assigned 👤';
         const nameStr = (user.firstName || user.lastName)
           ? `${user.firstName || ''} ${user.lastName || ''}`.trim()
           : user.shopName || user.phoneNumber;
-        const body = isDealer 
-          ? `You have been assigned to dealer: ${nameStr}.`
-          : `You have been assigned to lead: ${nameStr}.`;
+        const phoneSuffix = user.phoneNumber ? ` (${user.phoneNumber})` : '';
+        const body = isDealer
+          ? `You have been assigned to dealer: ${nameStr}${phoneSuffix}.`
+          : `You have been assigned to lead: ${nameStr}${phoneSuffix}.`;
 
-        await Notification.create({
-          user: agentId,
+        await notificationService.sendPanelAlert({
+          userId: agentId,
           title,
           body,
-          category: 'utility',
-          actionRoute: isDealer ? '/dealers/profile' : '/leads/profile'
+          actionRoute: isDealer ? '/dealers/profile' : '/leads/profile',
+          type: isDealer ? 'dealer_assigned' : 'lead_assigned',
+          priority: 'high',
+          entityId: user._id.toString(),
+          entityType: isDealer ? 'dealer' : 'lead',
+          metadata: {
+            customerName: nameStr,
+            phoneNumber: user.phoneNumber,
+            shopName: user.shopName
+          }
         });
-
-        sendToUser(agentId, { type: 'NOTIFICATION_RECEIVED' });
       }
     } catch (wsErr) {
       console.error('[WS] Failed to broadcast agent assignment:', wsErr.message);
@@ -815,6 +886,21 @@ exports.createDealer = async (req, res, next) => {
         broadcastToRoles(['admin', 'sales'], { type: 'LEADS_UPDATE' });
         if (targetAgentId) {
           sendToUser(targetAgentId.toString(), { type: 'DEALERS_UPDATE' });
+          if (String(targetAgentId) !== String(req.user._id)) {
+            const notificationService = require('../services/notification.service');
+            const nameStr = `${existingUser.firstName || ''} ${existingUser.lastName || ''}`.trim() || existingUser.shopName || cleanPhone;
+            notificationService.sendPanelAlert({
+              userId: targetAgentId,
+              title: 'New Dealer Assigned 🤝',
+              body: `You have been assigned to verified dealer: ${nameStr} (${cleanPhone}).`,
+              actionRoute: '/dealers/profile',
+              type: 'dealer_assigned',
+              priority: 'high',
+              entityId: existingUser._id.toString(),
+              entityType: 'dealer',
+              metadata: { customerName: nameStr, phoneNumber: cleanPhone, shopName: existingUser.shopName }
+            }).catch(() => {});
+          }
         }
       } catch (wsErr) {}
 
@@ -907,6 +993,21 @@ exports.createDealer = async (req, res, next) => {
       broadcastToRoles(['admin', 'sales'], { type: 'LEADS_UPDATE' });
       if (targetAgentId) {
         sendToUser(targetAgentId.toString(), { type: 'DEALERS_UPDATE' });
+        if (String(targetAgentId) !== String(req.user._id)) {
+          const notificationService = require('../services/notification.service');
+          const nameStr = `${newDealer.firstName || ''} ${newDealer.lastName || ''}`.trim() || newDealer.shopName || cleanPhone;
+          notificationService.sendPanelAlert({
+            userId: targetAgentId,
+            title: 'New Dealer Assigned 🤝',
+            body: `You have been assigned to new dealer: ${nameStr} (${cleanPhone}).`,
+            actionRoute: '/dealers/profile',
+            type: 'dealer_assigned',
+            priority: 'high',
+            entityId: newDealer._id.toString(),
+            entityType: 'dealer',
+            metadata: { customerName: nameStr, phoneNumber: cleanPhone, shopName: newDealer.shopName }
+          }).catch(() => {});
+        }
       }
     } catch (wsErr) {}
 
@@ -1045,6 +1146,21 @@ exports.createLead = async (req, res, next) => {
         broadcastToRoles(['admin', 'sales'], { type: 'LEADS_UPDATE' });
         if (targetAgentId) {
           sendToUser(targetAgentId.toString(), { type: 'LEADS_UPDATE' });
+          if (String(targetAgentId) !== String(req.user._id)) {
+            const notificationService = require('../services/notification.service');
+            const nameStr = `${existingUser.firstName || ''} ${existingUser.lastName || ''}`.trim() || existingUser.shopName || cleanPhone;
+            notificationService.sendPanelAlert({
+              userId: targetAgentId,
+              title: 'New Lead Assigned 👤',
+              body: `You have been assigned to lead: ${nameStr} (${cleanPhone}).`,
+              actionRoute: '/leads/profile',
+              type: 'lead_assigned',
+              priority: 'high',
+              entityId: existingUser._id.toString(),
+              entityType: 'lead',
+              metadata: { customerName: nameStr, phoneNumber: cleanPhone, shopName: existingUser.shopName }
+            }).catch(() => {});
+          }
         }
       } catch (wsErr) {}
 
@@ -1132,6 +1248,21 @@ exports.createLead = async (req, res, next) => {
       broadcastToRoles(['admin', 'sales'], { type: 'LEADS_UPDATE' });
       if (targetAgentId) {
         sendToUser(targetAgentId.toString(), { type: 'LEADS_UPDATE' });
+        if (String(targetAgentId) !== String(req.user._id)) {
+          const notificationService = require('../services/notification.service');
+          const nameStr = `${newLead.firstName || ''} ${newLead.lastName || ''}`.trim() || newLead.shopName || cleanPhone;
+          notificationService.sendPanelAlert({
+            userId: targetAgentId,
+            title: 'New Lead Assigned 👤',
+            body: `You have been assigned to new lead: ${nameStr} (${cleanPhone}).`,
+            actionRoute: '/leads/profile',
+            type: 'lead_assigned',
+            priority: 'high',
+            entityId: newLead._id.toString(),
+            entityType: 'lead',
+            metadata: { customerName: nameStr, phoneNumber: cleanPhone, shopName: newLead.shopName }
+          }).catch(() => {});
+        }
       }
     } catch (wsErr) {}
 
@@ -1429,23 +1560,24 @@ exports.adminToggleBlockUser = async (req, res, next) => {
 
         // Notify assigned agent if any
         if (user.assignedAgent) {
-          const agentIdStr = user.assignedAgent.toString();
-          
+          const isDealer = user.kycStatus === 'verified';
           const title = 'Assigned User Blocked 🚫';
           const nameStr = (user.firstName || user.lastName) 
             ? `${user.firstName || ''} ${user.lastName || ''}`.trim()
             : user.shopName || user.phoneNumber;
           const body = `${nameStr} has been blocked by the Administrator.`;
-          
-          await Notification.create({
-            user: user.assignedAgent,
+
+          await notificationService.sendPanelAlert({
+            userId: user.assignedAgent,
             title,
             body,
-            category: 'utility',
-            actionRoute: user.kycStatus === 'verified' ? '/dealers' : '/leads'
+            actionRoute: isDealer ? '/dealers/profile' : '/leads/profile',
+            type: 'account_blocked',
+            priority: 'normal',
+            entityId: user._id.toString(),
+            entityType: isDealer ? 'dealer' : 'lead',
+            metadata: { customerName: nameStr, phoneNumber: user.phoneNumber }
           });
-
-          sendToUser(agentIdStr, { type: 'NOTIFICATION_RECEIVED' });
         }
       } else {
         // Send Push / Utility Notification to the user themselves when unblocked
@@ -1529,8 +1661,15 @@ exports.deleteSelfAccount = async (req, res, next) => {
       const notificationService = require('../services/notification.service');
       await notificationService.notifyAdmins(
         'Account Self-Deleted ⚠️',
-        `${nameStr} has deleted their account.`,
-        '/logs'
+        `${nameStr} (${req.user.phoneNumber || ''}) has deleted their account.`,
+        '/logs',
+        {
+          type: 'account_deleted',
+          priority: 'critical',
+          entityId: userId.toString(),
+          entityType: 'system',
+          metadata: { customerName: nameStr, phoneNumber: req.user.phoneNumber }
+        }
       );
     } catch (notifErr) {
       console.error('[Notification] Failed to notify admins on self-deletion:', notifErr.message);
@@ -1547,10 +1686,10 @@ exports.deleteSelfAccount = async (req, res, next) => {
 
 // ─── Admin: Create Notification for a specific user ───────────────────────────
 // POST /api/users/notifications/send
-// Body: { recipient, title, body, type }
+// Body: { recipient, title, body, type, priority, actionRoute, entityId, entityType, metadata }
 exports.createNotification = async (req, res, next) => {
   try {
-    const { recipient, title, body, message, type } = req.body;
+    const { recipient, title, body, message, type, priority, actionRoute, entityId, entityType, metadata } = req.body;
 
     if (!recipient || !title) {
       res.status(400);
@@ -1565,17 +1704,26 @@ exports.createNotification = async (req, res, next) => {
       title,
       body: notifBody,
       category: 'utility',
+      type: type || 'general',
+      priority: priority || 'normal',
+      actionRoute: actionRoute || '/',
+      entityId: entityId ? String(entityId) : null,
+      entityType: entityType || null,
+      metadata: metadata || {}
     });
 
     // Push real-time WebSocket event so the agent's topbar refreshes immediately
     try {
       const { sendToUser } = require('../services/websocket.service');
-      sendToUser(recipient.toString(), { type: 'NOTIFICATION_RECEIVED' });
+      sendToUser(recipient.toString(), {
+        type: 'NOTIFICATION_RECEIVED',
+        notification: notification.toObject ? notification.toObject() : notification
+      });
     } catch (wsErr) {
       console.error('[WS] Failed to push NOTIFICATION_RECEIVED to user:', wsErr.message);
     }
 
-    console.log(`[Notification] Created for user ${recipient} — type: ${type || 'admin_note'} | title: "${title}"`);
+    console.log(`[Notification] Created for user ${recipient} — type: ${type || 'general'} | title: "${title}"`);
 
     res.status(201).json({
       success: true,

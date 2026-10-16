@@ -1344,6 +1344,45 @@ const handleCallWebhook = async (req, res) => {
 
       // Persist to MongoDB asynchronously
       await callLog.save();
+
+      // Trigger Missed Call Alert for Inbound Missed Calls (5-min anti-spam cooldown per caller)
+      if (isEndEvent && callLog.direction === 'inbound' && callLog.status === 'missed') {
+        try {
+          const notificationService = require('../services/notification.service');
+          const callerName = contactObj?.name || (customerPhone ? `+91 ${customerPhone}` : 'Unknown Caller');
+          const callAlertOptions = {
+            type: 'missed_call',
+            priority: 'high',
+            entityId: callLog._id.toString(),
+            entityType: 'call_log',
+            metadata: {
+              callLogId: callLog._id.toString(),
+              customerName: callerName,
+              phoneNumber: customerPhone
+            },
+            cooldownMinutes: 5
+          };
+
+          if (callLog.agentId) {
+            notificationService.sendPanelAlert({
+              userId: callLog.agentId,
+              title: '📞 Missed Inbound Call',
+              body: `You missed an inbound call from ${callerName} (${customerPhone || ''}). Tap to call back.`,
+              actionRoute: '/call-logs',
+              ...callAlertOptions
+            }).catch(() => {});
+          } else {
+            notificationService.notifyAdmins(
+              '📞 Missed Unassigned Inbound Call',
+              `Inbound call from ${callerName} (${customerPhone || ''}) was missed.`,
+              '/call-logs',
+              callAlertOptions
+            ).catch(() => {});
+          }
+        } catch (missedErr) {
+          console.warn('[Missed Call Alert Warning]:', missedErr.message);
+        }
+      }
     }
 
     res.json({ success: true, message: 'Call webhook processed successfully' });

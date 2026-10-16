@@ -66,19 +66,37 @@ exports.createOrder = async (req, res, next) => {
           const nameStr = (user.firstName || user.lastName)
             ? `${user.firstName || ''} ${user.lastName || ''}`.trim()
             : user.shopName || user.phoneNumber;
-          
+          const amountVal = Number(order.total || order.totalAmount || 0);
+          const shortOrderId = order.orderId || order._id.toString().substring(0, 6).toUpperCase();
+          const orderOptions = {
+            type: 'order_placed',
+            priority: amountVal >= 50000 ? 'critical' : 'high',
+            entityId: order._id.toString(),
+            entityType: 'order',
+            metadata: {
+              orderId: order._id.toString(),
+              orderNumber: shortOrderId,
+              amount: amountVal,
+              customerName: nameStr,
+              phoneNumber: user.phoneNumber,
+              userId: user._id.toString()
+            }
+          };
+
           if (user.assignedAgent) {
             await notificationService.notifyAdminsAndAgent(
               user.assignedAgent,
               'New Order Placed 📦',
-              `Order #${order._id.toString().substring(0, 6)} has been placed by ${nameStr} for amount ₹${order.total || order.totalAmount || 0}.`,
-              '/orders'
+              `Order #${shortOrderId} has been placed by ${nameStr} for ₹${amountVal.toLocaleString('en-IN')}.`,
+              '/orders',
+              orderOptions
             );
           } else {
             await notificationService.notifyAdmins(
               'New Order Placed 📦',
-              `Order #${order._id.toString().substring(0, 6)} has been placed by ${nameStr} for amount ₹${order.total || order.totalAmount || 0}.`,
-              '/orders'
+              `Order #${shortOrderId} has been placed by ${nameStr} (Unassigned) for ₹${amountVal.toLocaleString('en-IN')}.`,
+              '/orders',
+              orderOptions
             );
           }
         } catch (notifErr) {
