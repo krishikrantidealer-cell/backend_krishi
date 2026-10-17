@@ -346,14 +346,42 @@ const getCallLogs = async (req, res) => {
         const disabledCompanyIds = disabledAccounts.map(a => a.companyId).filter(Boolean);
         const disabledDids = disabledAccounts.map(a => (a.did || '').replace(/\D/g, '').replace(/^0+/, '')).filter(Boolean);
 
+        // Fetch active sales agents to ensure we NEVER exclude a companyId or DID
+        // that is shared with an active sales agent (e.g. Jaspal Rajput sharing Ram Ji Shukla - 6)
+        const activeSalesAgents = await User.find({
+          role: 'sales',
+          myoperator: true,
+          'permissions.myoperator': { $ne: false },
+          isBlocked: { $ne: true },
+          isDeleted: { $ne: true }
+        }).select('_id phoneNumber email').lean();
+
+        const activeEmails = activeSalesAgents.map(a => (a.email || '').toLowerCase()).filter(Boolean);
+        const activePhoneSubstrings = activeSalesAgents
+          .map(a => (a.phoneNumber || '').replace(/\D/g, '').replace(/^91/, ''))
+          .filter(p => p.length >= 6);
+
+        const safeDisabledCompanyIds = disabledCompanyIds.filter(cId => {
+          return !TELEPHONY_ACCOUNTS.some(acc =>
+            acc.companyId === cId && (activeEmails.includes(acc.email.toLowerCase()) || activePhoneSubstrings.some(p => acc.mobileNumber.includes(p)))
+          );
+        });
+
+        const safeDisabledDids = disabledDids.filter(did => {
+          return !TELEPHONY_ACCOUNTS.some(acc => {
+            const cleanAccDid = (acc.did || '').replace(/\D/g, '').replace(/^0+/, '');
+            return cleanAccDid === did && (activeEmails.includes(acc.email.toLowerCase()) || activePhoneSubstrings.some(p => acc.mobileNumber.includes(p)));
+          });
+        });
+
         disabledExcludeOr = [
           { agentId: { $in: disabledIds } },
           ...(disabledPhoneSubstrings.length > 0 ? [{ agentPhone: { $regex: disabledPhoneSubstrings.join('|') } }] : []),
-          ...(disabledCompanyIds.length > 0 ? [{ 'metadata.companyId': { $in: disabledCompanyIds } }] : []),
-          ...(disabledDids.length > 0 ? [
-            { 'metadata.matchedDid': { $regex: disabledDids.join('|') } },
-            { 'metadata.agentDid': { $regex: disabledDids.join('|') } },
-            { 'metadata.received_on': { $regex: disabledDids.join('|') } }
+          ...(safeDisabledCompanyIds.length > 0 ? [{ 'metadata.companyId': { $in: safeDisabledCompanyIds } }] : []),
+          ...(safeDisabledDids.length > 0 ? [
+            { 'metadata.matchedDid': { $regex: safeDisabledDids.join('|') } },
+            { 'metadata.agentDid': { $regex: safeDisabledDids.join('|') } },
+            { 'metadata.received_on': { $regex: safeDisabledDids.join('|') } }
           ] : [])
         ];
       }
@@ -1083,8 +1111,12 @@ const handleCallWebhook = async (req, res) => {
     }
 
     // Resolve Sales Agent from Telephony Registry
+    // Prioritize specific agentPhone over shared companyId so shared accounts (e.g. Ram Ji Shukla - 6) match the exact agent
     let matchedAccount = null;
-    if (companyId) {
+    if (agentPhone) {
+      matchedAccount = TELEPHONY_ACCOUNTS.find(acc => acc.mobileNumber.includes(agentPhone) || agentPhone.includes(acc.mobileNumber));
+    }
+    if (!matchedAccount && companyId) {
       matchedAccount = TELEPHONY_ACCOUNTS.find(acc => acc.companyId === companyId);
     }
     if (!matchedAccount && rawDid) {
@@ -1092,9 +1124,6 @@ const handleCallWebhook = async (req, res) => {
         const cleanAccDid = acc.did.replace(/\D/g, '').replace(/^0+/, '');
         return cleanAccDid === rawDid || rawDid.endsWith(cleanAccDid) || cleanAccDid.endsWith(rawDid);
       });
-    }
-    if (!matchedAccount && agentPhone) {
-      matchedAccount = TELEPHONY_ACCOUNTS.find(acc => acc.mobileNumber.includes(agentPhone) || agentPhone.includes(acc.mobileNumber));
     }
 
     let agentUser = null;
