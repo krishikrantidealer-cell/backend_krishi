@@ -82,4 +82,6 @@ const checkoutSessionSchema = new mongoose.Schema({
   timestamps: true
 });
 
+checkoutSessionSchema.index({ createdAt: -1, status: 1 });
+
 module.exports = mongoose.model('CheckoutSession', checkoutSessionSchema);

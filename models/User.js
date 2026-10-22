@@ -331,6 +331,12 @@ const userSchema = new mongoose.Schema({
 // Performance Indexes for fast Admin Panel Lead & Dealer filtering
 userSchema.index({ role: 1, kycStatus: 1, isDeleted: 1 });
 userSchema.index({ assignedAgent: 1, isDeleted: 1 });
+userSchema.index({ assignedAgent: 1, isDeleted: 1, createdAt: -1 });
+userSchema.index({ role: 1, isDeleted: 1, createdAt: -1 });
+userSchema.index({ assignedAt: 1 });
+userSchema.index({ kycApprovedAt: 1 });
+userSchema.index({ deletedAt: 1 });
+userSchema.index({ kycStatus: 1, createdAt: 1 });
 userSchema.index({ createdAt: -1 });
 
 const User = mongoose.model('User', userSchema);

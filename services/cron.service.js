@@ -531,22 +531,22 @@ const runTaskReminderNotifications = async () => {
 exports.initCronJobs = () => {
   console.log('--- Background Services Initialized (Orders, Carts, WhatsApp Live Sync, Push Campaigns & Task Reminders) ---');
 
-  // Execute on startup
-  runOrderSync();
-  runAbandonedCartCheck();
-  runAbandonedCheckoutCheck();
-  runKycUrgencyCheck();
-  runScheduledSegmentNotifications();
-  runWhatsAppAutomation();
-  runWhatsAppMessageSync();
-  runTaskReminderNotifications();
+  // Stagger startup execution to prevent CPU spikes on container spin-up
+  setTimeout(runOrderSync, 5000);
+  setTimeout(runAbandonedCartCheck, 15000);
+  setTimeout(runAbandonedCheckoutCheck, 25000);
+  setTimeout(runKycUrgencyCheck, 35000);
+  setTimeout(runScheduledSegmentNotifications, 45000);
+  setTimeout(runWhatsAppAutomation, 55000);
+  setTimeout(runWhatsAppMessageSync, 65000);
+  setTimeout(runTaskReminderNotifications, 75000);
 
-  // Set intervals
+  // Set recurring intervals
   setInterval(runOrderSync, 20 * 60 * 1000);
   setInterval(runAbandonedCartCheck, 60 * 60 * 1000);
   setInterval(runAbandonedCheckoutCheck, 30 * 60 * 1000);
   setInterval(runKycUrgencyCheck, 30 * 60 * 1000);
-  setInterval(() => runScheduledSegmentNotifications(), 10 * 1000);
+  setInterval(() => runScheduledSegmentNotifications(), 60 * 1000); // 1-minute check is optimal for scheduled campaigns
   setInterval(runWhatsAppAutomation, 60 * 60 * 1000);
   setInterval(runWhatsAppMessageSync, 5 * 60 * 1000); // 5-minute fallback sync loop (real-time events handled via webhooks)
   setInterval(runTaskReminderNotifications, 60 * 1000); // 1-minute interval for precise 2-tier task notifications
