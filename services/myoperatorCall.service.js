@@ -185,7 +185,13 @@ class MyOperatorCallService {
       ) || {};
 
     const agentConfig = agentUser?.myoperatorConfig || {};
-    const dedicatedDid = (agentConfig.did || registryMatch.did || '').replace(/\D/g, '').replace(/^91/, '').replace(/^0+/, '');
+    let rawDid = agentConfig.did || agentConfig.virtualNumber || registryMatch.did || '';
+    // Format dedicated DID: Landlines (Indore STD 0731) MUST keep leading 0
+    // so telecom carriers display the full STD number and allow customers to call back without 'invalid number' errors.
+    let dedicatedDid = rawDid.replace(/\D/g, '').replace(/^91/, '');
+    if (dedicatedDid && !dedicatedDid.startsWith('0')) {
+      dedicatedDid = `0${dedicatedDid}`;
+    }
     const dedicatedVid = agentConfig.vid || registryMatch.extension || agentConfig.extension || '11';
     const agentUuid = agentConfig.uuid || agentConfig.userId || registryMatch.userUuid || '6abe40026e466397';
 
