@@ -139,6 +139,28 @@ const AGENT_TELEPHONY_REGISTRY = {
     userUuid: '6abe41494bcb1499',
     extension: '11',
   },
+  // Ram Ji Shukla - 7 (Govind Singh)
+  '9131094645': {
+    name: 'Govind Singh',
+    accountName: 'Ram Ji Shukla - 7',
+    did: '08048582306',
+    companyId: '6ad36a8a8db37863',
+    callingXApiKey: 'oomfKA3I2K6TCJYistHyb7sDf0l0F6c8AZro5DJh',
+    callingSecretKey: '224de6c55a47f688b27e6437899f37f62d8558a6ce51c91eb2fd29a076df21b5',
+    callingToken: '1eb646074245a8663c92b1641643bb48',
+    extension: '11',
+  },
+  // Ram Ji Shukla - 8 (Dhiraj Kumar)
+  '7322981002': {
+    name: 'Dhiraj Kumar',
+    accountName: 'Ram Ji Shukla - 8',
+    did: '08048582345',
+    companyId: '6ad36ae7e5a68740',
+    callingXApiKey: 'oomfKA3I2K6TCJYistHyb7sDf0l0F6c8AZro5DJh',
+    callingSecretKey: '7b67d54d00ab5e3743a3c5221bfbaa317384eaadbcafd36e3609fa928605c56f',
+    callingToken: 'bbc213f06a41e70423979397fe8b3bce',
+    extension: '11',
+  },
 };
 
 class MyOperatorCallService {

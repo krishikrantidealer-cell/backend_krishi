@@ -935,6 +935,26 @@ const TELEPHONY_ACCOUNTS = [
     did: '07316917216',
     outboundNumber: '+91 7316917216',
     mobileNumber: '9201896608'
+  },
+  {
+    name: 'Govind Singh',
+    email: 'sales18ebs@gmail.com',
+    role: 'sales',
+    accountName: 'Ram Ji Shukla - 7 (6ad36a8a8db37863)',
+    companyId: '6ad36a8a8db37863',
+    did: '08048582306',
+    outboundNumber: '+91 8048582306',
+    mobileNumber: '9131094645'
+  },
+  {
+    name: 'Dhiraj Kumar',
+    email: 'sales19ebs@gmail.com',
+    role: 'sales',
+    accountName: 'Ram Ji Shukla - 8 (6ad36ae7e5a68740)',
+    companyId: '6ad36ae7e5a68740',
+    did: '08048582345',
+    outboundNumber: '+91 8048582345',
+    mobileNumber: '7322981002'
   }
 ];
 
