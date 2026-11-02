@@ -279,12 +279,6 @@ const getCallLogs = async (req, res) => {
           { 'metadata.received_on': { $regex: agentDid } }
         );
       }
-      if (agentVid) {
-        salesAgentOr.push(
-          { 'metadata.matchedVid': agentVid },
-          { 'metadata.agentVid': agentVid }
-        );
-      }
 
       if (customerPhone && customerPhone.trim() !== '') {
         const cleanCustomerDigits = customerPhone.replace(/\D/g, '').replace(/^91/, '');

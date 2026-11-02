@@ -72,8 +72,8 @@ const authorizeMyOperatorAgent = (req, res, next) => {
   if (!req.user) {
     return res.status(401).json({ success: false, message: 'Not authorized' });
   }
-  // Dynamic MongoDB boolean check or admin role
-  if (req.user.role === 'admin' || req.user.myoperator === true) {
+  // Allow admin, sales agents, or users explicitly granted myoperator permission
+  if (req.user.role === 'admin' || req.user.role === 'sales' || req.user.myoperator === true) {
     return next();
   }
   return res.status(403).json({
