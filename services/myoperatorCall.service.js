@@ -113,19 +113,6 @@ const AGENT_TELEPHONY_REGISTRY = {
     userUuid: '6abe41494bcb1499',
     extension: '11',
   },
-  // Ram Ji Shukla - 6 (Garima Gokulpure)
-  '9201896603': {
-    name: 'Garima Gokulpure',
-    accountName: 'Ram Ji Shukla - 6',
-    did: '07316917216',
-    companyId: '6abceacb44b44323',
-    callingXApiKey: 'oomfKA3I2K6TCJYistHyb7sDf0l0F6c8AZro5DJh',
-    callingSecretKey: 'fb3c759e39ad53a6b3e811e0f203fa5ca53db295225f9d33c140c0f5eab80760',
-    callingToken: '55182190d578a476bc2b813ac804a294',
-    publicIvrId: '6ac3932d1bae5749',
-    userUuid: '6abe41494bcb1499',
-    extension: '11',
-  },
   // Ram Ji Shukla - 6 (Eram Istiyaque)
   '9201896608': {
     name: 'Eram Istiyaque',
