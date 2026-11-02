@@ -152,18 +152,6 @@ const AGENT_TELEPHONY_REGISTRY = {
     userUuid: '6ad9bfb5bfb4e950',
     extension: '11',
   },
-  '7322981002': {
-    name: 'Dhiraj Kumar',
-    accountName: 'Ram Ji Shukla - 8',
-    did: '08048582345',
-    companyId: '6ad36ae7e5a68740',
-    callingXApiKey: 'oomfKA3I2K6TCJYistHyb7sDf0l0F6c8AZro5DJh',
-    callingSecretKey: '7b67d54d00ab5e3743a3c5221bfbaa317384eaadbcafd36e3609fa928605c56f',
-    callingToken: 'bbc213f06a41e70423979397fe8b3bce',
-    publicIvrId: '6ae829b456dc1959',
-    userUuid: '6ad9bfb5bfb4e950',
-    extension: '11',
-  },
 };
 
 class MyOperatorCallService {
