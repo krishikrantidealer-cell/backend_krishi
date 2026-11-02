@@ -954,7 +954,7 @@ const TELEPHONY_ACCOUNTS = [
     companyId: '6ad36ae7e5a68740',
     did: '08048582345',
     outboundNumber: '+91 8048582345',
-    mobileNumber: '7322981002'
+    mobileNumber: '9201896603'
   }
 ];
 

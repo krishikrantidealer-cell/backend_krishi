@@ -148,9 +148,23 @@ const AGENT_TELEPHONY_REGISTRY = {
     callingXApiKey: 'oomfKA3I2K6TCJYistHyb7sDf0l0F6c8AZro5DJh',
     callingSecretKey: '224de6c55a47f688b27e6437899f37f62d8558a6ce51c91eb2fd29a076df21b5',
     callingToken: '1eb646074245a8663c92b1641643bb48',
+    publicIvrId: '6ae829565c3a9980',
+    userUuid: '6ad9bdb4b5ac5209',
     extension: '11',
   },
   // Ram Ji Shukla - 8 (Dhiraj Kumar)
+  '9201896603': {
+    name: 'Dhiraj Kumar',
+    accountName: 'Ram Ji Shukla - 8',
+    did: '08048582345',
+    companyId: '6ad36ae7e5a68740',
+    callingXApiKey: 'oomfKA3I2K6TCJYistHyb7sDf0l0F6c8AZro5DJh',
+    callingSecretKey: '7b67d54d00ab5e3743a3c5221bfbaa317384eaadbcafd36e3609fa928605c56f',
+    callingToken: 'bbc213f06a41e70423979397fe8b3bce',
+    publicIvrId: '6ae829b456dc1959',
+    userUuid: '6ad9bfb5bfb4e950',
+    extension: '11',
+  },
   '7322981002': {
     name: 'Dhiraj Kumar',
     accountName: 'Ram Ji Shukla - 8',
@@ -159,6 +173,8 @@ const AGENT_TELEPHONY_REGISTRY = {
     callingXApiKey: 'oomfKA3I2K6TCJYistHyb7sDf0l0F6c8AZro5DJh',
     callingSecretKey: '7b67d54d00ab5e3743a3c5221bfbaa317384eaadbcafd36e3609fa928605c56f',
     callingToken: 'bbc213f06a41e70423979397fe8b3bce',
+    publicIvrId: '6ae829b456dc1959',
+    userUuid: '6ad9bfb5bfb4e950',
     extension: '11',
   },
 };
