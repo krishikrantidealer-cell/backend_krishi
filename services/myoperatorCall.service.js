@@ -154,6 +154,17 @@ const AGENT_TELEPHONY_REGISTRY = {
   },
 };
 
+function normalizeIndianMobile(phone) {
+  if (!phone) return '';
+  let digits = String(phone).replace(/\D/g, '');
+  if (digits.length === 12 && digits.startsWith('91')) {
+    digits = digits.slice(2);
+  } else if (digits.length === 11 && digits.startsWith('0')) {
+    digits = digits.slice(1);
+  }
+  return digits;
+}
+
 class MyOperatorCallService {
   constructor() {
     this.obdBaseUrl    = 'https://obd-api.myoperator.co/obd-api-v1';
@@ -176,9 +187,8 @@ class MyOperatorCallService {
    * Supports dedicated per-agent DID, VID, and account credentials.
    */
   async triggerOutboundCall({ agentId, customerPhone, agentPhone, callMode = 'click2call' }) {
-    const rawNumber = customerPhone.replace(/\D/g, '').replace(/^91/, '').replace(/^0+/, '');
-    const cleanCustomerPhone = rawNumber;
-    const countryCodeNumber = `+91${rawNumber}`;
+    const cleanCustomerPhone = normalizeIndianMobile(customerPhone);
+    const countryCodeNumber = `+91${cleanCustomerPhone}`;
     
     // Look up agent user to fetch dedicated DID, VID, and credentials
     let agentUser = null;
@@ -188,7 +198,7 @@ class MyOperatorCallService {
     }
 
     const effectiveAgentPhone = agentPhone || agentUser?.phoneNumber || '';
-    const cleanAgentPhone = effectiveAgentPhone ? effectiveAgentPhone.replace(/\D/g, '').replace(/^91/, '').replace(/^0+/, '') : '';
+    const cleanAgentPhone = normalizeIndianMobile(effectiveAgentPhone);
 
     // Check pre-configured registry by phone or name
     const registryMatch = AGENT_TELEPHONY_REGISTRY[cleanAgentPhone] ||
