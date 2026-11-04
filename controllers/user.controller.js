@@ -304,7 +304,7 @@ exports.getAllUsers = async (req, res, next) => {
       }
     }
     const { users, totalCount, hasMore } = await userService.getAllUsers(filters);
-    res.json({ success: true, users, data: users, totalCount, hasMore });
+    res.json({ success: true, users, totalCount, hasMore });
   } catch (error) {
     next(error);
   }

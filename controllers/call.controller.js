@@ -955,6 +955,7 @@ const handleCallWebhook = async (req, res) => {
 
     // Extract legs & leg information
     const legs = Array.isArray(merged.legs) ? merged.legs : (Array.isArray(payload.legs) ? payload.legs : (Array.isArray(nestedData.legs) ? nestedData.legs : []));
+    const firstLeg = legs[0] || null;
     const customerLeg = legs.find(l => l.type === 'customer' || (l.pickup_device === 'phone' && !l.agent && l.phone_number));
     const agentLeg = legs.find(l => l.type === 'agent' || l.agent);
 

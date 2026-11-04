@@ -106,7 +106,7 @@ class UserService {
 
     const baseQuery = User.find(query)
       .populate('assignedAgent', 'firstName lastName phoneNumber email')
-      .select('-password')
+      .select('-password -fcmToken -shippingAddresses')
       .sort(filters.trash === 'true' || filters.trash === true ? { deletedAt: -1 } : { createdAt: -1 })
       .lean();
 

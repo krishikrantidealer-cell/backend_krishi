@@ -1,6 +1,7 @@
 const path = require('path');
 // Triggering restart
 const express = require('express');
+const compression = require('compression');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
@@ -41,6 +42,11 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With'],
   credentials: true
+}));
+
+// Compress all HTTP response payloads (crucial for large datasets & Cloud Run response limits)
+app.use(compression({
+  threshold: 1024 // Compress responses larger than 1KB
 }));
 
 // Serve static public assets (push notification banners, etc.)
