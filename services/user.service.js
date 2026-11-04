@@ -49,6 +49,23 @@ class UserService {
       query.assignedAgent = filters.assignedAgentCondition;
     }
 
+    if (filters.source && filters.source !== 'all' && filters.source !== 'All Sources') {
+      const src = String(filters.source).trim();
+      if (src.toLowerCase() === 'meta lead form') {
+        query.source = 'Meta Lead Form';
+      } else if (src.toLowerCase() === 'organic') {
+        query.source = 'Organic';
+      } else if (src.toLowerCase().includes('facebook')) {
+        query.source = { $regex: /facebook/i };
+      } else if (src.toLowerCase().includes('instagram')) {
+        query.source = { $regex: /instagram/i };
+      } else if (src.toLowerCase().includes('google')) {
+        query.source = { $regex: /google/i };
+      } else {
+        query.source = src;
+      }
+    }
+
     const andConditions = [];
     if (filters.salesScopeCondition) {
       andConditions.push(filters.salesScopeCondition);

@@ -267,6 +267,7 @@ exports.getAllUsers = async (req, res, next) => {
       search: req.query.search,
       startDate: req.query.startDate,
       endDate: req.query.endDate,
+      source: req.query.source,
       hasMyOperator: req.query.hasMyOperator,
       page: req.query.page,
       limit: req.query.limit
