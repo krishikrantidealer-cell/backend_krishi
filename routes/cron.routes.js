@@ -34,6 +34,7 @@ router.get('/trigger', verifyCronAuth, async (req, res) => {
 
     // Also run maintenance tasks if job is ALL or unspecified
     if (!job || job === 'ALL') {
+      cronService.runMetaLeadSync().catch(e => console.error('[Cron Route Error] runMetaLeadSync:', e.message));
       cronService.runOrderSync().catch(e => console.error('[Cron Route Error] runOrderSync:', e.message));
       cronService.runAbandonedCartCheck().catch(e => console.error('[Cron Route Error] runAbandonedCartCheck:', e.message));
       cronService.runAbandonedCheckoutCheck().catch(e => console.error('[Cron Route Error] runAbandonedCheckoutCheck:', e.message));
@@ -46,6 +47,22 @@ router.get('/trigger', verifyCronAuth, async (req, res) => {
       success: true,
       message: `Cron tasks triggered successfully (Job: ${job || 'Scheduled window / ALL'})`
     });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+/**
+ * @route   GET /api/cron/meta-lead-sync
+ * @desc    Triggers resilient Meta Graph API lead sync (polling active forms)
+ */
+router.get('/meta-lead-sync', verifyCronAuth, async (req, res) => {
+  try {
+    const deepSync = req.query.deep === 'true';
+    const limit = parseInt(req.query.limit || '100', 10);
+    const metaWebhookController = require('../controllers/metaWebhook.controller');
+    const result = await metaWebhookController.syncRecentMetaLeads({ deepSync, limit, maxPages: deepSync ? 5 : 2 });
+    return res.status(200).json(result);
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }

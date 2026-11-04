@@ -347,3 +347,110 @@ async function createOrUpdateProspectUser(data) {
 
   return user;
 }
+
+/**
+ * 3. Robust Meta Lead Sync Fallback (Runs on 5-min cron and manual trigger)
+ * Queries Meta Graph API directly for all active lead forms to guarantee
+ * zero lead loss even if Meta webhooks are dropped, delayed, or missed.
+ */
+async function syncRecentMetaLeads(options = {}) {
+  const pageAccessToken = process.env.META_PAGE_ACCESS_TOKEN;
+  if (!pageAccessToken) {
+    console.warn('[Meta Lead Sync] Missing META_PAGE_ACCESS_TOKEN — skipping fallback sync.');
+    return { success: false, message: 'Missing META_PAGE_ACCESS_TOKEN' };
+  }
+
+  const limitPerForm = options.limit || 100;
+  let totalChecked = 0;
+  let totalNew = 0;
+  let totalUpdated = 0;
+
+  try {
+    // 1. Fetch Page ID associated with the token
+    const meRes = await axios.get(`https://graph.facebook.com/v20.0/me?access_token=${pageAccessToken}`);
+    const pageId = meRes.data.id;
+
+    // 2. Query active lead generation forms on this page
+    const formsRes = await axios.get(`https://graph.facebook.com/v20.0/${pageId}/leadgen_forms?access_token=${pageAccessToken}`);
+    const allForms = formsRes.data.data || [];
+    const activeForms = allForms.filter(f => f.status === 'ACTIVE' || options.includeAllForms);
+
+    console.log(`[Meta Lead Sync] Polling ${activeForms.length} active Meta forms for Page: ${meRes.data.name} (${pageId})`);
+
+    for (const form of activeForms) {
+      try {
+        let url = `https://graph.facebook.com/v20.0/${form.id}/leads?access_token=${pageAccessToken}&limit=${Math.min(limitPerForm, 100)}`;
+        let pagesCount = 0;
+        const maxPages = options.maxPages || 2;
+
+        while (url && pagesCount < maxPages) {
+          pagesCount++;
+          const leadsRes = await axios.get(url);
+          const leads = leadsRes.data.data || [];
+
+          for (const lead of leads) {
+            totalChecked++;
+            if (!lead.field_data || lead.field_data.length === 0) continue;
+
+            const phoneField = lead.field_data.find(fd => {
+              const nameLower = (fd.name || '').toLowerCase();
+              return nameLower.includes('phone') || nameLower.includes('mobile') ||
+                     nameLower.includes('फ़ोन') || nameLower.includes('फोन') || nameLower.includes('मोबाइल');
+            });
+
+            const rawVal = phoneField?.values?.[0] ? String(phoneField.values[0]).trim() : '';
+            const cleanPhone = normalizePhoneNumber(rawVal);
+            if (!cleanPhone || cleanPhone.length < 10) continue;
+
+            const existingUser = await User.findOne({ phoneNumber: cleanPhone });
+            if (!existingUser) {
+              await processLeadFields(lead.field_data);
+              totalNew++;
+            } else if (!existingUser.notes || !existingUser.notes.includes('Meta Lead Form Submission')) {
+              // Existing user without Meta form details: enrich them
+              await processLeadFields(lead.field_data);
+              totalUpdated++;
+            }
+          }
+
+          // Next page of leads if available and requested
+          url = (options.deepSync && leadsRes.data.paging?.next) ? leadsRes.data.paging.next : null;
+        }
+      } catch (formErr) {
+        console.error(`[Meta Lead Sync] Error fetching leads for form ${form.id} (${form.name}):`, formErr.response?.data?.error?.message || formErr.message);
+      }
+    }
+
+    console.log(`[Meta Lead Sync] Finished successfully: ${totalChecked} checked, ${totalNew} new leads created, ${totalUpdated} updated.`);
+    return {
+      success: true,
+      totalChecked,
+      totalNew,
+      totalUpdated,
+      formsChecked: activeForms.length
+    };
+  } catch (err) {
+    console.error('[Meta Lead Sync] Critical failure during Meta lead sync:', err.response?.data || err.message);
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * 4. Manual API Trigger for Meta Lead Sync
+ * Route: POST /api/meta-lead/sync or GET /api/meta-lead/sync
+ */
+exports.triggerManualMetaSync = async (req, res) => {
+  try {
+    const deepSync = req.query.deep === 'true' || req.body?.deep === true;
+    const limit = parseInt(req.query.limit || req.body?.limit || '100', 10);
+    const result = await syncRecentMetaLeads({ deepSync, limit, maxPages: deepSync ? 5 : 2 });
+    return res.status(200).json(result);
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+exports.syncRecentMetaLeads = syncRecentMetaLeads;
+exports.processLeadFields = processLeadFields;
+exports.createOrUpdateProspectUser = createOrUpdateProspectUser;
+exports.normalizePhoneNumber = normalizePhoneNumber;

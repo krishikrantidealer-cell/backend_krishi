@@ -1,6 +1,10 @@
 const express = require('express');
 const router = express.Router();
-const { verifyMetaWebhook, handleMetaLeadWebhook } = require('../controllers/metaWebhook.controller');
+const {
+  verifyMetaWebhook,
+  handleMetaLeadWebhook,
+  triggerManualMetaSync
+} = require('../controllers/metaWebhook.controller');
 const { handleWebhook: handleMyOperatorWebhook } = require('../controllers/webhook.controller');
 const callController = require('../controllers/call.controller');
 
@@ -9,6 +13,12 @@ router.get('/meta-lead', verifyMetaWebhook);
 router.post('/meta-lead', handleMetaLeadWebhook);
 router.get('/webhooks/meta-lead', verifyMetaWebhook);
 router.post('/webhooks/meta-lead', handleMetaLeadWebhook);
+
+// Meta Lead On-Demand / Fallback Sync API
+router.get('/meta-lead/sync', triggerManualMetaSync);
+router.post('/meta-lead/sync', triggerManualMetaSync);
+router.get('/webhooks/meta-lead/sync', triggerManualMetaSync);
+router.post('/webhooks/meta-lead/sync', triggerManualMetaSync);
 
 // Universal MyOperator Webhook Handler (Auto-dispatches Call Events vs WhatsApp Messages)
 const dispatchMyOperatorWebhook = (req, res) => {

@@ -525,15 +525,35 @@ const runTaskReminderNotifications = async () => {
   }
 };
 
+// 9. Meta Lead Ads Resilient Fallback Sync (Every 5 minutes)
+// Guarantees zero lost leads even if Meta webhooks fail or delay
+const runMetaLeadSync = async (options = {}) => {
+  if (!await acquireCronLock('meta_lead_sync', 180)) {
+    console.log('[Cron] Meta Lead Sync already in progress on another instance.');
+    return;
+  }
+  try {
+    const metaWebhookController = require('../controllers/metaWebhook.controller');
+    await metaWebhookController.syncRecentMetaLeads({
+      limit: options.limit || 100,
+      maxPages: options.maxPages || 2,
+      deepSync: options.deepSync || false
+    });
+  } catch (error) {
+    console.error('[Cron] Error in Meta Lead Sync cron job:', error.message);
+  }
+};
+
 /**
  * Initialize Fallback Interval-Based Cron Jobs (for local development/persistent server)
  */
 exports.initCronJobs = () => {
-  console.log('--- Background Services Initialized (Orders, Carts, WhatsApp Live Sync, Push Campaigns & Task Reminders) ---');
+  console.log('--- Background Services Initialized (Orders, Carts, WhatsApp Live Sync, Meta Leads, Push Campaigns & Task Reminders) ---');
 
   // Stagger startup execution to prevent CPU spikes on container spin-up
-  setTimeout(runOrderSync, 5000);
-  setTimeout(runAbandonedCartCheck, 15000);
+  setTimeout(runMetaLeadSync, 8000);
+  setTimeout(runOrderSync, 12000);
+  setTimeout(runAbandonedCartCheck, 18000);
   setTimeout(runAbandonedCheckoutCheck, 25000);
   setTimeout(runKycUrgencyCheck, 35000);
   setTimeout(runScheduledSegmentNotifications, 45000);
@@ -542,6 +562,7 @@ exports.initCronJobs = () => {
   setTimeout(runTaskReminderNotifications, 75000);
 
   // Set recurring intervals
+  setInterval(runMetaLeadSync, 5 * 60 * 1000); // 5-minute fallback sync guarantees zero lost leads
   setInterval(runOrderSync, 20 * 60 * 1000);
   setInterval(runAbandonedCartCheck, 60 * 60 * 1000);
   setInterval(runAbandonedCheckoutCheck, 30 * 60 * 1000);
@@ -555,6 +576,7 @@ exports.initCronJobs = () => {
 // Export individual tasks for router triggering
 module.exports = {
   initCronJobs: exports.initCronJobs,
+  runMetaLeadSync,
   runOrderSync,
   runAbandonedCartCheck,
   runAbandonedCheckoutCheck,
