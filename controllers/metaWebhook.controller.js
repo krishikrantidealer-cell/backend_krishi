@@ -74,22 +74,25 @@ exports.handleMetaLeadWebhook = async (req, res) => {
             const pageAccessToken = process.env.META_PAGE_ACCESS_TOKEN;
 
             let fieldData = [];
+            let leadCreatedTime = null;
 
             if (leadgenId && pageAccessToken) {
               try {
                 const graphUrl = `https://graph.facebook.com/v20.0/${leadgenId}?access_token=${pageAccessToken}`;
                 const metaRes = await axios.get(graphUrl);
                 fieldData = metaRes.data.field_data || [];
+                leadCreatedTime = metaRes.data.created_time || null;
               } catch (graphErr) {
                 console.error('[Meta Webhook] Failed to fetch lead data from Graph API:', graphErr.response?.data || graphErr.message);
               }
             } else if (change.value.field_data) {
               // Direct simulation payload
               fieldData = change.value.field_data;
+              leadCreatedTime = change.value.created_time || null;
             }
 
             if (fieldData.length > 0) {
-              await processLeadFields(fieldData);
+              await processLeadFields(fieldData, leadCreatedTime);
             }
           }
         }
@@ -120,7 +123,7 @@ exports.handleMetaLeadWebhook = async (req, res) => {
 /**
  * Extracts normalized form fields from Meta field_data array
  */
-async function processLeadFields(fieldData) {
+async function processLeadFields(fieldData, createdTime = null) {
   let fullName = '';
   let firstNameVal = '';
   let lastNameVal = '';
@@ -230,7 +233,8 @@ async function processLeadFields(fieldData) {
     city,
     pincode,
     notes: customNotes,
-    preferredLanguage: isHindiForm ? 'hi' : 'en'
+    preferredLanguage: isHindiForm ? 'hi' : 'en',
+    createdAt: createdTime ? new Date(createdTime) : undefined
   });
 }
 
@@ -251,6 +255,7 @@ async function createOrUpdateProspectUser(data) {
   const defaultNote = data.notes || (data.businessType ? `Business Type: ${data.businessType}` : 'Source: Meta Lead Form');
 
   if (!user) {
+    const leadCreationDate = data.createdAt ? new Date(data.createdAt) : new Date();
     user = await User.create({
       phoneNumber: cleanPhone,
       firstName: firstName || 'Dealer',
@@ -277,12 +282,13 @@ async function createOrUpdateProspectUser(data) {
       isDeleted: false,
       whatsappSequence: 0,
       shippingAddresses: [],
+      createdAt: leadCreationDate,
       notesHistory: [
         {
           title: 'Lead Generated via Meta Ads',
           note: defaultNote,
           author: 'Meta Ads',
-          createdAt: new Date(),
+          createdAt: leadCreationDate,
           type: 'general',
           priority: 'medium',
           status: 'prospect'
@@ -404,11 +410,11 @@ async function syncRecentMetaLeads(options = {}) {
 
             const existingUser = await User.findOne({ phoneNumber: cleanPhone });
             if (!existingUser) {
-              await processLeadFields(lead.field_data);
+              await processLeadFields(lead.field_data, lead.created_time);
               totalNew++;
             } else if (!existingUser.notes || !existingUser.notes.includes('Meta Lead Form Submission')) {
               // Existing user without Meta form details: enrich them
-              await processLeadFields(lead.field_data);
+              await processLeadFields(lead.field_data, lead.created_time);
               totalUpdated++;
             }
           }
