@@ -42,14 +42,19 @@ function getCorrectPrice(variant, totalVolume) {
     for (const tier of variant.priceTiers) {
       const name = tier.name || '';
       let minVal = 0;
-      const rangeMatch = name.match(/(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)/);
-      const plusMatch = name.match(/(\d+(?:\.\d+)?)\s*\+/);
+
+      // Extract content inside parentheses if present (e.g. "Tier 1 (50)" -> "50")
+      const parenMatch = name.match(/\(([^)]+)\)/);
+      const targetStr = parenMatch ? parenMatch[1] : name;
+
+      const rangeMatch = targetStr.match(/(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)/);
+      const plusMatch = targetStr.match(/(\d+(?:\.\d+)?)\s*\+/);
       if (rangeMatch) {
         minVal = parseFloat(rangeMatch[1]);
       } else if (plusMatch) {
         minVal = parseFloat(plusMatch[1]);
       } else {
-        const numMatch = name.match(/(\d+(?:\.\d+)?)/);
+        const numMatch = targetStr.match(/(\d+(?:\.\d+)?)/);
         if (numMatch) {
           minVal = parseFloat(numMatch[1]);
         }

@@ -13,8 +13,8 @@ if (process.env.REDIS_URL) {
     socket: {
       connectTimeout: 5000,
       reconnectStrategy: (retries) => {
-        if (retries > 5) return new Error('Redis reconnection limit reached');
-        return Math.min(retries * 1000, 10000);
+        // Keep retrying with exponential backoff capped at 3 seconds
+        return Math.min(retries * 500, 3000);
       }
     }
   });
