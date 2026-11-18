@@ -197,7 +197,23 @@ const getCallLogs = async (req, res) => {
     if (customerPhone && customerPhone.trim() !== '') {
       const cleanDigits = customerPhone.replace(/\D/g, '').replace(/^91/, '');
       if (cleanDigits.length >= 5) {
-        andConditions.push({ customerPhone: { $regex: cleanDigits, $options: 'i' } });
+        const matchingContactIds = await Contact.find({
+          $or: [
+            { phone: { $regex: cleanDigits } },
+            { phone: cleanDigits },
+            { phone: `91${cleanDigits}` },
+            { phone: `+91${cleanDigits}` }
+          ]
+        }).distinct('_id');
+
+        andConditions.push({
+          $or: [
+            { customerPhone: { $regex: cleanDigits, $options: 'i' } },
+            { 'metadata.customer_identifier': { $regex: cleanDigits } },
+            { 'metadata.payload.customer_identifier': { $regex: cleanDigits } },
+            ...(matchingContactIds.length > 0 ? [{ contactId: { $in: matchingContactIds } }] : [])
+          ]
+        });
       }
     } else if (search && search.trim() !== '') {
       const searchTerm = search.trim();
@@ -613,7 +629,19 @@ const getCallLogs = async (req, res) => {
     }
 
     const enrichedLogs = callLogs.map(log => {
-      if (!log.contactId && log.customerPhone) {
+      // Robust fallback: If customerPhone is Unknown or missing, extract from metadata or linked contact
+      if (!log.customerPhone || log.customerPhone === 'Unknown') {
+        const metaPhone = log.metadata?.customer_identifier ||
+                          log.metadata?.payload?.customer_identifier ||
+                          (Array.isArray(log.metadata?.payload?.legs) ? log.metadata.payload.legs.find(l => l.type === 'customer')?.phone_number : null) ||
+                          (Array.isArray(log.metadata?.legs) ? log.metadata.legs.find(l => l.type === 'customer')?.phone_number : null) ||
+                          (log.contactId && typeof log.contactId === 'object' ? log.contactId.phone : null);
+        if (metaPhone) {
+          log.customerPhone = String(metaPhone).replace(/\D/g, '').replace(/^91/, '').replace(/^0+/, '');
+        }
+      }
+
+      if (!log.contactId && log.customerPhone && log.customerPhone !== 'Unknown') {
         const cleanPhone = log.customerPhone.replace(/\D/g, '').replace(/^91/, '');
         if (contactMap[cleanPhone]) {
           log.contactId = contactMap[cleanPhone];
@@ -1044,29 +1072,42 @@ const handleCallWebhook = async (req, res) => {
     let rawCustomerPhone = '';
     if (customerLeg?.phone_number) {
       rawCustomerPhone = customerLeg.phone_number;
-    } else if (payload.customer_identifier) {
-      rawCustomerPhone = payload.customer_identifier;
+    } else if (payload.customer_identifier || merged.customer_identifier) {
+      rawCustomerPhone = payload.customer_identifier || merged.customer_identifier;
     } else if (merged.customer_number) {
       rawCustomerPhone = merged.customer_number;
-    } else if (isInbound) {
-      rawCustomerPhone = merged.cli ||
-                         merged.caller_id ||
-                         merged.caller_number ||
-                         merged.from ||
-                         merged.caller ||
-                         merged.source ||
-                         merged.client_number ||
-                         merged.contact_number ||
-                         merged.phone ||
-                         merged.number || '';
-    } else {
-      rawCustomerPhone = merged.destination_number ||
-                         merged.client_number ||
-                         merged.number ||
-                         merged.phone ||
-                         merged.to ||
-                         merged.caller_number ||
-                         merged.caller_id || '';
+    } else if (legs.length > 0) {
+      const nonAgentLeg = legs.find(l => {
+        if (!l.phone_number) return false;
+        const clean = String(l.phone_number).replace(/\D/g, '').replace(/^91/, '');
+        return l.type !== 'agent' && !KNOWN_AGENT_PHONES.includes(clean);
+      });
+      if (nonAgentLeg) {
+        rawCustomerPhone = nonAgentLeg.phone_number;
+      }
+    }
+    
+    if (!rawCustomerPhone) {
+      if (isInbound) {
+        rawCustomerPhone = merged.cli ||
+                           merged.caller_id ||
+                           merged.caller_number ||
+                           merged.from ||
+                           merged.caller ||
+                           merged.source ||
+                           merged.client_number ||
+                           merged.contact_number ||
+                           merged.phone ||
+                           merged.number || '';
+      } else {
+        rawCustomerPhone = merged.destination_number ||
+                           merged.client_number ||
+                           merged.number ||
+                           merged.phone ||
+                           merged.to ||
+                           merged.caller_number ||
+                           merged.caller_id || '';
+      }
     }
     let customerPhone = String(rawCustomerPhone).replace(/\D/g, '').replace(/^91/, '').replace(/^0+/, '');
 
@@ -1243,8 +1284,13 @@ const handleCallWebhook = async (req, res) => {
         });
       }
 
-      // Correct customerPhone if previously assigned to an agent's phone
-      if (customerPhone && customerPhone !== 'Unknown' && (KNOWN_AGENT_PHONES.includes(callLog.customerPhone) || callLog.customerPhone === callLog.agentPhone || !callLog.customerPhone)) {
+      // Correct customerPhone if previously 'Unknown', unassigned, or assigned to an agent's phone
+      if (customerPhone && customerPhone !== 'Unknown' && (
+        !callLog.customerPhone ||
+        callLog.customerPhone === 'Unknown' ||
+        KNOWN_AGENT_PHONES.includes(callLog.customerPhone) ||
+        callLog.customerPhone === callLog.agentPhone
+      )) {
         callLog.customerPhone = customerPhone;
         callLog.contactId = null; // Reset to re-link to true customer contact
       }
