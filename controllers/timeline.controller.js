@@ -173,26 +173,33 @@ const getCustomerTimeline = async (req, res) => {
     }
 
     // 6. Fetch Telemetry Events (App Activity)
-    if (cleanPhone || user?._id) {
-      const eventQuery = {
+    const eventIdentifiers = [
+      ...(cleanPhone ? [cleanPhone, `+91${cleanPhone}`, `91${cleanPhone}`] : []),
+      ...(user?._id ? [user._id.toString()] : []),
+      ...(user?.email ? [user.email] : [])
+    ];
+
+    if (eventIdentifiers.length > 0) {
+      const events = await Event.find({
         $or: [
-          ...(cleanPhone ? [{ 'metadata.phone': { $regex: cleanPhone } }, { userPhone: { $regex: cleanPhone } }] : []),
-          ...(user?._id ? [{ user: user._id }] : [])
+          { user: { $in: eventIdentifiers } },
+          { 'payload.targetUserId': { $in: eventIdentifiers } },
+          { 'payload.targetPhone': { $in: eventIdentifiers } }
         ]
-      };
-      const events = await Event.find(eventQuery)
-        .sort({ createdAt: -1 })
-        .limit(15);
+      })
+        .sort({ timestamp: -1 })
+        .limit(50)
+        .lean();
 
       for (const ev of events) {
         timelineItems.push({
           id: `event_${ev._id}`,
           type: 'telemetry',
-          title: `⚡ App Event: ${ev.type || 'User Activity'}`,
+          title: `⚡ App Event: ${ev.eventType ? ev.eventType.replace(/_/g, ' ').toUpperCase() : 'User Activity'}`,
           subtitle: ev.details || ev.description || '',
-          timestamp: ev.createdAt,
+          timestamp: ev.timestamp || ev.createdAt,
           details: {
-            eventType: ev.type,
+            eventType: ev.eventType,
             raw: ev
           }
         });

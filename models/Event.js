@@ -56,6 +56,10 @@ eventSchema.index({ timestamp: -1, eventType: 1 });
 eventSchema.index({ role: 1, timestamp: -1 });
 eventSchema.index({ user: 1, eventType: 1, timestamp: -1 });
 eventSchema.index({ timestamp: -1, user: 1 });
+eventSchema.index({ 'payload.targetUserId': 1 }, { sparse: true });
+eventSchema.index({ 'payload.leadId': 1 }, { sparse: true });
+eventSchema.index({ 'payload.dealerId': 1 }, { sparse: true });
+eventSchema.index({ 'payload.targetPhone': 1 }, { sparse: true });
 
 const Event = mongoose.model('Event', eventSchema);
 

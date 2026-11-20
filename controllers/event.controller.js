@@ -245,8 +245,24 @@ exports.ingestBatch = async (req, res, next) => {
  */
 exports.getEvents = async (req, res, next) => {
   try {
-    const limit = parseInt(req.query.limit) || 300;
     const { user, before, filter, actorOnly } = req.query;
+    
+    // Determine limit:
+    // 1. Explicit 'all' or '0' -> limit = 0 (returns all matching documents in MongoDB)
+    // 2. Explicit numeric limit -> respect it (e.g. 150/200 for marketing screen)
+    // 3. User profile screen lookup (user specified without explicit limit) -> return ALL user events (limit = 0)
+    // 4. Global unfiltered feed -> default to 300
+    let limit;
+    if (req.query.limit === 'all' || req.query.limit === '0') {
+      limit = 3000;
+    } else if (req.query.limit !== undefined && req.query.limit !== null && req.query.limit !== '') {
+      limit = parseInt(req.query.limit, 10);
+      if (isNaN(limit) || limit < 0) limit = 3000;
+    } else if (user) {
+      limit = 3000; // Return all user events for profile view (capped at 3000 for server memory safety)
+    } else {
+      limit = 300;
+    }
 
     let query = {};
     let resolvedIdentifiers = [];
@@ -288,30 +304,44 @@ exports.getEvents = async (req, res, next) => {
       } else {
         query.$or = [
           { user: { $in: resolvedIdentifiers } },
-          ...resolvedIdentifiers.map(id => ({ "payload.targetUserId": id })),
-          ...resolvedIdentifiers.map(id => ({ "payload.userId": id })),
-          ...resolvedIdentifiers.map(id => ({ "payload.dealerId": id })),
-          ...resolvedIdentifiers.map(id => ({ "payload.leadId": id })),
-          ...resolvedIdentifiers.map(id => ({ "payload.targetEmail": id })),
-          ...resolvedIdentifiers.map(id => ({ "payload.dealerEmail": id })),
-          ...resolvedIdentifiers.map(id => ({ "payload.userEmail": id })),
-          ...resolvedIdentifiers.map(id => ({ "payload.targetPhone": id })),
-          ...resolvedIdentifiers.map(id => ({ "payload.dealerPhone": id }))
+          { 'payload.targetUserId': { $in: resolvedIdentifiers } },
+          { 'payload.leadId': { $in: resolvedIdentifiers } },
+          { 'payload.dealerId': { $in: resolvedIdentifiers } },
+          { 'payload.targetPhone': { $in: resolvedIdentifiers } }
         ];
       }
     }
 
-    // Enforce assigned customer filtering for Sales Representatives (if assigned users exist)
+    // Enforce assigned customer filtering for Sales Representatives
     const assignedUserIds = await getSalesAssignedUserIds(req);
-    if (assignedUserIds && assignedUserIds.size > 0) {
-      const assignedArray = Array.from(assignedUserIds);
-      if (query.user && query.user.$in) {
-        const filtered = query.user.$in.filter(u => assignedUserIds.has(u.toString().toLowerCase()));
-        if (filtered.length > 0) {
-          query.user.$in = filtered;
+    if (assignedUserIds) {
+      if (assignedUserIds.size === 0) {
+        // Sales representative has no assigned customers
+        return res.json({ success: true, data: [], nextCursor: null });
+      }
+
+      if (user) {
+        // Single customer profile lookup:
+        // Verify customer is assigned to this sales representative
+        const isAssigned = resolvedIdentifiers.some(id =>
+          assignedUserIds.has(String(id).toLowerCase())
+        );
+        if (!isAssigned) {
+          // Customer is not assigned to this sales agent
+          return res.json({ success: true, data: [], nextCursor: null });
         }
-      } else if (!query.user) {
-        query.user = { $in: assignedArray };
+        // Customer is assigned -> query.$or already securely filters for this customer
+      } else {
+        // Unfiltered global feed for sales representative:
+        // Match both actor events and target events for assigned customers
+        const assignedArray = Array.from(assignedUserIds);
+        query.$or = [
+          { user: { $in: assignedArray } },
+          { 'payload.targetUserId': { $in: assignedArray } },
+          { 'payload.leadId': { $in: assignedArray } },
+          { 'payload.dealerId': { $in: assignedArray } },
+          { 'payload.targetPhone': { $in: assignedArray } }
+        ];
       }
     }
 
@@ -571,7 +601,7 @@ exports.getEvents = async (req, res, next) => {
     });
 
     let nextCursor = null;
-    if (enrichedEvents.length === limit && enrichedEvents.length > 0) {
+    if (limit > 0 && enrichedEvents.length >= limit && enrichedEvents.length > 0) {
       const lastEvent = enrichedEvents[enrichedEvents.length - 1];
       if (lastEvent.timestamp) {
         nextCursor = lastEvent.timestamp instanceof Date 
