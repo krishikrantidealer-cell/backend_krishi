@@ -7,8 +7,9 @@ class AuthController {
   async adminLogin(req, res) {
     try {
       const { email, password, deviceId } = req.body;
+      const cleanEmail = email ? email.toString().trim().toLowerCase() : '';
 
-      const user = await User.findOne({ email, isDeleted: { $ne: true } });
+      const user = await User.findOne({ email: cleanEmail, isDeleted: { $ne: true } });
       if (!user) {
         return res.status(401).json({ success: false, message: 'Invalid credentials' });
       }

@@ -54,8 +54,9 @@ exports.createEvent = async (req, res, next) => {
       role: role || 'user' // Default to user role for direct app ingestion
     });
 
-    // Update Real-time Presence in Redis
-    if (redisClient.isOpen && user) {
+    // Update Real-time Presence in Redis (Customers only, skip staff/agents)
+    const isStaff = role === 'admin' || role === 'sales' || role === 'staff' || role === 'agent';
+    if (redisClient.isOpen && user && !isStaff) {
       const presenceKey = `presence:${user}`;
       const intentInfo = calculateIntentScore(payload?.screen || 'Active', eventType, payload);
       const presenceData = {
@@ -63,6 +64,7 @@ exports.createEvent = async (req, res, next) => {
         currentScreen: payload?.screen || 'Active',
         action: eventType,
         device: device || 'Unknown',
+        role: 'user',
         intentScore: intentInfo.intentScore,
         intentLabel: intentInfo.intentLabel
       };
@@ -133,12 +135,14 @@ exports.handleHeartbeat = async (req, res, next) => {
       await redisClient.expire(presenceKey, 120); // Longer expiry to survive idle heartbeat (60s)
       await redisClient.zAdd('presence_active_zset', { score: Date.now(), value: String(user) });
 
-      // Gold Standard: Push update to Admin Dashboard via WebSocket
-      const { broadcastToRoles } = require('../services/websocket.service');
-      broadcastToRoles(['admin', 'sales'], {
-        type: 'PRESENCE_UPDATE',
-        data: { user, ...presenceData }
-      });
+      // Only broadcast genuine customer presence to sales/admin (never internal staff/agents)
+      if (userRole !== 'admin' && userRole !== 'sales' && userRole !== 'staff' && userRole !== 'agent') {
+        const { broadcastToRoles } = require('../services/websocket.service');
+        broadcastToRoles(['admin', 'sales'], {
+          type: 'PRESENCE_UPDATE',
+          data: { user, ...presenceData }
+        });
+      }
     }
 
     res.status(200).json({ success: true });
@@ -190,14 +194,16 @@ exports.ingestBatch = async (req, res, next) => {
       // Fetch user info for enrichment
       let userName = 'New User';
       let userPhone = 'N/A';
+      let userRole = 'user';
       try {
         const userData = await User.findOne({
           $or: [{ email: user }, { phoneNumber: user }, { _id: mongoose.Types.ObjectId.isValid(user) ? user : null }]
-        }).select('firstName lastName shopName phoneNumber');
+        }).select('firstName lastName shopName phoneNumber role');
 
         if (userData) {
           userName = `${userData.firstName || ''} ${userData.lastName || ''}`.trim() || userData.shopName || 'New User';
           userPhone = userData.phoneNumber || 'N/A';
+          userRole = userData.role || 'user';
         }
       } catch (_) {}
 
@@ -208,19 +214,22 @@ exports.ingestBatch = async (req, res, next) => {
         device: String(lastEvent.device || lastEvent.platform || 'Unknown'),
         sessionId: String(lastEvent.sessionId || 'unknown'),
         userName: String(userName || 'New User'),
-        userPhone: String(userPhone || 'N/A')
+        userPhone: String(userPhone || 'N/A'),
+        role: userRole
       };
 
       await redisClient.hSet(presenceKey, presenceData);
       await redisClient.expire(presenceKey, 120);
       await redisClient.zAdd('presence_active_zset', { score: Date.now(), value: String(user) });
 
-      // Notify Admins via WebSocket
-      const { broadcastToRoles } = require('../services/websocket.service');
-      broadcastToRoles(['admin', 'sales'], {
-        type: 'PRESENCE_UPDATE',
-        data: { user, ...presenceData }
-      });
+      // Notify Admins only if genuine customer (never staff or sales agents)
+      if (userRole !== 'admin' && userRole !== 'sales' && userRole !== 'staff' && userRole !== 'agent') {
+        const { broadcastToRoles } = require('../services/websocket.service');
+        broadcastToRoles(['admin', 'sales'], {
+          type: 'PRESENCE_UPDATE',
+          data: { user, ...presenceData }
+        });
+      }
     }
 
     // Increment Redis daily events count in batch
