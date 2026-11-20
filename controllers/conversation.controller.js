@@ -43,40 +43,12 @@ const getConversations = async (req, res) => {
 
     if (targetAgent && targetAgent !== 'all') {
       if (targetAgent === 'unassigned') {
-        const assignedContactIds = await Contact.find({ assignedTo: { $ne: null } }).distinct('_id');
-        const assignedUsers = await User.find({ assignedAgent: { $ne: null } }).select('phoneNumber').lean();
-        const userPhones = assignedUsers.map(u => normalizeIndianPhone(u.phoneNumber)).filter(Boolean);
-        const phoneVariants = userPhones.flatMap(p => getPhoneQueryVariants(p));
-        const userAssignedContactIds = phoneVariants.length > 0
-          ? await Contact.find({ phone: { $in: phoneVariants } }).distinct('_id')
-          : [];
-        const allAssignedContactIds = Array.from(new Set([...assignedContactIds.map(String), ...userAssignedContactIds.map(String)]));
-
         agentFilterCondition = {
-          $and: [
-            { $or: [{ assignedTo: null }, { assignedTo: { $exists: false } }] },
-            ...(allAssignedContactIds.length > 0 ? [{ contactId: { $nin: allAssignedContactIds } }] : [])
-          ]
+          $or: [{ assignedTo: null }, { assignedTo: { $exists: false } }]
         };
       } else if (mongoose.Types.ObjectId.isValid(targetAgent)) {
         const agentObjId = new mongoose.Types.ObjectId(targetAgent);
-        const assignedUsers = await User.find({ assignedAgent: agentObjId }).select('phoneNumber').lean();
-        const userPhones = assignedUsers.map(u => normalizeIndianPhone(u.phoneNumber)).filter(Boolean);
-        const phoneVariants = userPhones.flatMap(p => getPhoneQueryVariants(p));
-
-        const assignedContactIds = await Contact.find({
-          $or: [
-            { assignedTo: agentObjId },
-            ...(phoneVariants.length > 0 ? [{ phone: { $in: phoneVariants } }] : [])
-          ]
-        }).distinct('_id');
-
-        agentFilterCondition = {
-          $or: [
-            { assignedTo: agentObjId },
-            ...(assignedContactIds.length > 0 ? [{ contactId: { $in: assignedContactIds } }] : [])
-          ]
-        };
+        agentFilterCondition = { assignedTo: agentObjId };
       }
     }
 
