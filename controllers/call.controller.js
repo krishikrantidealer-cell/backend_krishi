@@ -1468,7 +1468,9 @@ const handleCallWebhook = async (req, res) => {
     res.json({ success: true, message: 'Call webhook processed successfully' });
   } catch (error) {
     console.error('[MyOperator Call Webhook Error]:', error.message);
-    res.status(200).json({ success: false, message: error.message });
+    if (!res.headersSent) {
+      res.status(200).json({ success: false, message: error.message });
+    }
   }
 };
 

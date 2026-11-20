@@ -175,25 +175,19 @@ const getConversations = async (req, res) => {
       Conversation.countDocuments(query)
     ]);
 
-    // Auto-sync fallback: If 0 conversations found and no search query, kick off instant sync and re-query
+    // Non-blocking Auto-sync fallback: If 0 conversations found, trigger sync in background
     if (total === 0 && search === '' && page == 1 && tab === 'all') {
-      try {
-        if (req.user.role === 'sales') {
-          await contactSyncService.syncAllAssignedUsersForAgent(req.user.id, false);
-        } else {
-          await contactSyncService.syncAllUsers(false);
+      setImmediate(async () => {
+        try {
+          if (req.user.role === 'sales') {
+            await contactSyncService.syncAllAssignedUsersForAgent(req.user.id, false);
+          } else {
+            await contactSyncService.syncAllUsers(false);
+          }
+        } catch (syncErr) {
+          console.error('[getConversations] Auto-sync background error:', syncErr.message);
         }
-        conversations = await Conversation.find(query)
-          .populate('contactId')
-          .populate('assignedTo', 'firstName lastName email phoneNumber')
-          .sort({ lastMessageAt: -1 })
-          .skip(skip)
-          .limit(parseInt(limit))
-          .lean();
-        total = conversations.length;
-      } catch (syncErr) {
-        console.error('[getConversations] Auto-sync fallback error:', syncErr.message);
-      }
+      });
     }
 
     const countsFacet = facetResult?.[0] || {};
@@ -219,16 +213,16 @@ const getConversations = async (req, res) => {
       dedupedConversations.push(conv);
     }
 
-    // Enrich with soft-deleted status and real-time assignedAgent from User collection for complete consistency
+    // Enrich with soft-deleted status and real-time assignedAgent from User collection using indexed phone lookups
     try {
       const cleanPhones = dedupedConversations
         .map(c => normalizeIndianPhone(c.contactPhone || c.contactId?.phone))
         .filter(Boolean);
 
       if (cleanPhones.length > 0) {
-        const regexList = cleanPhones.map(p => new RegExp('^' + p));
+        const phoneVariants = cleanPhones.flatMap(p => getPhoneQueryVariants(p));
         const matchedUsers = await User.find({
-          phoneNumber: { $in: regexList }
+          phoneNumber: { $in: phoneVariants }
         }).select('phoneNumber isDeleted assignedAgent')
           .populate('assignedAgent', 'firstName lastName email phoneNumber role')
           .lean();
