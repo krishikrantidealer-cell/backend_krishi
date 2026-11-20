@@ -162,7 +162,8 @@ const initWebSocket = (server) => {
               currentScreen: payload.currentScreen || 'Active',
               action: payload.lastAction || 'Active',
               device: payload.platform || 'Unknown',
-              sessionId: payload.sessionId || 'unknown'
+              sessionId: payload.sessionId || 'unknown',
+              role: ws.userRole || 'user'
             };
 
             await redisClient.hSet(presenceKey, presenceData);
@@ -175,6 +176,7 @@ const initWebSocket = (server) => {
                 user: ws.userId,
                 userName: ws.userName,
                 userPhone: ws.userPhone,
+                role: ws.userRole || 'user',
                 ...presenceData
               }
             });

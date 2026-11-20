@@ -343,6 +343,17 @@ exports.getEvents = async (req, res, next) => {
         return res.json({ success: true, data: [], nextCursor: null });
       }
 
+      // STRICT REQUIREMENT: Never show staff/sales/admin events to sales representatives
+      const staffEventTypes = [
+        'profile_view', 'assign_agent', 'bulk_assign_agent', 'create_sales_agent',
+        'add_lead_note', 'edit_lead', 'edit_dealer', 'toggle_block', 'delete_dealer',
+        'permanent_delete_user', 'restore_user', 'export_leads_csv', 'delete_sales_agent',
+        'call_logged', 'call_task_created', 'lead_converted', 'status_changed',
+        'lead_status_changed', 'dealer_status_changed', 'estimate_created', 'estimate_shared'
+      ];
+      query.role = { $nin: ['admin', 'sales', 'staff', 'agent'] };
+      query.eventType = { $nin: staffEventTypes };
+
       if (user) {
         // Single customer profile lookup:
         // Verify customer is assigned to this sales representative
@@ -353,18 +364,15 @@ exports.getEvents = async (req, res, next) => {
           // Customer is not assigned to this sales agent
           return res.json({ success: true, data: [], nextCursor: null });
         }
-        // Customer is assigned -> query.$or already securely filters for this customer
+        // For sales representative, only return actions performed by the customer themself
+        query.user = { $in: resolvedIdentifiers };
+        delete query.$or;
       } else {
         // Unfiltered global feed for sales representative:
-        // Match both actor events and target events for assigned customers
+        // Only return customer-app events for assigned customers
         const assignedArray = Array.from(assignedUserIds);
-        query.$or = [
-          { user: { $in: assignedArray } },
-          { 'payload.targetUserId': { $in: assignedArray } },
-          { 'payload.leadId': { $in: assignedArray } },
-          { 'payload.dealerId': { $in: assignedArray } },
-          { 'payload.targetPhone': { $in: assignedArray } }
-        ];
+        query.user = { $in: assignedArray };
+        delete query.$or;
       }
     }
 
