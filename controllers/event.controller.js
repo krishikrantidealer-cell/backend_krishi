@@ -271,16 +271,29 @@ exports.getEvents = async (req, res, next) => {
     if (user) {
       const cleanUser = String(user).trim();
       resolvedIdentifiers = [cleanUser, cleanUser.toLowerCase()];
+
+      const phoneDigits = cleanUser.replace(/\D/g, '');
+      const last10 = phoneDigits.length >= 10 ? phoneDigits.slice(-10) : (phoneDigits.length >= 7 ? phoneDigits : '');
+      const phoneVariants = [cleanUser];
+      if (last10) {
+        phoneVariants.push(last10, `91${last10}`, `+91${last10}`);
+      }
+      resolvedIdentifiers.push(...phoneVariants);
+
       try {
         const isPhone = /^\+?\d{7,15}$/.test(cleanUser);
         const searchCond = isPhone
-          ? [{ phoneNumber: cleanUser }]
+          ? [
+              { phoneNumber: { $in: phoneVariants } },
+              ...(last10.length >= 10 ? [{ phoneNumber: { $regex: last10 } }] : [])
+            ]
           : [
               { email: new RegExp(`^${cleanUser.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
-              { phoneNumber: cleanUser },
+              { phoneNumber: { $in: phoneVariants } },
               { firstName: new RegExp(cleanUser.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') },
               { lastName: new RegExp(cleanUser.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') },
-              { shopName: new RegExp(cleanUser.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') }
+              { shopName: new RegExp(cleanUser.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') },
+              ...(last10.length >= 10 ? [{ phoneNumber: { $regex: last10 } }] : [])
             ];
 
         if (mongoose.Types.ObjectId.isValid(cleanUser)) {
@@ -292,8 +305,18 @@ exports.getEvents = async (req, res, next) => {
           .lean();
         
         matchedUsers.forEach(u => {
-          if (u.email && u.email.trim()) resolvedIdentifiers.push(u.email.trim(), u.email.trim().toLowerCase());
-          if (u.phoneNumber && u.phoneNumber.trim()) resolvedIdentifiers.push(u.phoneNumber.trim());
+          if (u.email && u.email.trim()) {
+            resolvedIdentifiers.push(u.email.trim(), u.email.trim().toLowerCase());
+          }
+          if (u.phoneNumber && u.phoneNumber.trim()) {
+            const uPhone = u.phoneNumber.trim();
+            resolvedIdentifiers.push(uPhone);
+            const uDigits = uPhone.replace(/\D/g, '');
+            const u10 = uDigits.length >= 10 ? uDigits.slice(-10) : '';
+            if (u10) {
+              resolvedIdentifiers.push(u10, `91${u10}`, `+91${u10}`);
+            }
+          }
           if (u._id) resolvedIdentifiers.push(u._id.toString());
         });
       } catch (_) {}
