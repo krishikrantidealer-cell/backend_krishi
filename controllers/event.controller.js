@@ -290,27 +290,18 @@ exports.getEvents = async (req, res, next) => {
       resolvedIdentifiers.push(...phoneVariants);
 
       try {
-        const isPhone = /^\+?\d{7,15}$/.test(cleanUser);
-        const searchCond = isPhone
-          ? [
-              { phoneNumber: { $in: phoneVariants } },
-              ...(last10.length >= 10 ? [{ phoneNumber: { $regex: last10 } }] : [])
-            ]
-          : [
-              { email: new RegExp(`^${cleanUser.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
-              { phoneNumber: { $in: phoneVariants } },
-              { firstName: new RegExp(cleanUser.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') },
-              { lastName: new RegExp(cleanUser.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') },
-              { shopName: new RegExp(cleanUser.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') },
-              ...(last10.length >= 10 ? [{ phoneNumber: { $regex: last10 } }] : [])
-            ];
-
-        if (mongoose.Types.ObjectId.isValid(cleanUser)) {
+        const isObjectId = mongoose.Types.ObjectId.isValid(cleanUser) && /^[a-fA-F0-9]{24}$/.test(cleanUser);
+        const searchCond = [
+          { phoneNumber: { $in: phoneVariants } },
+          { email: cleanUser.toLowerCase() }
+        ];
+        if (isObjectId) {
           searchCond.push({ _id: new mongoose.Types.ObjectId(cleanUser) });
         }
 
         const matchedUsers = await User.find({ $or: searchCond })
           .select('_id email phoneNumber')
+          .limit(10)
           .lean();
         
         matchedUsers.forEach(u => {
@@ -377,10 +368,9 @@ exports.getEvents = async (req, res, next) => {
         query.user = { $in: resolvedIdentifiers };
         delete query.$or;
       } else {
-        // Unfiltered global feed for sales representative:
-        // Only return customer-app events for assigned customers
-        const assignedArray = Array.from(assignedUserIds);
-        query.user = { $in: assignedArray };
+        // Fast scoped feed for sales representative:
+        // Do NOT pass 2,500+ items to MongoDB $in (which causes slow table scan timeouts).
+        // Query the latest events using indexed timestamp, then filter in-memory below.
         delete query.$or;
       }
     }
@@ -472,11 +462,19 @@ exports.getEvents = async (req, res, next) => {
       }
     }
 
-    // 4. Fetch raw events
-    const rawEvents = await Event.find(query)
+    // 4. Fetch raw events (Fast index-backed query with in-memory scoping)
+    const isSalesGlobalFeed = assignedUserIds && !user;
+    let rawEvents = await Event.find(query)
       .sort({ timestamp: -1 })
-      .limit(limit)
+      .limit(isSalesGlobalFeed ? Math.max(limit * 5, 800) : limit)
       .lean();
+
+    if (isSalesGlobalFeed) {
+      rawEvents = rawEvents.filter(e => {
+        const u = (e.user || '').toLowerCase();
+        return assignedUserIds.has(u);
+      }).slice(0, limit);
+    }
 
     if (rawEvents.length === 0) {
       return res.json({ success: true, data: [], nextCursor: null });
@@ -674,17 +672,13 @@ exports.getActiveUsers = async (req, res, next) => {
       await redisClient.zRemRangeByScore('presence_active_zset', 0, cutoff);
     } catch (_) {}
 
-    // 2. Fetch active users efficiently from Redis Sorted Set (fallback to keys scan if set is empty)
+    // 2. Fetch active users efficiently from Redis Sorted Set (Zero-latency O(log N) lookup)
     let activeUsers = [];
     try {
       activeUsers = await redisClient.zRangeByScore('presence_active_zset', cutoff, '+inf');
     } catch (_) {}
 
-    let keys = activeUsers.map(u => `presence:${u}`);
-    if (keys.length === 0) {
-      keys = await redisClient.keys('presence:*');
-    }
-
+    const keys = (activeUsers || []).map(u => `presence:${u}`);
     if (keys.length === 0) {
       return res.json({ success: true, count: 0, data: [] });
     }
