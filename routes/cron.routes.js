@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const cronService = require('../services/cron.service');
 const pushNotificationSegmentService = require('../services/pushNotificationSegment.service');
+const dailySalesReportService = require('../services/dailySalesReport.service');
+const { redisClient } = require('../config/redis');
 
 const CRON_SECRET = process.env.CRON_SECRET || 'krishi_default_cron_secret_2026';
 
@@ -117,5 +119,57 @@ router.get('/segment/:segment', verifyCronAuth, async (req, res) => {
     return res.status(500).json({ success: false, message: error.message });
   }
 });
+
+/**
+ * @route   GET/POST /api/cron/daily-sales-report
+ * @desc    Aggregates 10 AM - 7 PM IST sales per agent and sends WhatsApp report via MyOperator Template
+ * @query   date (optional YYYY-MM-DD), phone (optional override), template (optional), dryRun=true, force=true
+ */
+const handleDailySalesReport = async (req, res) => {
+  try {
+    const dateStr = req.query.date ? String(req.query.date).trim() : null;
+    const dryRun = req.query.dryRun === 'true';
+    const force = req.query.force === 'true';
+    const recipients = req.query.phone ? String(req.query.phone).trim() : null;
+    const templateName = req.query.template ? String(req.query.template).trim() : null;
+
+    const { isoDate } = dailySalesReportService.getIstWindow(dateStr);
+    const lockKey = `cron:daily_sales_report:${isoDate}`;
+
+    if (!dryRun && !force && redisClient && redisClient.isOpen) {
+      const acquired = await redisClient.set(lockKey, 'sent', { NX: true, EX: 86400 });
+      if (!acquired) {
+        return res.status(200).json({
+          success: true,
+          skipped: true,
+          message: `Daily sales report for ${isoDate} already sent today. Pass ?force=true to resend.`
+        });
+      }
+    }
+
+    const result = await dailySalesReportService.sendDailySalesReport({
+      dateStr,
+      recipients,
+      templateName,
+      dryRun
+    });
+
+    // Release lock if all sends failed so a retry can succeed
+    if (!dryRun && result.results && result.results.every(r => !r.success) && redisClient && redisClient.isOpen) {
+      await redisClient.del(lockKey).catch(() => {});
+    }
+
+    return res.status(200).json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    console.error('[Cron Route Error] daily-sales-report:', error.message);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+router.get('/daily-sales-report', verifyCronAuth, handleDailySalesReport);
+router.post('/daily-sales-report', verifyCronAuth, handleDailySalesReport);
 
 module.exports = router;
