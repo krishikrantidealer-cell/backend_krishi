@@ -165,7 +165,7 @@ async function sendDailySalesReport({
   const resolvedTemplate =
     templateName ||
     process.env.DAILY_SALES_REPORT_TEMPLATE ||
-    'daily_sales_report';
+    'daily_sales_report_v2';
 
   if (dryRun) {
     return {
