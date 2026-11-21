@@ -36,10 +36,9 @@ function formatInr(amount) {
   return Math.round(Number(amount) || 0).toLocaleString('en-IN');
 }
 
-function formatAgentLine(name, revenue, orders) {
+function formatAgentLine(name, revenue) {
   const cleanName = String(name || 'Sales Agent').replace(/[\r\n\t]+/g, ' ').trim();
-  const orderWord = orders === 1 ? 'order' : 'orders';
-  return `${cleanName} — ₹${formatInr(revenue)} (${orders} ${orderWord})`;
+  return `${cleanName} — ₹${formatInr(revenue)}`;
 }
 
 /**
