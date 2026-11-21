@@ -6,7 +6,8 @@ const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 const MAX_AGENT_SLOTS = 15;
 
 /**
- * Computes the UTC Date boundaries for 10:00 AM - 7:00 PM IST on a given YYYY-MM-DD (defaults to today in IST).
+ * Computes the UTC Date boundaries for the rolling 24-hour IST window
+ * (yesterday 7:00 PM IST to today 7:00 PM IST) on a given YYYY-MM-DD (defaults to today in IST).
  */
 function getIstWindow(dateStr = null) {
   let year, month, day;
@@ -21,8 +22,8 @@ function getIstWindow(dateStr = null) {
 
   // Midnight UTC of that calendar date minus 5h30m = Midnight IST in UTC
   const istMidnightUtcMs = Date.UTC(year, month - 1, day, 0, 0, 0, 0) - IST_OFFSET_MS;
-  const startUtc = new Date(istMidnightUtcMs + 10 * 60 * 60 * 1000); // 10:00:00.000 IST
-  const endUtc = new Date(istMidnightUtcMs + 19 * 60 * 60 * 1000);   // 19:00:00.000 IST (7:00 PM)
+  const startUtc = new Date(istMidnightUtcMs - 5 * 60 * 60 * 1000);      // Yesterday 19:00:00.000 IST (7:00 PM)
+  const endUtc = new Date(istMidnightUtcMs + 19 * 60 * 60 * 1000 - 1);   // Today 18:59:59.999 IST (up to 7:00 PM)
 
   const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const displayDate = `${String(day).padStart(2, '0')} ${monthNames[month - 1]} ${year}`;
@@ -42,7 +43,7 @@ function formatAgentLine(name, revenue, orders) {
 }
 
 /**
- * Aggregates 10 AM - 7 PM IST sales across all active sales agents (including 0-sale agents).
+ * Aggregates rolling 24-hour IST sales (yesterday 7:00 PM - today 7:00 PM IST) across all active sales agents.
  */
 async function buildDailySalesReport(dateStr = null) {
   const { startUtc, endUtc, displayDate, isoDate } = getIstWindow(dateStr);
@@ -92,9 +93,30 @@ async function buildDailySalesReport(dateStr = null) {
     }
   }
 
+const PREFERRED_AGENT_ORDER = [
+  'ritik',
+  'jaspal',
+  'anshika',
+  'runa',
+  'ajay',
+  'yogesh',
+  'dhiraj',
+  'govind',
+  'keluth',
+  'eram'
+];
+
+function getAgentSequenceIndex(name) {
+  const normalized = String(name || '').trim().toLowerCase();
+  const idx = PREFERRED_AGENT_ORDER.findIndex(prefix => normalized.startsWith(prefix));
+  return idx === -1 ? PREFERRED_AGENT_ORDER.length : idx;
+}
+
   const sortedAgents = Array.from(agentStatsMap.values()).sort((a, b) => {
+    const idxA = getAgentSequenceIndex(a.name);
+    const idxB = getAgentSequenceIndex(b.name);
+    if (idxA !== idxB) return idxA - idxB;
     if (b.revenue !== a.revenue) return b.revenue - a.revenue;
-    if (b.orders !== a.orders) return b.orders - a.orders;
     return a.name.localeCompare(b.name);
   });
 
