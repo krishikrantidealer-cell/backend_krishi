@@ -122,7 +122,7 @@ router.get('/segment/:segment', verifyCronAuth, async (req, res) => {
 
 /**
  * @route   GET/POST /api/cron/daily-sales-report
- * @desc    Aggregates 10 AM - 7 PM IST sales per agent and sends WhatsApp report via MyOperator Template
+ * @desc    Aggregates yesterday 7 PM - today 7 PM IST (24h) sales per agent and sends WhatsApp report via MyOperator Template
  * @query   date (optional YYYY-MM-DD), phone (optional override), template (optional), dryRun=true, force=true
  */
 const handleDailySalesReport = async (req, res) => {
