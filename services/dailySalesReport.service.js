@@ -47,13 +47,16 @@ function formatAgentLine(name, revenue) {
 async function buildDailySalesReport(dateStr = null) {
   const { startUtc, endUtc, displayDate, isoDate } = getIstWindow(dateStr);
 
+const EXCLUDED_AGENT_EMAILS = new Set(['essentialbiosciences@gmail.com']);
+const EXCLUDED_AGENT_NAMES = new Set(['ram shukla']);
+
   const [salesAgents, orders] = await Promise.all([
     User.find({
       role: 'sales',
       isDeleted: { $ne: true },
       isBlocked: { $ne: true }
     })
-      .select('firstName lastName')
+      .select('firstName lastName email')
       .lean(),
     Order.find({
       placedAt: { $gte: startUtc, $lte: endUtc },
@@ -67,7 +70,11 @@ async function buildDailySalesReport(dateStr = null) {
   const agentStatsMap = new Map();
   for (const agent of salesAgents) {
     const id = String(agent._id);
+    const email = String(agent.email || '').trim().toLowerCase();
     const fullName = `${agent.firstName || ''} ${agent.lastName || ''}`.trim() || 'Sales Agent';
+    if (EXCLUDED_AGENT_EMAILS.has(email) || EXCLUDED_AGENT_NAMES.has(fullName.toLowerCase())) {
+      continue;
+    }
     agentStatsMap.set(id, { id, name: fullName, revenue: 0, orders: 0 });
   }
 
