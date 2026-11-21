@@ -183,7 +183,7 @@ async function sendDailySalesReport({
   const rawRecipients =
     recipients ||
     process.env.DAILY_SALES_REPORT_PHONES ||
-    '9098544263,9399022066,9201896608';
+    '9098544263,9399022066,9201896608,7898479278';
   const phoneList = Array.from(
     new Set(
       String(rawRecipients)
