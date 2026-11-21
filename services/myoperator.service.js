@@ -181,6 +181,11 @@ class MyOperatorService {
         };
 
         if (validBodyParams.length > 0) {
+          const bodyObj = {};
+          validBodyParams.forEach((val, idx) => {
+            bodyObj[String(idx + 1)] = val;
+          });
+          contextObj.body = bodyObj;
           contextObj.body_values = validBodyParams;
           contextObj.parameters = validBodyParams;
         }
