@@ -145,7 +145,6 @@ function getAgentSequenceIndex(name) {
   const bodyValues = [
     displayDate,
     formatInr(totalRevenue),
-    String(totalOrders),
     ...agentLines
   ];
 
@@ -186,7 +185,7 @@ async function sendDailySalesReport({
   const resolvedTemplate =
     templateName ||
     process.env.DAILY_SALES_REPORT_TEMPLATE ||
-    'daily_sales_report_v2';
+    'daily_sales_report_v3';
 
   if (dryRun) {
     return {
