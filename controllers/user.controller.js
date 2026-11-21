@@ -503,65 +503,207 @@ exports.adminAssignAgent = async (req, res, next) => {
 
     const user = await userService.assignAgent(userId, agentId);
 
-    // Sync WhatsApp CRM Contact and Conversation assignments to match this change
-    contactSyncService.syncUserToContactAndConversation(user, { broadcastWs: true }).catch(err => {
-      console.error('[Sync] Failed to sync WhatsApp contact/conversation assignment:', err.message);
-    });
+    // Respond immediately so the panel UI never blocks on background sync/alerts
+    res.json({ success: true, message: 'Agent assigned successfully', user });
 
-    // Audit critical sales/admin action
-    auditService.logAction({
-      adminId: req.user._id,
-      adminEmail: req.user.email,
-      action: 'AGENT_ASSIGNED',
-      targetId: userId,
-      targetModel: 'User',
-      changes: {
-        before: { assignedAgent: oldUser ? oldUser.assignedAgent : null },
-        after: { assignedAgent: agentId }
+    // Background tasks: WhatsApp CRM sync, audit log, single WS broadcast, panel alert
+    setImmediate(async () => {
+      try {
+        await contactSyncService.syncUserToContactAndConversation(user, { broadcastWs: true });
+      } catch (err) {
+        console.error('[Sync] Failed to sync WhatsApp contact/conversation assignment:', err.message);
       }
-    }, req);
 
-    try {
-      const { broadcastToRoles, sendToUser } = require('../services/websocket.service');
-      const notificationService = require('../services/notification.service');
-      broadcastToRoles(['admin', 'sales'], { type: 'LEADS_UPDATE' });
-      broadcastToRoles(['admin', 'sales'], { type: 'DEALERS_UPDATE' });
-      if (agentId) {
-        sendToUser(agentId, { type: 'LEADS_UPDATE' });
-        sendToUser(agentId, { type: 'DEALERS_UPDATE' });
-
-        // Create structured panel alert for the assigned sales agent
-        const isDealer = user.kycStatus === 'verified';
-        const title = isDealer ? 'New Dealer Assigned 🤝' : 'New Lead Assigned 👤';
-        const nameStr = (user.firstName || user.lastName)
-          ? `${user.firstName || ''} ${user.lastName || ''}`.trim()
-          : user.shopName || user.phoneNumber;
-        const phoneSuffix = user.phoneNumber ? ` (${user.phoneNumber})` : '';
-        const body = isDealer
-          ? `You have been assigned to dealer: ${nameStr}${phoneSuffix}.`
-          : `You have been assigned to lead: ${nameStr}${phoneSuffix}.`;
-
-        await notificationService.sendPanelAlert({
-          userId: agentId,
-          title,
-          body,
-          actionRoute: isDealer ? '/dealers/profile' : '/leads/profile',
-          type: isDealer ? 'dealer_assigned' : 'lead_assigned',
-          priority: 'high',
-          entityId: user._id.toString(),
-          entityType: isDealer ? 'dealer' : 'lead',
-          metadata: {
-            customerName: nameStr,
-            phoneNumber: user.phoneNumber,
-            shopName: user.shopName
+      try {
+        auditService.logAction({
+          adminId: req.user._id,
+          adminEmail: req.user.email,
+          action: 'AGENT_ASSIGNED',
+          targetId: userId,
+          targetModel: 'User',
+          changes: {
+            before: { assignedAgent: oldUser ? oldUser.assignedAgent : null },
+            after: { assignedAgent: agentId }
           }
+        }, req);
+      } catch (_) {}
+
+      try {
+        const { broadcastToRoles } = require('../services/websocket.service');
+        const notificationService = require('../services/notification.service');
+        const isDealer = user.kycStatus === 'verified';
+        broadcastToRoles(['admin', 'sales'], {
+          type: isDealer ? 'DEALERS_UPDATE' : 'LEADS_UPDATE',
+          userId: user._id.toString(),
+          agentId: agentId || null,
+          actorId: req.user._id ? req.user._id.toString() : null
         });
+
+        if (agentId) {
+          const title = isDealer ? 'New Dealer Assigned 🤝' : 'New Lead Assigned 👤';
+          const nameStr = (user.firstName || user.lastName)
+            ? `${user.firstName || ''} ${user.lastName || ''}`.trim()
+            : user.shopName || user.phoneNumber;
+          const phoneSuffix = user.phoneNumber ? ` (${user.phoneNumber})` : '';
+          const body = isDealer
+            ? `You have been assigned to dealer: ${nameStr}${phoneSuffix}.`
+            : `You have been assigned to lead: ${nameStr}${phoneSuffix}.`;
+
+          await notificationService.sendPanelAlert({
+            userId: agentId,
+            title,
+            body,
+            actionRoute: isDealer ? '/dealers/profile' : '/leads/profile',
+            type: isDealer ? 'dealer_assigned' : 'lead_assigned',
+            priority: 'high',
+            entityId: user._id.toString(),
+            entityType: isDealer ? 'dealer' : 'lead',
+            metadata: {
+              customerName: nameStr,
+              phoneNumber: user.phoneNumber,
+              shopName: user.shopName
+            }
+          });
+        }
+      } catch (wsErr) {
+        console.error('[WS] Failed to broadcast agent assignment:', wsErr.message);
       }
-    } catch (wsErr) {
-      console.error('[WS] Failed to broadcast agent assignment:', wsErr.message);
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.adminBulkAssignAgent = async (req, res, next) => {
+  try {
+    const { userIds } = req.body;
+    if (!Array.isArray(userIds) || userIds.length === 0) {
+      return res.status(400).json({ success: false, message: 'userIds must be a non-empty array' });
     }
 
-    res.json({ success: true, message: 'Agent assigned successfully', user });
+    const rawAgentId = req.body.agentId !== undefined
+      ? req.body.agentId
+      : (req.body.assignedAgentId !== undefined ? req.body.assignedAgentId : req.body.assignedAgent);
+    const agentId = (rawAgentId && rawAgentId !== 'unassign' && String(rawAgentId).trim() !== '' && String(rawAgentId).trim() !== 'null')
+      ? rawAgentId
+      : null;
+
+    // Role-based permission enforcement for sales agents
+    if (req.user.role === 'sales') {
+      const perms = req.user.permissions;
+      const canReassignLeads = perms?.lead?.reassign === true || perms?.leads?.reassign === true;
+      const canReassignDealers = perms?.dealer?.reassign === true || perms?.dealers?.reassign === true;
+      if (!canReassignLeads && !canReassignDealers) {
+        return res.status(403).json({
+          success: false,
+          message: 'You do not have permission to reassign leads or dealers.'
+        });
+      }
+      if (!canReassignDealers) {
+        const hasDealer = await User.exists({ _id: { $in: userIds }, kycStatus: 'verified' });
+        if (hasDealer) {
+          return res.status(403).json({
+            success: false,
+            message: 'You do not have permission to reassign dealers.'
+          });
+        }
+      }
+      if (!canReassignLeads) {
+        const hasLead = await User.exists({ _id: { $in: userIds }, kycStatus: { $ne: 'verified' } });
+        if (hasLead) {
+          return res.status(403).json({
+            success: false,
+            message: 'You do not have permission to reassign leads.'
+          });
+        }
+      }
+    }
+
+    const result = await userService.bulkAssignAgent(userIds, agentId);
+
+    // Respond immediately after atomic MongoDB updateMany
+    res.json({
+      success: true,
+      message: `Agent assigned to ${result.matchedCount} records successfully`,
+      count: result.matchedCount,
+      modifiedCount: result.modifiedCount,
+      agent: result.agent
+    });
+
+    // Background tasks: bulk WhatsApp CRM sync, single audit log, single WS broadcast, single summary alert
+    setImmediate(async () => {
+      try {
+        const updatedUsers = await User.find({ _id: { $in: userIds } })
+          .select('_id firstName lastName shopName phoneNumber kycStatus assignedAgent')
+          .lean();
+
+        // Sync WhatsApp Contacts & Conversations in controlled chunks without WS spam
+        const chunkSize = 10;
+        for (let i = 0; i < updatedUsers.length; i += chunkSize) {
+          const chunk = updatedUsers.slice(i, i + chunkSize);
+          await Promise.all(
+            chunk.map(u =>
+              contactSyncService
+                .syncUserToContactAndConversation(u, { broadcastWs: false })
+                .catch(() => {})
+            )
+          );
+        }
+
+        auditService.logAction({
+          adminId: req.user._id,
+          adminEmail: req.user.email,
+          action: 'BULK_AGENT_ASSIGNED',
+          targetId: agentId || 'unassigned',
+          targetModel: 'User',
+          changes: {
+            count: userIds.length,
+            agentId: agentId || null
+          }
+        }, req);
+
+        const { broadcastToRoles } = require('../services/websocket.service');
+        const notificationService = require('../services/notification.service');
+
+        const hasDealers = updatedUsers.some(u => u.kycStatus === 'verified');
+        const hasLeads = updatedUsers.some(u => u.kycStatus !== 'verified');
+
+        if (hasLeads) {
+          broadcastToRoles(['admin', 'sales'], {
+            type: 'LEADS_UPDATE',
+            bulk: true,
+            count: userIds.length,
+            actorId: req.user._id ? req.user._id.toString() : null
+          });
+        }
+        if (hasDealers) {
+          broadcastToRoles(['admin', 'sales'], {
+            type: 'DEALERS_UPDATE',
+            bulk: true,
+            count: userIds.length,
+            actorId: req.user._id ? req.user._id.toString() : null
+          });
+        }
+
+        if (agentId && updatedUsers.length > 0) {
+          const isAllDealers = hasDealers && !hasLeads;
+          const label = isAllDealers ? 'Dealers' : 'Leads';
+          await notificationService.sendPanelAlert({
+            userId: agentId,
+            title: `${updatedUsers.length} New ${label} Assigned 👤`,
+            body: `You have been assigned ${updatedUsers.length} ${label.toLowerCase()}.`,
+            actionRoute: isAllDealers ? '/dealers' : '/leads',
+            type: isAllDealers ? 'dealer_assigned' : 'lead_assigned',
+            priority: 'high',
+            entityId: agentId.toString(),
+            entityType: isAllDealers ? 'dealer' : 'lead',
+            metadata: { count: updatedUsers.length }
+          });
+        }
+      } catch (bgErr) {
+        console.error('[BulkAssign] Background sync/broadcast error:', bgErr.message);
+      }
+    });
   } catch (error) {
     next(error);
   }

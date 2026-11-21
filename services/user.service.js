@@ -496,7 +496,7 @@ class UserService {
     if (!user) throw new Error('User not found');
 
     if (agentId) {
-      const agent = await User.findById(agentId);
+      const agent = await User.findById(agentId).select('role firstName lastName phoneNumber email').lean();
       if (!agent) throw new Error('Agent not found');
       if (agent.role !== 'sales') {
         throw new Error('Assigned user must be a sales agent');
@@ -515,14 +515,46 @@ class UserService {
 
     await user.save();
 
-    // Automatically sync Lead/Dealer to unified WhatsApp Contact & Conversation thread
-    try {
-      await contactSyncService.syncUserToContactAndConversation(user, { broadcastWs: true });
-    } catch (syncErr) {
-      console.error('[UserService] Failed to sync contact on agent assignment:', syncErr.message);
+    return await User.findById(userId).populate('assignedAgent', 'firstName lastName phoneNumber email');
+  }
+
+  async bulkAssignAgent(userIds, agentId) {
+    if (!Array.isArray(userIds) || userIds.length === 0) {
+      throw new Error('userIds must be a non-empty array');
     }
 
-    return await User.findById(userId).populate('assignedAgent', 'firstName lastName phoneNumber email');
+    let agent = null;
+    if (agentId) {
+      agent = await User.findById(agentId).select('role firstName lastName phoneNumber email').lean();
+      if (!agent) throw new Error('Agent not found');
+      if (agent.role !== 'sales') {
+        throw new Error('Assigned user must be a sales agent');
+      }
+    }
+
+    const now = new Date();
+    const updateFields = agentId
+      ? { assignedAgent: agentId, assignedAt: now }
+      : { assignedAgent: null, assignedAt: null };
+
+    const result = await User.updateMany(
+      { _id: { $in: userIds } },
+      { $set: updateFields }
+    );
+
+    // Promote 'prospect' leads to 'new' when assigned to a sales agent
+    if (agentId) {
+      await User.updateMany(
+        { _id: { $in: userIds }, status: 'prospect' },
+        { $set: { status: 'new' } }
+      );
+    }
+
+    return {
+      modifiedCount: result.modifiedCount ?? result.nModified ?? userIds.length,
+      matchedCount: result.matchedCount ?? result.n ?? userIds.length,
+      agent
+    };
   }
 
   async createSalesAgent(agentData) {

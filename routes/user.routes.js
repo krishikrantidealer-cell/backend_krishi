@@ -162,6 +162,9 @@ router.post(
   userController.adminSubmitKyc
 );
 
+// Bulk Assign Sales Agent (Admin and permitted Sales) - MUST be before /:userId
+router.put('/bulk-assign-agent', authorizeRoles('admin', 'sales'), userController.adminBulkAssignAgent);
+
 // Update User (Admin and Sales)
 router.put('/:userId', authorizeRoles('admin', 'sales'), userController.adminUpdateUser);
 
