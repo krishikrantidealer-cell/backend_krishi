@@ -183,11 +183,15 @@ async function sendDailySalesReport({
   const rawRecipients =
     recipients ||
     process.env.DAILY_SALES_REPORT_PHONES ||
-    '9098544263,9399022066';
-  const phoneList = String(rawRecipients)
-    .split(',')
-    .map(p => p.trim())
-    .filter(Boolean);
+    '9098544263,9399022066,9201896608';
+  const phoneList = Array.from(
+    new Set(
+      String(rawRecipients)
+        .split(',')
+        .map(p => p.trim())
+        .filter(Boolean)
+    )
+  );
 
   const resolvedTemplate =
     templateName ||
