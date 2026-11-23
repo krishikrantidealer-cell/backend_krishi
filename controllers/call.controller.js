@@ -28,9 +28,9 @@ function isDuplicateWebhook(key) {
   return false;
 }
 
-// ── Background Auto-Sync with MyOperator REST APIs (Every 10s) ───────────────
+// ── Background Auto-Sync with MyOperator REST APIs (Every 2 min fallback; real-time via webhooks) ──
 let lastApiSyncTime = 0;
-const API_SYNC_THROTTLE_MS = 6 * 1000;
+const API_SYNC_THROTTLE_MS = 110 * 1000;
 
 function triggerBackgroundSync() {
   if (mongoose.connection.readyState !== 1) return;
@@ -43,10 +43,10 @@ function triggerBackgroundSync() {
   }
 }
 
-// Background auto-sync worker
+// Background auto-sync worker (2-minute fallback; protected by Redis lock in service)
 setInterval(() => {
   triggerBackgroundSync();
-}, 10 * 1000);
+}, 120 * 1000);
 
 /**
  * 1-Click Outbound Click-to-Call Trigger
@@ -1177,7 +1177,9 @@ const handleCallWebhook = async (req, res) => {
       agentUser = await User.findOne({ email: matchedAccount.email.toLowerCase() });
     }
     if (!agentUser && agentPhone) {
-      agentUser = await User.findOne({ phoneNumber: { $regex: agentPhone } });
+      const cleanAgent10 = String(agentPhone).replace(/\D/g, '').replace(/^91/, '').replace(/^0+/, '');
+      const phoneVariants = Array.from(new Set([agentPhone, cleanAgent10, `91${cleanAgent10}`, `+91${cleanAgent10}`, `0${cleanAgent10}`].filter(Boolean)));
+      agentUser = await User.findOne({ phoneNumber: { $in: phoneVariants } });
     }
     if (!agentUser && rawDid) {
       agentUser = await User.findOne({
@@ -1234,29 +1236,22 @@ const handleCallWebhook = async (req, res) => {
       ].filter(Boolean).map(String);
 
       if (idsToMatch.length > 0) {
+        // Indexed-only lookup (callId and providerCallId are both indexed; avoids 14s COLLSCAN)
         callLog = await CallLog.findOne({
           $or: [
             { callId: { $in: idsToMatch } },
-            { providerCallId: { $in: idsToMatch } },
-            { 'metadata.unique_id': { $in: idsToMatch } },
-            { 'metadata.uid': { $in: idsToMatch } },
-            { 'metadata.ref_id': { $in: idsToMatch } },
-            { 'metadata.client_ref_id': { $in: idsToMatch } },
-            { 'metadata.reference_id': { $in: idsToMatch } },
-            { 'metadata.session_id': { $in: idsToMatch } },
-            { 'metadata.call_id': { $in: idsToMatch } },
-            { 'metadata.allcaller_id': { $in: idsToMatch } },
-            { 'metadata.additional_parameters.vl': { $in: idsToMatch } },
-            { 'metadata.additional_parameters': { $elemMatch: { ky: 'unique_id', vl: { $in: idsToMatch } } } }
+            { providerCallId: { $in: idsToMatch } }
           ]
         }).sort({ createdAt: -1 });
       }
 
-      // 2. Fallback: match most recent call log for this customer phone & direction within 2 minutes
+      // 2. Fallback: match most recent call log for this customer phone & direction within 2 minutes (indexed)
       if (!callLog && customerPhone) {
         const twoMinAgo = new Date(Date.now() - 2 * 60 * 1000);
+        const cleanCust10 = String(customerPhone).replace(/\D/g, '').replace(/^91/, '').replace(/^0+/, '');
+        const custVariants = Array.from(new Set([customerPhone, cleanCust10, `91${cleanCust10}`, `+91${cleanCust10}`, `0${cleanCust10}`].filter(Boolean)));
         callLog = await CallLog.findOne({
-          customerPhone: { $regex: customerPhone },
+          customerPhone: { $in: custVariants },
           direction: isInbound ? 'inbound' : 'outbound',
           createdAt: { $gte: twoMinAgo }
         }).sort({ createdAt: -1 });

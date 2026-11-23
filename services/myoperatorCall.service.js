@@ -671,8 +671,39 @@ class MyOperatorCallService {
   /**
    * Proactively pulls recent CDR logs from MyOperator search API across all accounts.
    * Ensures 100% data fidelity even if webhook deliveries are missed or delayed.
+   * Protected by in-process mutex + Redis distributed lock and uses indexed batch queries only.
    */
   async syncRecentCallsFromMyOperator() {
+    if (this._isCallSyncRunning) {
+      return 0;
+    }
+    this._isCallSyncRunning = true;
+
+    let redisLockAcquired = false;
+    let redisClient = null;
+    try {
+      redisClient = require('../config/redis').redisClient;
+      if (redisClient && redisClient.isOpen) {
+        const lock = await redisClient.set('lock:myoperator:call_sync', '1', { NX: true, EX: 110 });
+        if (!lock) {
+          this._isCallSyncRunning = false;
+          return 0;
+        }
+        redisLockAcquired = true;
+      }
+    } catch (_) {}
+
+    try {
+      return await this._runCallSyncInternal();
+    } finally {
+      this._isCallSyncRunning = false;
+      if (redisLockAcquired && redisClient && redisClient.isOpen) {
+        redisClient.del('lock:myoperator:call_sync').catch(() => {});
+      }
+    }
+  }
+
+  async _runCallSyncInternal() {
     const User = require('../models/User');
     const wsService = require('./websocket.service');
 
@@ -684,6 +715,26 @@ class MyOperatorCallService {
       { name: 'Yogesh Nandwanshi', email: 'sales3.essential@gmail.com', phone: '9399022063', token: '817c3545b32f7df16784c2416d467a9b', companyId: '6abcea80a6fa9438', did: '07316917208' },
       { name: 'Jaspal Rajput', email: 'ebsale01@gmail.com', phone: '9399022061', token: '55182190d578a476bc2b813ac804a294', companyId: '6abceacb44b44323', did: '07316917216' }
     ];
+
+    // Pre-load all configured agents ONCE (1 indexed query instead of 600 unindexed regex queries)
+    const agentEmails = accounts.map(a => a.email.toLowerCase());
+    const agentPhoneVariants = accounts.flatMap(a => [a.phone, `91${a.phone}`, `+91${a.phone}`, `0${a.phone}`]);
+    const agentUsers = await User.find({
+      $or: [
+        { email: { $in: agentEmails } },
+        { phoneNumber: { $in: agentPhoneVariants } }
+      ]
+    }).select('_id email phoneNumber').lean();
+
+    const agentByEmail = new Map();
+    const agentByPhone = new Map();
+    for (const u of agentUsers) {
+      if (u.email) agentByEmail.set(u.email.toLowerCase(), u);
+      if (u.phoneNumber) {
+        const d = String(u.phoneNumber).replace(/\D/g, '').replace(/^91/, '').replace(/^0+/, '');
+        if (d) agentByPhone.set(d, u);
+      }
+    }
 
     const uniqueTokens = [...new Set(accounts.map(a => a.token).filter(Boolean))];
     let syncedCount = 0;
@@ -698,7 +749,7 @@ class MyOperatorCallService {
       try {
         const res = await axios.post(`${this.callingBaseUrl}/search`, {
           token,
-          limit: 100
+          limit: 40
         }, {
           headers: { 'Content-Type': 'application/json' },
           timeout: 8000
@@ -733,6 +784,35 @@ class MyOperatorCallService {
         const timeB = Number(b.start_time || b._ms || 0) || 0;
         return timeB - timeA;
       });
+
+      if (sortedRecords.length === 0) continue;
+
+      // Batch pre-fetch all existing CallLogs for this token using INDEXED providerCallId & callId ONLY (zero COLLSCAN!)
+      const batchCandidateIds = new Set();
+      for (const r of sortedRecords) {
+        const uniqueIdFromAddParams = Array.isArray(r.additional_parameters)
+          ? r.additional_parameters.find(p => p.ky === 'unique_id')?.vl
+          : null;
+        [
+          r.allcaller_id, r.uid, r.id, r.call_id, r.unique_id,
+          r.reference_id, r.ref_id, r.session_id, uniqueIdFromAddParams
+        ].filter(Boolean).forEach(v => batchCandidateIds.add(String(v)));
+      }
+
+      const existingLogsByKey = new Map();
+      if (batchCandidateIds.size > 0) {
+        const idArr = Array.from(batchCandidateIds);
+        const existingDocs = await CallLog.find({
+          $or: [
+            { providerCallId: { $in: idArr } },
+            { callId: { $in: idArr } }
+          ]
+        });
+        for (const doc of existingDocs) {
+          if (doc.providerCallId) existingLogsByKey.set(String(doc.providerCallId), doc);
+          if (doc.callId) existingLogsByKey.set(String(doc.callId), doc);
+        }
+      }
 
       for (const r of sortedRecords) {
         const providerCallId = String(r.allcaller_id || r.uid || r.id || r.call_id || r.unique_id || r.reference_id || '');
@@ -836,82 +916,6 @@ class MyOperatorCallService {
           status = this._normalizeStatus(rawStatus) || (rawStatus.includes('miss') ? 'missed' : 'ended');
         }
         
-        let recordingUrl = null;
-        const rawRecording = r.fileurl || r.recording_url || r.recording || r.audio_url || r.file_url || r.download_url || r.url || null;
-        if (rawRecording && (rawRecording.includes('amazonaws.com') || rawRecording.includes('s3.') || rawRecording.endsWith('.mp3'))) {
-          recordingUrl = rawRecording;
-        } else if (r.filename) {
-          // Resolve direct S3 link using the active account token
-          try {
-            let f = String(r.filename).split('?')[0].trim();
-            if (!f.endsWith('.mp3')) f = `${f}.mp3`;
-            const linkRes = await axios.get(`${this.callingBaseUrl}/recordings/link`, {
-              params: { token, file: f },
-              timeout: 3000
-            });
-            const directLink = linkRes.data?.url || linkRes.data?.data?.url || linkRes.data?.link;
-            if (directLink && (directLink.includes('amazonaws.com') || directLink.includes('s3.') || directLink.endsWith('.mp3'))) {
-              recordingUrl = directLink;
-            }
-          } catch (_) {}
-        }
-
-        // Agent matching: check matched account by agent number, DID, user name tag, or primaryAccount
-        let matchedAcc = null;
-        const cleanAgentPhone = String(rawAgentPhone || '').replace(/\D/g, '').replace(/^91/, '').replace(/^0+/, '');
-        if (cleanAgentPhone) {
-          matchedAcc = accounts.find(a => a.phone === cleanAgentPhone || cleanAgentPhone.endsWith(a.phone) || a.phone.endsWith(cleanAgentPhone));
-        }
-
-        const agentNameFromUs = Array.isArray(r._us) && r._us[0]?.nm;
-        if (!matchedAcc && agentNameFromUs) {
-          matchedAcc = accounts.find(a => a.name.toLowerCase().includes(agentNameFromUs.toLowerCase()) || agentNameFromUs.toLowerCase().includes(a.name.toLowerCase()));
-        }
-
-        const rawRecordDid = String(r.received_on || r.did || r.virtual_number || '').replace(/\D/g, '').replace(/^0+/, '');
-        if (!matchedAcc && rawRecordDid) {
-          matchedAcc = accounts.find(a => {
-            const cleanAccDid = a.did.replace(/\D/g, '').replace(/^0+/, '');
-            return cleanAccDid === rawRecordDid || rawRecordDid.endsWith(cleanAccDid) || cleanAccDid.endsWith(rawRecordDid);
-          });
-        }
-        if (!matchedAcc) {
-          matchedAcc = primaryAccount;
-        }
-
-        let agentUser = await User.findOne({
-          $or: [
-            { email: matchedAcc.email.toLowerCase() },
-            { phoneNumber: { $regex: matchedAcc.phone } }
-          ]
-        });
-        const agentId = agentUser ? agentUser._id : null;
-        const resolvedAgentPhone = agentUser?.phoneNumber || matchedAcc.phone || agentPhone;
-
-        // Contact matching / creation
-        let contact = await Contact.findOne({
-          $or: [
-            { phone: customerPhone },
-            { phone: `91${customerPhone}` },
-            { phone: `+91${customerPhone}` },
-            { phone: `0${customerPhone}` }
-          ]
-        });
-
-        if (!contact && customerPhone.length >= 10) {
-          try {
-            contact = await Contact.create({
-              name: `Caller +91 ${customerPhone}`,
-              phone: `+91${customerPhone}`,
-              assignedTo: agentId
-            });
-          } catch (_) {
-            contact = await Contact.findOne({
-              $or: [{ phone: customerPhone }, { phone: `+91${customerPhone}` }]
-            });
-          }
-        }
-
         let callTime = new Date();
         if (r.start_time) {
           const num = Number(r.start_time);
@@ -943,21 +947,16 @@ class MyOperatorCallService {
           r.session_id
         ].filter(Boolean).map(String);
 
-        let existingLog = await CallLog.findOne({
-          $or: [
-            { providerCallId: { $in: candidateIds } },
-            { callId: { $in: candidateIds } },
-            { 'metadata.allcaller_id': { $in: candidateIds } },
-            { 'metadata.unique_id': { $in: candidateIds } },
-            { 'metadata.session_id': { $in: candidateIds } },
-            { 'metadata.uid': { $in: candidateIds } },
-            { 'metadata.id': { $in: candidateIds } },
-            { 'metadata.additional_parameters.vl': { $in: candidateIds } },
-            { 'metadata.additional_parameters': { $elemMatch: { ky: 'unique_id', vl: { $in: candidateIds } } } }
-          ]
-        });
+        // O(1) lookup from batch pre-fetched indexed CallLogs map (zero COLLSCAN!)
+        let existingLog = null;
+        for (const cid of candidateIds) {
+          if (existingLogsByKey.has(cid)) {
+            existingLog = existingLogsByKey.get(cid);
+            break;
+          }
+        }
 
-        // Proximity deduplication: match by customer phone & direction within 180s window
+        // Indexed proximity deduplication fallback: match by customerPhone + createdAt index
         if (!existingLog && customerPhone) {
           const windowStart = new Date(callTime.getTime() - 180 * 1000);
           const windowEnd = new Date(callTime.getTime() + 180 * 1000);
@@ -971,6 +970,78 @@ class MyOperatorCallService {
         // Respect soft-deletion: If user previously deleted this call, do not un-delete
         if (existingLog && existingLog.isDeleted) {
           continue;
+        }
+
+        // Only resolve S3 recording link if new call or existing call is missing recordingUrl
+        let recordingUrl = null;
+        const rawRecording = r.fileurl || r.recording_url || r.recording || r.audio_url || r.file_url || r.download_url || r.url || null;
+        if (rawRecording && (rawRecording.includes('amazonaws.com') || rawRecording.includes('s3.') || rawRecording.endsWith('.mp3'))) {
+          recordingUrl = rawRecording;
+        } else if (r.filename && (!existingLog || !existingLog.recordingUrl)) {
+          try {
+            let f = String(r.filename).split('?')[0].trim();
+            if (!f.endsWith('.mp3')) f = `${f}.mp3`;
+            const linkRes = await axios.get(`${this.callingBaseUrl}/recordings/link`, {
+              params: { token, file: f },
+              timeout: 3000
+            });
+            const directLink = linkRes.data?.url || linkRes.data?.data?.url || linkRes.data?.link;
+            if (directLink && (directLink.includes('amazonaws.com') || directLink.includes('s3.') || directLink.endsWith('.mp3'))) {
+              recordingUrl = directLink;
+            }
+          } catch (_) {}
+        }
+
+        // Agent matching from pre-loaded in-memory map (zero DB queries!)
+        let matchedAcc = null;
+        const cleanAgentPhone = String(rawAgentPhone || '').replace(/\D/g, '').replace(/^91/, '').replace(/^0+/, '');
+        if (cleanAgentPhone) {
+          matchedAcc = accounts.find(a => a.phone === cleanAgentPhone || cleanAgentPhone.endsWith(a.phone) || a.phone.endsWith(cleanAgentPhone));
+        }
+
+        const agentNameFromUs = Array.isArray(r._us) && r._us[0]?.nm;
+        if (!matchedAcc && agentNameFromUs) {
+          matchedAcc = accounts.find(a => a.name.toLowerCase().includes(agentNameFromUs.toLowerCase()) || agentNameFromUs.toLowerCase().includes(a.name.toLowerCase()));
+        }
+
+        const rawRecordDid = String(r.received_on || r.did || r.virtual_number || '').replace(/\D/g, '').replace(/^0+/, '');
+        if (!matchedAcc && rawRecordDid) {
+          matchedAcc = accounts.find(a => {
+            const cleanAccDid = a.did.replace(/\D/g, '').replace(/^0+/, '');
+            return cleanAccDid === rawRecordDid || rawRecordDid.endsWith(cleanAccDid) || cleanAccDid.endsWith(rawRecordDid);
+          });
+        }
+        if (!matchedAcc) {
+          matchedAcc = primaryAccount;
+        }
+
+        const agentUser =
+          agentByEmail.get(matchedAcc.email.toLowerCase()) ||
+          agentByPhone.get(matchedAcc.phone) ||
+          null;
+        const agentId = agentUser ? agentUser._id : null;
+        const resolvedAgentPhone = agentUser?.phoneNumber || matchedAcc.phone || agentPhone;
+
+        // Contact lookup ONLY needed when creating a brand-new CallLog
+        let contact = null;
+        if (!existingLog) {
+          contact = await Contact.findOne({
+            phone: { $in: [customerPhone, `91${customerPhone}`, `+91${customerPhone}`, `0${customerPhone}`] }
+          });
+
+          if (!contact && customerPhone.length >= 10) {
+            try {
+              contact = await Contact.create({
+                name: `Caller +91 ${customerPhone}`,
+                phone: `+91${customerPhone}`,
+                assignedTo: agentId
+              });
+            } catch (_) {
+              contact = await Contact.findOne({
+                phone: { $in: [customerPhone, `+91${customerPhone}`] }
+              });
+            }
+          }
         }
 
         if (existingLog) {
