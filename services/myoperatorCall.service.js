@@ -2,6 +2,19 @@ const axios = require('axios');
 const https = require('https');
 const CallLog = require('../models/CallLog');
 const Contact = require('../models/Contact');
+const myoperatorAccounts = require('../config/myoperatorAccounts');
+
+/**
+ * Safely normalizes an Indian phone/DID number without stripping '91' from 10-digit
+ * mobile numbers that start with 91 (e.g., 9131094645).
+ */
+function normalizePhone10(raw) {
+  let d = String(raw || '').replace(/\D/g, '');
+  if (d.length > 10 && d.startsWith('91')) d = d.slice(2);
+  d = d.replace(/^0+/, '');
+  if (d.length > 10 && d.startsWith('91')) d = d.slice(2);
+  return d;
+}
 
 // Persistent Keep-Alive Agent for Sub-50ms API Dispatches
 const httpsKeepAliveAgent = new https.Agent({
@@ -481,12 +494,12 @@ class MyOperatorCallService {
                             callLog?.metadata?.payload?.companyId ||
                             callLog?.companyId;
 
-    let targetAgentPhone = (callLog?.agentPhone || '').toString().replace(/\D/g, '').replace(/^91/, '').replace(/^0+/, '');
+    let targetAgentPhone = normalizePhone10(callLog?.agentPhone);
     if (!targetAgentPhone && callLog?.metadata?.log_details?.[0]?.received_by?.[0]?.contact_number) {
-      targetAgentPhone = String(callLog.metadata.log_details[0].received_by[0].contact_number).replace(/\D/g, '').replace(/^91/, '').replace(/^0+/, '');
+      targetAgentPhone = normalizePhone10(callLog.metadata.log_details[0].received_by[0].contact_number);
     }
     if (!targetAgentPhone && callLog?.metadata?.log_details?.[0]?._did) {
-      targetAgentPhone = String(callLog.metadata.log_details[0]._did).replace(/\D/g, '').replace(/^91/, '').replace(/^0+/, '');
+      targetAgentPhone = normalizePhone10(callLog.metadata.log_details[0]._did);
     }
 
     // 1. Matched by companyId or agentPhone
@@ -610,7 +623,7 @@ class MyOperatorCallService {
     let effectiveToken = token || this.callingToken;
     let effectiveCompanyId = companyId;
     if (agentPhone) {
-      const cleanAgent = String(agentPhone).replace(/\D/g, '').replace(/^91/, '');
+      const cleanAgent = normalizePhone10(agentPhone);
       const reg = AGENT_TELEPHONY_REGISTRY[cleanAgent];
       if (reg) {
         if (reg.callingToken) effectiveToken = reg.callingToken;
@@ -707,14 +720,27 @@ class MyOperatorCallService {
     const User = require('../models/User');
     const wsService = require('./websocket.service');
 
+    // Load ALL MyOperator accounts (including Main, Govind Singh, Dhiraj Kumar, etc.) from single source of truth
     const accounts = [
-      { name: 'Yashraj Singh (Admin)', email: 'admin@krishikranti.com', phone: '7316917246', token: '3b48e781de1440f4d5d8666f118204fb', companyId: '6ab0de5d51766538', did: '07316917246' },
-      { name: 'Anshika Gupta', email: 'ebsale08@gmail.com', phone: '9399022067', token: 'e7789ae6f3a1472f9466913203f6f968', companyId: '6abcea24dbd6a999', did: '07316917267' },
-      { name: 'Runa Singh', email: 'essentialsale14@gmail.com', phone: '9201896604', token: '94f9842c4ae8e739dbce7382dededf53', companyId: '6abcea4e66e65852', did: '07316917220' },
-      { name: 'Ajay Yadav', email: 'essentialsale8@gmail.com', phone: '9201896606', token: '775acb38ba13d6833011994c74e356cd', companyId: '6abcea68a9843790', did: '07316917210' },
-      { name: 'Yogesh Nandwanshi', email: 'sales3.essential@gmail.com', phone: '9399022063', token: '817c3545b32f7df16784c2416d467a9b', companyId: '6abcea80a6fa9438', did: '07316917208' },
-      { name: 'Jaspal Rajput', email: 'ebsale01@gmail.com', phone: '9399022061', token: '55182190d578a476bc2b813ac804a294', companyId: '6abceacb44b44323', did: '07316917216' }
-    ];
+      {
+        name: myoperatorAccounts.main.agentName || 'Yashraj Singh (Admin)',
+        email: 'admin@krishikranti.com',
+        phone: normalizePhone10(myoperatorAccounts.main.whatsappNumber || myoperatorAccounts.main.phone || '7316917246'),
+        token: myoperatorAccounts.main.callingToken,
+        companyId: myoperatorAccounts.main.companyId,
+        did: '07316917246'
+      },
+      ...(myoperatorAccounts.agents || []).map(a => ({
+        name: a.agentName || a.accountName,
+        email: a.email,
+        phone: normalizePhone10(a.phone),
+        token: a.callingToken,
+        companyId: a.companyId,
+        did: a.did || (a.whatsappNumber ? `0${normalizePhone10(a.whatsappNumber)}` : '')
+      }))
+    ].filter(a => a.token);
+
+    const KNOWN_AGENT_PHONES = Array.from(new Set(accounts.map(a => a.phone).filter(Boolean)));
 
     // Pre-load all configured agents ONCE (1 indexed query instead of 600 unindexed regex queries)
     const agentEmails = accounts.map(a => a.email.toLowerCase());
@@ -731,7 +757,7 @@ class MyOperatorCallService {
     for (const u of agentUsers) {
       if (u.email) agentByEmail.set(u.email.toLowerCase(), u);
       if (u.phoneNumber) {
-        const d = String(u.phoneNumber).replace(/\D/g, '').replace(/^91/, '').replace(/^0+/, '');
+        const d = normalizePhone10(u.phoneNumber);
         if (d) agentByPhone.set(d, u);
       }
     }
@@ -826,8 +852,6 @@ class MyOperatorCallService {
           ? r.additional_parameters.find(p => p.ky === 'unique_id')?.vl
           : null;
 
-        const KNOWN_AGENT_PHONES = ['9201896606', '9399022063', '9399022061', '9201896604'];
-
         // MyOperator Direction Detection:
         // event === 1 or direction === 'incoming'/'inbound' => INBOUND
         // event === 2 or direction === 'outgoing'/'outbound' or type === 2/'obd'/'click2call' => OUTBOUND
@@ -875,8 +899,8 @@ class MyOperatorCallService {
           rawCustomerPhone = r.customer_number || r.destination_number || r.client_number || r.number || r.phone || r.to || r.caller_number || '';
           rawAgentPhone = r.log_details?.[0]?.received_by?.[0]?.contact_number_raw || r.agent_number || r.user_number || r.caller || r.from || r.agent?.contact || primaryAccount.phone;
         }
-        let customerPhone = String(rawCustomerPhone).replace(/\D/g, '').replace(/^91/, '').replace(/^0+/, '');
-        let agentPhone = String(rawAgentPhone).replace(/\D/g, '').replace(/^91/, '').replace(/^0+/, '');
+        let customerPhone = normalizePhone10(rawCustomerPhone);
+        let agentPhone = normalizePhone10(rawAgentPhone);
 
         // Inversion check: if customerPhone is an agent, flip
         if (KNOWN_AGENT_PHONES.includes(customerPhone) && !agentPhone) {
@@ -994,7 +1018,7 @@ class MyOperatorCallService {
 
         // Agent matching from pre-loaded in-memory map (zero DB queries!)
         let matchedAcc = null;
-        const cleanAgentPhone = String(rawAgentPhone || '').replace(/\D/g, '').replace(/^91/, '').replace(/^0+/, '');
+        const cleanAgentPhone = normalizePhone10(rawAgentPhone);
         if (cleanAgentPhone) {
           matchedAcc = accounts.find(a => a.phone === cleanAgentPhone || cleanAgentPhone.endsWith(a.phone) || a.phone.endsWith(cleanAgentPhone));
         }

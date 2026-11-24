@@ -5,6 +5,18 @@ const User = require('../models/User');
 const myoperatorCallService = require('../services/myoperatorCall.service');
 const wsService = require('../services/websocket.service');
 
+/**
+ * Safely normalizes an Indian phone/DID number without stripping '91' from 10-digit
+ * mobile numbers that start with 91 (e.g., Govind Singh's 9131094645).
+ */
+function normalizePhone10(raw) {
+  let d = String(raw || '').replace(/\D/g, '');
+  if (d.length > 10 && d.startsWith('91')) d = d.slice(2);
+  d = d.replace(/^0+/, '');
+  if (d.length > 10 && d.startsWith('91')) d = d.slice(2);
+  return d;
+}
+
 // ── In-Memory Fast Webhook Idempotency Cache (60s TTL) ───────────────────────
 const webhookIdempotencyCache = new Map();
 const IDEMPOTENCY_TTL_MS = 60 * 1000;
@@ -273,10 +285,10 @@ const getCallLogs = async (req, res) => {
     if (req.user.role === 'sales') {
       const agentUser = await User.findById(req.user.id);
       const agentPhoneDigits = agentUser?.phoneNumber
-        ? agentUser.phoneNumber.replace(/\D/g, '').replace(/^91/, '')
+        ? normalizePhone10(agentUser.phoneNumber)
         : '';
       const agentDid = agentUser?.myoperatorConfig?.did
-        ? agentUser.myoperatorConfig.did.replace(/\D/g, '').replace(/^91/, '').replace(/^0+/, '')
+        ? normalizePhone10(agentUser.myoperatorConfig.did)
         : '';
       const agentVid = agentUser?.myoperatorConfig?.vid || agentUser?.myoperatorConfig?.extension;
 
@@ -1066,7 +1078,10 @@ const handleCallWebhook = async (req, res) => {
     ).trim();
 
     // Known sales agent numbers to prevent inverted caller assignment
-    const KNOWN_AGENT_PHONES = ['9201896606', '9399022063', '9399022061', '9201896604'];
+    const KNOWN_AGENT_PHONES = Array.from(new Set([
+      ...MYOPERATOR_ACCOUNTS.map(a => normalizePhone10(a.mobileNumber)).filter(Boolean),
+      '9201896606', '9399022063', '9399022061', '9201896604', '9399022067', '9131094645', '9201896603', '9201896608'
+    ]));
 
     // Extract Customer Phone (Caller for Inbound, Callee for Outbound)
     let rawCustomerPhone = '';
@@ -1109,7 +1124,7 @@ const handleCallWebhook = async (req, res) => {
                            merged.caller_id || '';
       }
     }
-    let customerPhone = String(rawCustomerPhone).replace(/\D/g, '').replace(/^91/, '').replace(/^0+/, '');
+    let customerPhone = normalizePhone10(rawCustomerPhone);
 
     // Extract Agent Phone
     let rawAgentPhone = '';
@@ -1125,7 +1140,7 @@ const handleCallWebhook = async (req, res) => {
                       merged.transfer_to ||
                       '';
     }
-    let agentPhone = String(rawAgentPhone).replace(/\D/g, '').replace(/^91/, '').replace(/^0+/, '');
+    let agentPhone = normalizePhone10(rawAgentPhone);
 
     // Safety check: If customerPhone matches a sales agent, invert to correct party
     if (KNOWN_AGENT_PHONES.includes(customerPhone) && !agentPhone) {
@@ -1177,7 +1192,7 @@ const handleCallWebhook = async (req, res) => {
       agentUser = await User.findOne({ email: matchedAccount.email.toLowerCase() });
     }
     if (!agentUser && agentPhone) {
-      const cleanAgent10 = String(agentPhone).replace(/\D/g, '').replace(/^91/, '').replace(/^0+/, '');
+      const cleanAgent10 = normalizePhone10(agentPhone);
       const phoneVariants = Array.from(new Set([agentPhone, cleanAgent10, `91${cleanAgent10}`, `+91${cleanAgent10}`, `0${cleanAgent10}`].filter(Boolean)));
       agentUser = await User.findOne({ phoneNumber: { $in: phoneVariants } });
     }
@@ -1248,7 +1263,7 @@ const handleCallWebhook = async (req, res) => {
       // 2. Fallback: match most recent call log for this customer phone & direction within 2 minutes (indexed)
       if (!callLog && customerPhone) {
         const twoMinAgo = new Date(Date.now() - 2 * 60 * 1000);
-        const cleanCust10 = String(customerPhone).replace(/\D/g, '').replace(/^91/, '').replace(/^0+/, '');
+        const cleanCust10 = normalizePhone10(customerPhone);
         const custVariants = Array.from(new Set([customerPhone, cleanCust10, `91${cleanCust10}`, `+91${cleanCust10}`, `0${cleanCust10}`].filter(Boolean)));
         callLog = await CallLog.findOne({
           customerPhone: { $in: custVariants },
@@ -2185,7 +2200,7 @@ const exportCallLogs = async (req, res) => {
 async function buildSalesAgentScope(userId) {
   const agentUser = await User.findById(userId).lean();
   const scope = [{ agentId: new mongoose.Types.ObjectId(userId) }];
-  const phoneDigits = agentUser?.phoneNumber ? agentUser.phoneNumber.replace(/\D/g, '').replace(/^91/, '') : '';
+  const phoneDigits = agentUser?.phoneNumber ? normalizePhone10(agentUser.phoneNumber) : '';
   if (phoneDigits) scope.push({ agentPhone: { $regex: phoneDigits } });
   return scope;
 }
