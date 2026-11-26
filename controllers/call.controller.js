@@ -1079,7 +1079,7 @@ const handleCallWebhook = async (req, res) => {
 
     // Known sales agent numbers to prevent inverted caller assignment
     const KNOWN_AGENT_PHONES = Array.from(new Set([
-      ...MYOPERATOR_ACCOUNTS.map(a => normalizePhone10(a.mobileNumber)).filter(Boolean),
+      ...TELEPHONY_ACCOUNTS.map(a => normalizePhone10(a.mobileNumber)).filter(Boolean),
       '9201896606', '9399022063', '9399022061', '9201896604', '9399022067',
       '7024223345', '9131094645', '9201896600', '9201896603', '9201896608'
     ]));
