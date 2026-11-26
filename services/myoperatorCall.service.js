@@ -165,6 +165,17 @@ const AGENT_TELEPHONY_REGISTRY = {
     userUuid: '6ad9bfb5bfb4e950',
     extension: '11',
   },
+  // Ram Ji Shukla - 9 (Keluth Prathap)
+  '9201896600': {
+    name: 'Keluth Prathap',
+    accountName: 'Ram Ji Shukla - 9',
+    companyId: '6b056022ca90a200',
+    callingXApiKey: 'oomfKA3I2K6TCJYistHyb7sDf0l0F6c8AZro5DJh',
+    callingSecretKey: '7b711ec69abfc6a7483a9e026bb15f4ebc3f85c7d514a1b82ba95608cef6a0e8',
+    callingToken: '21e31df7e26da2c14d4b65ee30a47541',
+    userUuid: '6b058b9a31c01206',
+    extension: '11',
+  },
 };
 
 function normalizeIndianMobile(phone) {

@@ -979,6 +979,14 @@ const TELEPHONY_ACCOUNTS = [
     did: '08048582345',
     outboundNumber: '+91 8048582345',
     mobileNumber: '9201896603'
+  },
+  {
+    name: 'Keluth Prathap',
+    email: 'sales2.essential@gmail.com',
+    role: 'sales',
+    accountName: 'Ram Ji Shukla - 9 (6b056022ca90a200)',
+    companyId: '6b056022ca90a200',
+    mobileNumber: '9201896600'
   }
 ];
 

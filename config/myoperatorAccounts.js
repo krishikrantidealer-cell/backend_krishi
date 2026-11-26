@@ -124,6 +124,19 @@ module.exports = {
       callingToken: 'bbc213f06a41e70423979397fe8b3bce',
       wabaKey: 'umKmZqYb0f3eFWqWIlIOdh2JyL6RmLBupMAuAEC9kD',
       whatsappNumber: '08048582345'
+    },
+    {
+      accountName: 'Ram Ji Shukla - 9',
+      agentName: 'Keluth Prathap',
+      email: 'sales2.essential@gmail.com',
+      phone: '9201896600',
+      extension: '11',
+      uuid: '6b058b9a31c01206',
+      companyId: '6b056022ca90a200',
+      callingXApiKey: 'oomfKA3I2K6TCJYistHyb7sDf0l0F6c8AZro5DJh',
+      callingSecretKey: '7b711ec69abfc6a7483a9e026bb15f4ebc3f85c7d514a1b82ba95608cef6a0e8',
+      callingToken: '21e31df7e26da2c14d4b65ee30a47541',
+      wabaKey: 'ZzOIJKtELnhtPKfCMWmnX92z7wMhOW5Ci9edVChG3Q'
     }
   ]
 };
