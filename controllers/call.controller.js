@@ -968,7 +968,7 @@ const TELEPHONY_ACCOUNTS = [
     companyId: '6ad36a8a8db37863',
     did: '08048582306',
     outboundNumber: '+91 8048582306',
-    mobileNumber: '9131094645'
+    mobileNumber: '7024223345'
   },
   {
     name: 'Dhiraj Kumar',
@@ -1080,7 +1080,8 @@ const handleCallWebhook = async (req, res) => {
     // Known sales agent numbers to prevent inverted caller assignment
     const KNOWN_AGENT_PHONES = Array.from(new Set([
       ...MYOPERATOR_ACCOUNTS.map(a => normalizePhone10(a.mobileNumber)).filter(Boolean),
-      '9201896606', '9399022063', '9399022061', '9201896604', '9399022067', '9131094645', '9201896603', '9201896608'
+      '9201896606', '9399022063', '9399022061', '9201896604', '9399022067',
+      '7024223345', '9131094645', '9201896600', '9201896603', '9201896608'
     ]));
 
     // Extract Customer Phone (Caller for Inbound, Callee for Outbound)

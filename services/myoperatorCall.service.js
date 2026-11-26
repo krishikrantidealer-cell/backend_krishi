@@ -140,7 +140,7 @@ const AGENT_TELEPHONY_REGISTRY = {
     extension: '11',
   },
   // Ram Ji Shukla - 7 (Govind Singh)
-  '9131094645': {
+  '7024223345': {
     name: 'Govind Singh',
     accountName: 'Ram Ji Shukla - 7',
     did: '08048582306',
@@ -149,7 +149,7 @@ const AGENT_TELEPHONY_REGISTRY = {
     callingSecretKey: '224de6c55a47f688b27e6437899f37f62d8558a6ce51c91eb2fd29a076df21b5',
     callingToken: '1eb646074245a8663c92b1641643bb48',
     publicIvrId: '6ae829565c3a9980',
-    userUuid: '6ad9bdb4b5ac5209',
+    userUuid: '6afe90019900f386',
     extension: '11',
   },
   // Ram Ji Shukla - 8 (Dhiraj Kumar)
