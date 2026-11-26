@@ -5,6 +5,107 @@ const { redisClient } = require('../config/redis');
 const { broadcastToRoles } = require('../services/websocket.service');
 const { autoIdentifyDistrict, autoIdentifyState } = require('../utils/geoNormalizer');
 
+const STAFF_ROLES = ['admin', 'sales', 'staff', 'agent', 'manager', 'telecaller'];
+const STAFF_ROLES_SET = new Set(STAFF_ROLES);
+
+const STAFF_EVENT_TYPES = [
+  'profile_view',
+  'assign_agent',
+  'bulk_assign_agent',
+  'create_sales_agent',
+  'add_lead_note',
+  'add_dealer_note',
+  'note_added',
+  'edit_lead',
+  'edit_dealer',
+  'update_lead_status',
+  'update_dealer_status',
+  'toggle_block',
+  'delete_lead',
+  'delete_dealer',
+  'permanent_delete_user',
+  'restore_user',
+  'export_leads_csv',
+  'delete_sales_agent',
+  'call_logged',
+  'call_task_created',
+  'whatsapp_message_sent',
+  'order_created_by_agent',
+  'lead_converted',
+  'status_changed',
+  'lead_status_changed',
+  'dealer_status_changed',
+  'estimate_created',
+  'estimate_shared',
+  'kyc_verified',
+  'kyc_rejected',
+  'kyc_status_updated',
+  'create_coupon',
+  'delete_coupon',
+  'update_coupon'
+];
+const STAFF_EVENT_TYPES_SET = new Set(STAFF_EVENT_TYPES);
+
+function normalizePhone10(raw) {
+  if (!raw) return '';
+  const str = String(raw).trim();
+  if (/^[a-fA-F0-9]{24}$/.test(str)) return '';
+  const digits = str.replace(/\D/g, '');
+  if (digits.length >= 10) return digits.slice(-10);
+  return '';
+}
+
+let _staffIdentifiersCache = null;
+let _staffIdentifiersCacheTime = 0;
+const STAFF_CACHE_TTL_MS = 5 * 60 * 1000;
+
+async function getStaffIdentifiersSet() {
+  const now = Date.now();
+  if (_staffIdentifiersCache && (now - _staffIdentifiersCacheTime) < STAFF_CACHE_TTL_MS) {
+    return _staffIdentifiersCache;
+  }
+  const set = new Set();
+  try {
+    const staffUsers = await User.find({ role: { $in: STAFF_ROLES } })
+      .select('_id email phoneNumber phone')
+      .lean();
+    staffUsers.forEach(u => {
+      if (u._id) set.add(u._id.toString().toLowerCase());
+      if (u.email) set.add(String(u.email).trim().toLowerCase());
+      [u.phoneNumber, u.phone].forEach(p => {
+        if (p) {
+          const pStr = String(p).trim().toLowerCase();
+          if (pStr) set.add(pStr);
+          const p10 = normalizePhone10(pStr);
+          if (p10) {
+            set.add(p10);
+            set.add(`91${p10}`);
+            set.add(`+91${p10}`);
+          }
+        }
+      });
+    });
+    _staffIdentifiersCache = set;
+    _staffIdentifiersCacheTime = now;
+  } catch (err) {
+    console.error('[EventController] Error building staff identifier cache:', err.message);
+  }
+  return set;
+}
+
+function isStaffIdentifier(identifier, staffSet) {
+  if (!identifier) return false;
+  const lower = String(identifier).trim().toLowerCase();
+  if (!lower) return false;
+  if (lower === 'admin' || lower === 'sales' || lower.includes('admin@') || lower.includes('sales@')) {
+    return true;
+  }
+  if (staffSet && staffSet.has(lower)) return true;
+  const p10 = normalizePhone10(lower);
+  if (p10 && staffSet && staffSet.has(p10)) return true;
+  return false;
+}
+
 function calculateIntentScore(screen = '', action = '', payload = {}) {
   let score = 10;
   const lowerScreen = String(screen || '').toLowerCase();
@@ -43,26 +144,35 @@ function calculateIntentScore(screen = '', action = '', payload = {}) {
 exports.createEvent = async (req, res, next) => {
   try {
     const { user, eventType, device, details, payload, timestamp, role } = req.body;
+    const staffSet = await getStaffIdentifiersSet();
+    const normalizedType = String(eventType || 'unknown').trim();
+    const resolvedRole = role
+      ? String(role).toLowerCase()
+      : (req.user && STAFF_ROLES_SET.has(String(req.user.role || '').toLowerCase())
+          ? String(req.user.role).toLowerCase()
+          : (STAFF_EVENT_TYPES_SET.has(normalizedType.toLowerCase()) || isStaffIdentifier(user, staffSet)
+              ? 'sales'
+              : 'user'));
 
     const event = await Event.create({
       user: user || 'anonymous',
-      eventType: eventType || 'unknown',
+      eventType: normalizedType,
       device,
       details,
       payload,
       timestamp: timestamp ? new Date(timestamp) : new Date(),
-      role: role || 'user' // Default to user role for direct app ingestion
+      role: resolvedRole
     });
 
     // Update Real-time Presence in Redis (Customers only, skip staff/agents)
-    const isStaff = role === 'admin' || role === 'sales' || role === 'staff' || role === 'agent';
+    const isStaff = STAFF_ROLES_SET.has(resolvedRole) || isStaffIdentifier(user, staffSet);
     if (redisClient.isOpen && user && !isStaff) {
       const presenceKey = `presence:${user}`;
-      const intentInfo = calculateIntentScore(payload?.screen || 'Active', eventType, payload);
+      const intentInfo = calculateIntentScore(payload?.screen || 'Active', normalizedType, payload);
       const presenceData = {
         lastSeen: new Date().toISOString(),
         currentScreen: payload?.screen || 'Active',
-        action: eventType,
+        action: normalizedType,
         device: device || 'Unknown',
         role: 'user',
         intentScore: intentInfo.intentScore,
@@ -70,13 +180,14 @@ exports.createEvent = async (req, res, next) => {
       };
       await redisClient.hSet(presenceKey, presenceData);
       await redisClient.expire(presenceKey, 120);
+      await redisClient.zAdd('presence_active_zset', { score: Date.now(), value: String(user) });
 
       // Notify Admins & Sales via WebSocket
       broadcastToRoles(['admin', 'sales'], { type: 'PRESENCE_UPDATE', data: { user, ...presenceData } });
     }
 
-    // Increment Redis daily events count
-    if (redisClient.isOpen) {
+    // Increment Redis daily events count (customer events only)
+    if (redisClient.isOpen && !isStaff) {
       try {
         const todayStr = new Date().toISOString().split('T')[0];
         await redisClient.incr(`stats:events:count:daily:${todayStr}`);
@@ -96,9 +207,18 @@ exports.createEvent = async (req, res, next) => {
  */
 exports.handleHeartbeat = async (req, res, next) => {
   try {
-    const { user, currentScreen, lastAction, device } = req.body;
+    const { user, currentScreen, lastAction, device, role: reqRole } = req.body;
 
     if (redisClient.isOpen && user) {
+      const staffSet = await getStaffIdentifiersSet();
+      const claimedRole = String(reqRole || req.user?.role || '').toLowerCase();
+      if (STAFF_ROLES_SET.has(claimedRole) || isStaffIdentifier(user, staffSet)) {
+        try {
+          await redisClient.zRem('presence_active_zset', String(user));
+        } catch (_) {}
+        return res.status(200).json({ success: true });
+      }
+
       const presenceKey = `presence:${user}`;
 
       // Fetch user info for enrichment
@@ -113,9 +233,16 @@ exports.handleHeartbeat = async (req, res, next) => {
         if (userData) {
           userName = `${userData.firstName || ''} ${userData.lastName || ''}`.trim() || userData.shopName || 'New User';
           userPhone = userData.phoneNumber || 'N/A';
-          userRole = userData.role || 'user';
+          userRole = String(userData.role || 'user').toLowerCase();
         }
       } catch (_) {}
+
+      if (STAFF_ROLES_SET.has(userRole)) {
+        try {
+          await redisClient.zRem('presence_active_zset', String(user));
+        } catch (_) {}
+        return res.status(200).json({ success: true });
+      }
 
       const intentInfo = calculateIntentScore(currentScreen, lastAction);
 
@@ -126,7 +253,7 @@ exports.handleHeartbeat = async (req, res, next) => {
         device: device || 'Unknown',
         userName,
         userPhone,
-        role: userRole,
+        role: 'user',
         intentScore: intentInfo.intentScore,
         intentLabel: intentInfo.intentLabel
       };
@@ -135,14 +262,10 @@ exports.handleHeartbeat = async (req, res, next) => {
       await redisClient.expire(presenceKey, 120); // Longer expiry to survive idle heartbeat (60s)
       await redisClient.zAdd('presence_active_zset', { score: Date.now(), value: String(user) });
 
-      // Only broadcast genuine customer presence to sales/admin (never internal staff/agents)
-      if (userRole !== 'admin' && userRole !== 'sales' && userRole !== 'staff' && userRole !== 'agent') {
-        const { broadcastToRoles } = require('../services/websocket.service');
-        broadcastToRoles(['admin', 'sales'], {
-          type: 'PRESENCE_UPDATE',
-          data: { user, ...presenceData }
-        });
-      }
+      broadcastToRoles(['admin', 'sales'], {
+        type: 'PRESENCE_UPDATE',
+        data: { user, ...presenceData }
+      });
     }
 
     res.status(200).json({ success: true });
@@ -162,19 +285,37 @@ exports.ingestBatch = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Invalid batch format' });
     }
 
-    // Map to model with deduplication support
-    const preparedEvents = events.map(e => ({
-      user: e.user || 'anonymous',
-      eventId: e.eventId,
-      sessionId: e.sessionId,
-      schemaVersion: e.schemaVersion || '1.0.0',
-      eventType: e.event || e.eventType || 'unknown',
-      device: e.device || e.platform,
-      details: e.details || '',
-      payload: e.properties || e.payload || {},
-      timestamp: e.timestamp ? new Date(e.timestamp) : new Date(),
-      role: e.role || 'user'
-    }));
+    const staffSet = await getStaffIdentifiersSet();
+    const authRole = req.user?.role ? String(req.user.role).toLowerCase() : '';
+
+    // Map to model with deduplication support & accurate staff/customer role classification
+    const preparedEvents = events.map(e => {
+      const evtUser = e.user || 'anonymous';
+      const evtType = String(e.event || e.eventType || 'unknown').trim();
+      const explicitRole = e.role ? String(e.role).toLowerCase() : '';
+      let resolvedRole = explicitRole;
+      if (!resolvedRole) {
+        if (STAFF_ROLES_SET.has(authRole)) {
+          resolvedRole = authRole;
+        } else if (STAFF_EVENT_TYPES_SET.has(evtType.toLowerCase()) || isStaffIdentifier(evtUser, staffSet)) {
+          resolvedRole = 'sales';
+        } else {
+          resolvedRole = 'user';
+        }
+      }
+      return {
+        user: evtUser,
+        eventId: e.eventId,
+        sessionId: e.sessionId,
+        schemaVersion: e.schemaVersion || '1.0.0',
+        eventType: evtType,
+        device: e.device || e.platform,
+        details: e.details || '',
+        payload: e.properties || e.payload || {},
+        timestamp: e.timestamp ? new Date(e.timestamp) : new Date(),
+        role: resolvedRole
+      };
+    });
 
     try {
       // ordered: false allows continuing ingestion even if some eventIds are duplicates
@@ -186,57 +327,62 @@ exports.ingestBatch = async (req, res, next) => {
       }
     }
 
+    const customerEventsCount = preparedEvents.filter(e => !STAFF_ROLES_SET.has(e.role)).length;
+
     if (redisClient.isOpen) {
-      const lastEvent = events[events.length - 1];
+      const lastEvent = preparedEvents[preparedEvents.length - 1];
+      const rawLast = events[events.length - 1] || {};
       const user = lastEvent.user;
-      const presenceKey = `presence:${user}`;
+      const isLastStaff = STAFF_ROLES_SET.has(lastEvent.role) || isStaffIdentifier(user, staffSet);
 
-      // Fetch user info for enrichment
-      let userName = 'New User';
-      let userPhone = 'N/A';
-      let userRole = 'user';
-      try {
-        const userData = await User.findOne({
-          $or: [{ email: user }, { phoneNumber: user }, { _id: mongoose.Types.ObjectId.isValid(user) ? user : null }]
-        }).select('firstName lastName shopName phoneNumber role');
+      if (user && !isLastStaff) {
+        const presenceKey = `presence:${user}`;
 
-        if (userData) {
-          userName = `${userData.firstName || ''} ${userData.lastName || ''}`.trim() || userData.shopName || 'New User';
-          userPhone = userData.phoneNumber || 'N/A';
-          userRole = userData.role || 'user';
+        // Fetch user info for enrichment
+        let userName = 'New User';
+        let userPhone = 'N/A';
+        let userRole = 'user';
+        try {
+          const userData = await User.findOne({
+            $or: [{ email: user }, { phoneNumber: user }, { _id: mongoose.Types.ObjectId.isValid(user) ? user : null }]
+          }).select('firstName lastName shopName phoneNumber role');
+
+          if (userData) {
+            userName = `${userData.firstName || ''} ${userData.lastName || ''}`.trim() || userData.shopName || 'New User';
+            userPhone = userData.phoneNumber || 'N/A';
+            userRole = String(userData.role || 'user').toLowerCase();
+          }
+        } catch (_) {}
+
+        if (!STAFF_ROLES_SET.has(userRole)) {
+          const presenceData = {
+            lastSeen: new Date().toISOString(),
+            currentScreen: String(rawLast.properties?.screen || rawLast.payload?.screen || 'Active'),
+            action: String(lastEvent.eventType || 'unknown'),
+            device: String(lastEvent.device || 'Unknown'),
+            sessionId: String(lastEvent.sessionId || 'unknown'),
+            userName: String(userName || 'New User'),
+            userPhone: String(userPhone || 'N/A'),
+            role: 'user'
+          };
+
+          await redisClient.hSet(presenceKey, presenceData);
+          await redisClient.expire(presenceKey, 120);
+          await redisClient.zAdd('presence_active_zset', { score: Date.now(), value: String(user) });
+
+          broadcastToRoles(['admin', 'sales'], {
+            type: 'PRESENCE_UPDATE',
+            data: { user, ...presenceData }
+          });
         }
-      } catch (_) {}
-
-      const presenceData = {
-        lastSeen: new Date().toISOString(),
-        currentScreen: String(lastEvent.properties?.screen || lastEvent.payload?.screen || 'Active'),
-        action: String(lastEvent.event || lastEvent.eventType || 'unknown'),
-        device: String(lastEvent.device || lastEvent.platform || 'Unknown'),
-        sessionId: String(lastEvent.sessionId || 'unknown'),
-        userName: String(userName || 'New User'),
-        userPhone: String(userPhone || 'N/A'),
-        role: userRole
-      };
-
-      await redisClient.hSet(presenceKey, presenceData);
-      await redisClient.expire(presenceKey, 120);
-      await redisClient.zAdd('presence_active_zset', { score: Date.now(), value: String(user) });
-
-      // Notify Admins only if genuine customer (never staff or sales agents)
-      if (userRole !== 'admin' && userRole !== 'sales' && userRole !== 'staff' && userRole !== 'agent') {
-        const { broadcastToRoles } = require('../services/websocket.service');
-        broadcastToRoles(['admin', 'sales'], {
-          type: 'PRESENCE_UPDATE',
-          data: { user, ...presenceData }
-        });
       }
     }
 
-    // Increment Redis daily events count in batch
-    if (redisClient.isOpen && preparedEvents.length > 0) {
+    // Increment Redis daily events count in batch (customer events only)
+    if (redisClient.isOpen && customerEventsCount > 0) {
       try {
         const todayStr = new Date().toISOString().split('T')[0];
-        await redisClient.incrBy(`stats:events:count:daily:${todayStr}`, preparedEvents.length);
+        await redisClient.incrBy(`stats:events:count:daily:${todayStr}`, customerEventsCount);
         await redisClient.expire(`stats:events:count:daily:${todayStr}`, 259200); // 3 days
       } catch (_) {}
     }
@@ -254,12 +400,12 @@ exports.ingestBatch = async (req, res, next) => {
  */
 exports.getEvents = async (req, res, next) => {
   try {
-    const { user, before, filter, actorOnly } = req.query;
-    
+    const { user, before, filter, actorOnly, customerOnly } = req.query;
+
     // Determine limit:
-    // 1. Explicit 'all' or '0' -> limit = 0 (returns all matching documents in MongoDB)
-    // 2. Explicit numeric limit -> respect it (e.g. 150/200 for marketing screen)
-    // 3. User profile screen lookup (user specified without explicit limit) -> return ALL user events (limit = 0)
+    // 1. Explicit 'all' or '0' -> limit = 3000
+    // 2. Explicit numeric limit -> respect it (e.g. 150/200/300 for marketing & sales screens)
+    // 3. User profile screen lookup (user specified without explicit limit) -> return up to 3000
     // 4. Global unfiltered feed -> default to 300
     let limit;
     if (req.query.limit === 'all' || req.query.limit === '0') {
@@ -268,10 +414,19 @@ exports.getEvents = async (req, res, next) => {
       limit = parseInt(req.query.limit, 10);
       if (isNaN(limit) || limit < 0) limit = 3000;
     } else if (user) {
-      limit = 3000; // Return all user events for profile view (capped at 3000 for server memory safety)
+      limit = 3000;
     } else {
       limit = 300;
     }
+
+    const assignedUserIds = await getSalesAssignedUserIds(req);
+    const staffSet = await getStaffIdentifiersSet();
+
+    // Customer Telemetry Mode:
+    // - Always active for Sales Representatives (assignedUserIds !== null)
+    // - Always active for global feeds (!user) such as Marketing & Engagement
+    // - Explicitly active when ?customerOnly=true (per-customer expansion in Marketing & Engagement / Sales Live Buyer Intent)
+    const isCustomerTelemetryMode = Boolean(assignedUserIds) || !user || customerOnly === 'true';
 
     let query = {};
     let resolvedIdentifiers = [];
@@ -282,7 +437,9 @@ exports.getEvents = async (req, res, next) => {
       resolvedIdentifiers = [cleanUser, cleanUser.toLowerCase()];
 
       const phoneDigits = cleanUser.replace(/\D/g, '');
-      const last10 = phoneDigits.length >= 10 ? phoneDigits.slice(-10) : (phoneDigits.length >= 7 ? phoneDigits : '');
+      const last10 = !(/^[a-fA-F0-9]{24}$/.test(cleanUser)) && phoneDigits.length >= 10
+        ? phoneDigits.slice(-10)
+        : (phoneDigits.length >= 7 && !(/^[a-fA-F0-9]{24}$/.test(cleanUser)) ? phoneDigits : '');
       const phoneVariants = [cleanUser];
       if (last10) {
         phoneVariants.push(last10, `91${last10}`, `+91${last10}`);
@@ -300,10 +457,10 @@ exports.getEvents = async (req, res, next) => {
         }
 
         const matchedUsers = await User.find({ $or: searchCond })
-          .select('_id email phoneNumber')
+          .select('_id email phoneNumber role')
           .limit(10)
           .lean();
-        
+
         matchedUsers.forEach(u => {
           if (u.email && u.email.trim()) {
             resolvedIdentifiers.push(u.email.trim(), u.email.trim().toLowerCase());
@@ -311,8 +468,7 @@ exports.getEvents = async (req, res, next) => {
           if (u.phoneNumber && u.phoneNumber.trim()) {
             const uPhone = u.phoneNumber.trim();
             resolvedIdentifiers.push(uPhone);
-            const uDigits = uPhone.replace(/\D/g, '');
-            const u10 = uDigits.length >= 10 ? uDigits.slice(-10) : '';
+            const u10 = normalizePhone10(uPhone);
             if (u10) {
               resolvedIdentifiers.push(u10, `91${u10}`, `+91${u10}`);
             }
@@ -322,56 +478,30 @@ exports.getEvents = async (req, res, next) => {
       } catch (_) {}
 
       resolvedIdentifiers = [...new Set(resolvedIdentifiers.filter(Boolean))];
-      if (actorOnly === 'true') {
-        query.user = { $in: resolvedIdentifiers };
-      } else {
-        query.$or = [
-          { user: { $in: resolvedIdentifiers } },
-          { 'payload.targetUserId': { $in: resolvedIdentifiers } },
-          { 'payload.leadId': { $in: resolvedIdentifiers } },
-          { 'payload.dealerId': { $in: resolvedIdentifiers } },
-          { 'payload.targetPhone': { $in: resolvedIdentifiers } }
-        ];
-      }
     }
 
     // Enforce assigned customer filtering for Sales Representatives
-    const assignedUserIds = await getSalesAssignedUserIds(req);
     if (assignedUserIds) {
       if (assignedUserIds.size === 0) {
-        // Sales representative has no assigned customers
         return res.json({ success: true, data: [], nextCursor: null });
       }
-
-      // STRICT REQUIREMENT: Never show staff/sales/admin events to sales representatives
-      const staffEventTypes = [
-        'profile_view', 'assign_agent', 'bulk_assign_agent', 'create_sales_agent',
-        'add_lead_note', 'edit_lead', 'edit_dealer', 'toggle_block', 'delete_dealer',
-        'permanent_delete_user', 'restore_user', 'export_leads_csv', 'delete_sales_agent',
-        'call_logged', 'call_task_created', 'lead_converted', 'status_changed',
-        'lead_status_changed', 'dealer_status_changed', 'estimate_created', 'estimate_shared'
-      ];
-      query.role = { $nin: ['admin', 'sales', 'staff', 'agent'] };
-      query.eventType = { $nin: staffEventTypes };
-
       if (user) {
-        // Single customer profile lookup:
-        // Verify customer is assigned to this sales representative
-        const isAssigned = resolvedIdentifiers.some(id =>
-          assignedUserIds.has(String(id).toLowerCase())
-        );
+        const isAssigned = resolvedIdentifiers.some(id => {
+          const lower = String(id).toLowerCase();
+          const p10 = normalizePhone10(lower);
+          return assignedUserIds.has(lower) || (p10 && assignedUserIds.has(p10));
+        });
         if (!isAssigned) {
-          // Customer is not assigned to this sales agent
           return res.json({ success: true, data: [], nextCursor: null });
         }
-        // For sales representative, only return actions performed by the customer themself
+      }
+    }
+
+    if (isCustomerTelemetryMode) {
+      query.role = { $nin: STAFF_ROLES };
+      query.eventType = { $nin: STAFF_EVENT_TYPES };
+      if (user) {
         query.user = { $in: resolvedIdentifiers };
-        delete query.$or;
-      } else {
-        // Fast scoped feed for sales representative:
-        // Do NOT pass 2,500+ items to MongoDB $in (which causes slow table scan timeouts).
-        // Query the latest events using indexed timestamp, then filter in-memory below.
-        delete query.$or;
       }
     }
 
@@ -393,9 +523,14 @@ exports.getEvents = async (req, res, next) => {
           }
           if (activeUsers.length === 0) {
             const fiveMinsAgo = new Date(Date.now() - 300000);
-            const recentEvents = await Event.distinct('user', { timestamp: { $gte: fiveMinsAgo } });
+            const recentEvents = await Event.distinct('user', {
+              timestamp: { $gte: fiveMinsAgo },
+              role: { $nin: STAFF_ROLES },
+              eventType: { $nin: STAFF_EVENT_TYPES }
+            });
             activeUsers = recentEvents.filter(u => u && u !== 'guest' && u !== 'anonymous');
           }
+          activeUsers = activeUsers.filter(u => !isStaffIdentifier(u, staffSet));
           if (activeUsers.length === 0) {
             return res.json({ success: true, data: [], nextCursor: null });
           }
@@ -404,8 +539,11 @@ exports.getEvents = async (req, res, next) => {
           const fourteenDaysAgo = new Date();
           fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14);
 
-          const aggregationMatch = { timestamp: { $gte: fourteenDaysAgo } };
-          if (query.$or) aggregationMatch.$or = query.$or;
+          const aggregationMatch = {
+            timestamp: before ? { $gte: fourteenDaysAgo, $lt: new Date(before) } : { $gte: fourteenDaysAgo },
+            role: { $nin: STAFF_ROLES },
+            eventType: { $nin: STAFF_EVENT_TYPES }
+          };
           if (query.user) aggregationMatch.user = query.user;
 
           const userEventStates = await Event.aggregate([
@@ -420,6 +558,7 @@ exports.getEvents = async (req, res, next) => {
 
           const filteredUserIds = [];
           userEventStates.forEach(userState => {
+            if (!userState._id || isStaffIdentifier(userState._id, staffSet)) return;
             const types = new Set(userState.eventTypes);
             let match = false;
             const hasSuccess = types.has('payment_success') || types.has('order_placed') || types.has('order_completed');
@@ -427,15 +566,17 @@ exports.getEvents = async (req, res, next) => {
             if (filter === 'High Priority') {
               match = (types.has('payment_failed') && !hasSuccess) ||
                      (types.has('checkout_started') && !hasSuccess) ||
-                     (types.has('add_to_cart') && !hasSuccess);
+                     (types.has('add_to_cart') && !hasSuccess) ||
+                     (types.has('cart_add') && !hasSuccess);
             } else if (filter === 'Abandoned Carts') {
               match = (types.has('checkout_started') && !hasSuccess) ||
-                     (types.has('add_to_cart') && !hasSuccess);
+                     (types.has('add_to_cart') && !hasSuccess) ||
+                     (types.has('cart_add') && !hasSuccess);
             } else if (filter === 'Failed Payments') {
               match = types.has('payment_failed') && !hasSuccess;
             }
 
-            if (match && userState._id) {
+            if (match) {
               filteredUserIds.push(userState._id);
             }
           });
@@ -456,35 +597,69 @@ exports.getEvents = async (req, res, next) => {
           query.eventType = { $in: ['payment_success', 'order_placed', 'order_completed', 'order_created'] };
         } else if (fLower === 'product_search' || fLower === 'product_view') {
           query.eventType = { $in: ['product_search', 'product_view', 'category_view', 'page_view', 'search', 'login_success'] };
-        } else {
+        } else if (!isCustomerTelemetryMode || !STAFF_EVENT_TYPES_SET.has(fLower)) {
           query.eventType = filter;
         }
       }
     }
 
-    // 4. Fetch raw events (Fast index-backed query with in-memory scoping)
-    const isSalesGlobalFeed = assignedUserIds && !user;
-    let rawEvents = await Event.find(query)
-      .sort({ timestamp: -1 })
-      .limit(isSalesGlobalFeed ? Math.max(limit * 5, 800) : limit)
-      .lean();
+    // 4. Fetch raw events using 100% index-backed queries (zero COLLSCAN)
+    const isSalesGlobalFeed = Boolean(assignedUserIds) && !user;
+    let rawEvents = [];
 
-    if (isSalesGlobalFeed) {
-      rawEvents = rawEvents.filter(e => {
-        const u = (e.user || '').toLowerCase();
-        return assignedUserIds.has(u);
-      }).slice(0, limit);
+    if (!isCustomerTelemetryMode && user) {
+      // Admin CRM Profile / Team Member Audit lookup:
+      // Avoid root $or across sparse indexes (which forces MongoDB COLLSCAN on 430k+ docs).
+      // Instead, execute fast single-field index lookups in parallel and merge by _id.
+      if (actorOnly === 'true') {
+        rawEvents = await Event.find({ ...query, user: { $in: resolvedIdentifiers } })
+          .sort({ timestamp: -1 })
+          .limit(limit)
+          .lean();
+      } else {
+        const [byActor, byTargetUser, byLead, byDealer, byTargetPhone] = await Promise.all([
+          Event.find({ ...query, user: { $in: resolvedIdentifiers } }).sort({ timestamp: -1 }).limit(limit).lean(),
+          Event.find({ ...query, 'payload.targetUserId': { $in: resolvedIdentifiers } }).sort({ timestamp: -1 }).limit(limit).lean(),
+          Event.find({ ...query, 'payload.leadId': { $in: resolvedIdentifiers } }).sort({ timestamp: -1 }).limit(limit).lean(),
+          Event.find({ ...query, 'payload.dealerId': { $in: resolvedIdentifiers } }).sort({ timestamp: -1 }).limit(limit).lean(),
+          Event.find({ ...query, 'payload.targetPhone': { $in: resolvedIdentifiers } }).sort({ timestamp: -1 }).limit(limit).lean(),
+        ]);
+        const mergedMap = new Map();
+        [...byActor, ...byTargetUser, ...byLead, ...byDealer, ...byTargetPhone].forEach(doc => {
+          const key = doc._id ? doc._id.toString() : doc.eventId;
+          if (key && !mergedMap.has(key)) mergedMap.set(key, doc);
+        });
+        rawEvents = Array.from(mergedMap.values())
+          .sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0))
+          .slice(0, limit);
+      }
+    } else {
+      const scanLimit = isSalesGlobalFeed ? Math.max(limit * 10, 2500) : Math.min(Math.max(limit * 2, limit), 3500);
+      rawEvents = await Event.find(query)
+        .sort({ timestamp: -1 })
+        .limit(scanLimit)
+        .lean();
+
+      if (isSalesGlobalFeed) {
+        rawEvents = rawEvents.filter(e => {
+          const u = String(e.user || '').trim().toLowerCase();
+          if (!u || isStaffIdentifier(u, staffSet)) return false;
+          if (assignedUserIds.has(u)) return true;
+          const p10 = normalizePhone10(u);
+          return Boolean(p10 && assignedUserIds.has(p10));
+        });
+      }
     }
 
     if (rawEvents.length === 0) {
       return res.json({ success: true, data: [], nextCursor: null });
     }
 
-    // 5. Enrich with User Details (Both Actors & Target Customers)
+    // 5. Enrich with User Details (Actors & Target Customers)
     const rawUserKeys = [];
     rawEvents.forEach(e => {
       if (e.user) rawUserKeys.push(e.user);
-      if (e.payload) {
+      if (!isCustomerTelemetryMode && e.payload) {
         const p = e.payload;
         if (p.targetUserId) rawUserKeys.push(p.targetUserId);
         if (p.userId) rawUserKeys.push(p.userId);
@@ -511,20 +686,22 @@ exports.getEvents = async (req, res, next) => {
         emails.push(str.toLowerCase());
       } else {
         phones.push(str);
-        const clean = str.replace(/\D/g, '');
-        if (clean.length >= 10) phones.push(clean.slice(-10));
+        const p10 = normalizePhone10(str);
+        if (p10) {
+          phones.push(p10, `91${p10}`, `+91${p10}`);
+        }
       }
     });
 
     const userQueries = [];
     if (objectIds.length > 0) userQueries.push({ _id: { $in: objectIds } });
     if (emails.length > 0) userQueries.push({ email: { $in: emails } });
-    if (phones.length > 0) userQueries.push({ phoneNumber: { $in: phones } });
+    if (phones.length > 0) userQueries.push({ phoneNumber: { $in: [...new Set(phones)] } });
 
     let usersList = [];
     if (userQueries.length > 0) {
       usersList = await User.find(userQueries.length === 1 ? userQueries[0] : { $or: userQueries })
-        .select('firstName lastName phoneNumber shopName role email kycStatus userType')
+        .select('firstName lastName phoneNumber shopName role email kycStatus userType assignedAgent')
         .lean();
     }
 
@@ -543,28 +720,44 @@ exports.getEvents = async (req, res, next) => {
 
       if (u.phoneNumber) {
         userMap.set(u.phoneNumber, info);
-        // Normalize: Index by last 10 digits for loose matching
-        const clean = u.phoneNumber.replace(/\D/g, '');
-        if (clean.length >= 10) {
-          userMap.set(clean.slice(-10), info);
+        const p10 = normalizePhone10(u.phoneNumber);
+        if (p10) {
+          userMap.set(p10, info);
+          userMap.set(`91${p10}`, info);
+          userMap.set(`+91${p10}`, info);
         }
       }
     });
 
     const enrichedEvents = rawEvents.map(event => {
-      const actorKey = event.user ? event.user.toString() : '';
-      const isActorId = mongoose.Types.ObjectId.isValid(actorKey);
-      const actorLast10 = !isActorId ? actorKey.replace(/\D/g, '').slice(-10) : '';
+      const actorKey = event.user ? event.user.toString().trim() : '';
+      const isActorId = mongoose.Types.ObjectId.isValid(actorKey) && /^[a-fA-F0-9]{24}$/.test(actorKey);
+      const actorLast10 = !isActorId ? normalizePhone10(actorKey) : '';
 
-      // Try exact, then lowercase, then last 10 digits normalization (only for non-IDs)
       const actorUser = userMap.get(actorKey) ||
                         userMap.get(actorKey.toLowerCase()) ||
-                        (actorLast10.length === 10 ? userMap.get(actorLast10) : null);
+                        (actorLast10 ? userMap.get(actorLast10) : null);
+
+      const evtTypeLower = String(event.eventType || '').toLowerCase();
+      const evtRoleLower = String(event.role || '').toLowerCase();
+      const actorDbRoleLower = actorUser?.role ? String(actorUser.role).toLowerCase() : '';
+
+      const isStaffEvent =
+        STAFF_EVENT_TYPES_SET.has(evtTypeLower) ||
+        STAFF_ROLES_SET.has(evtRoleLower) ||
+        STAFF_ROLES_SET.has(actorDbRoleLower) ||
+        isStaffIdentifier(actorKey, staffSet);
+
+      // STRICT ISOLATION: Never allow ANY sales agent / admin / staff activity into Customer Telemetry Mode
+      // (Admin Marketing & Engagement + Sales Live Buyer Intent)
+      if (isCustomerTelemetryMode && isStaffEvent) {
+        return null;
+      }
 
       // Smart Actor Name Resolution
       let actorName = actorKey || 'Unknown';
       if (actorUser) {
-        const isActuallyStaff = actorUser.role === 'admin' || actorUser.role === 'sales';
+        const isActuallyStaff = STAFF_ROLES_SET.has(actorDbRoleLower);
         const nameVal = String(actorUser.name || '');
         const isPlaceholderName = nameVal === 'New Customer' ||
                                  /^\d+$/.test(nameVal) ||
@@ -572,35 +765,29 @@ exports.getEvents = async (req, res, next) => {
                                  nameVal.toLowerCase().includes('sales');
 
         if (isActuallyStaff) {
-          actorName = (!isPlaceholderName ? nameVal : actorUser.email) || (actorUser.role === 'sales' ? 'Sales Agent' : 'Admin User');
+          actorName = (!isPlaceholderName ? nameVal : actorUser.email) || (actorDbRoleLower === 'sales' ? 'Sales Agent' : 'Admin User');
         } else {
-          // Customer: Use name if real, else fallback to phone
           actorName = !isPlaceholderName ? nameVal : (actorUser.phoneNumber || actorKey);
         }
       } else if (actorKey === 'anonymous' || actorKey === 'guest') {
         actorName = 'Guest User';
       }
 
-      // Check if event targets a customer in payload
-      const p = event.payload || {};
-      const targetKey = (p.targetUserId || p.userId || p.dealerId || p.leadId || p.targetEmail || p.dealerEmail || p.userEmail || p.targetPhone || p.dealerPhone || '').toString();
-      const isTargetId = mongoose.Types.ObjectId.isValid(targetKey);
-      const targetLast10 = !isTargetId ? targetKey.replace(/\D/g, '').slice(-10) : '';
-
-      const targetUser = targetKey ? (
-        userMap.get(targetKey) ||
-        userMap.get(targetKey.toLowerCase()) ||
-        (targetLast10.length === 10 ? userMap.get(targetLast10) : null)
-      ) : null;
-
-      const isStaffAction = ['delete_lead', 'assign_agent', 'kyc_verified', 'kyc_rejected', 'toggle_block', 'create_sales_agent', 'bulk_assign_agent'].includes(event.eventType) ||
-                            (actorUser && actorUser.role !== 'user');
-
-      // Group event under Target Customer if available so staff actions show on customer timeline
       let displayUser = event.user;
       let displayUserDetails = actorUser;
 
-      if (isStaffAction) {
+      // Only re-map targeted staff actions in explicit Admin CRM Profile mode (!isCustomerTelemetryMode && user)
+      if (!isCustomerTelemetryMode && isStaffEvent) {
+        const p = event.payload || {};
+        const targetKey = (p.targetUserId || p.userId || p.dealerId || p.leadId || p.targetEmail || p.dealerEmail || p.userEmail || p.targetPhone || p.dealerPhone || '').toString().trim();
+        const isTargetId = mongoose.Types.ObjectId.isValid(targetKey) && /^[a-fA-F0-9]{24}$/.test(targetKey);
+        const targetLast10 = !isTargetId ? normalizePhone10(targetKey) : '';
+        const targetUser = targetKey ? (
+          userMap.get(targetKey) ||
+          userMap.get(targetKey.toLowerCase()) ||
+          (targetLast10 ? userMap.get(targetLast10) : null)
+        ) : null;
+
         if (targetUser) {
           displayUser = targetUser.phoneNumber || targetUser.email || targetUser._id.toString();
           displayUserDetails = targetUser;
@@ -612,7 +799,10 @@ exports.getEvents = async (req, res, next) => {
 
       return {
         ...event,
+        role: isStaffEvent ? (actorDbRoleLower || evtRoleLower || 'sales') : 'user',
         user: displayUser,
+        userName: displayUserDetails?.name || actorName,
+        userPhone: displayUserDetails?.phoneNumber || '',
         actor: actorKey,
         performedBy: actorName,
         userDetails: displayUserDetails ? {
@@ -623,27 +813,22 @@ exports.getEvents = async (req, res, next) => {
           shopName: displayUserDetails.shopName,
           role: displayUserDetails.role,
           kycStatus: displayUserDetails.kycStatus,
-          userType: displayUserDetails.userType
+          userType: displayUserDetails.userType,
+          assignedAgent: displayUserDetails.assignedAgent
         } : null,
         payload: {
           ...(event.payload || {}),
           performedBy: actorName,
         }
       };
-    }).filter(event => {
-      if (user) return true;
-      // In main customer feed, exclude staff events that do not target a customer
-      const isCustomerEvent = (event.role || 'user').toLowerCase() === 'user' || (event.userDetails?.role?.toLowerCase() === 'user');
-      const isTargetedAction = event.payload && (event.payload.targetUserId || event.payload.userId || event.payload.leadId || event.payload.dealerId);
-      return isCustomerEvent || isTargetedAction;
-    });
+    }).filter(Boolean).slice(0, limit);
 
     let nextCursor = null;
     if (limit > 0 && enrichedEvents.length >= limit && enrichedEvents.length > 0) {
       const lastEvent = enrichedEvents[enrichedEvents.length - 1];
       if (lastEvent.timestamp) {
-        nextCursor = lastEvent.timestamp instanceof Date 
-          ? lastEvent.timestamp.toISOString() 
+        nextCursor = lastEvent.timestamp instanceof Date
+          ? lastEvent.timestamp.toISOString()
           : new Date(lastEvent.timestamp).toISOString();
       }
     }
@@ -692,47 +877,84 @@ exports.getActiveUsers = async (req, res, next) => {
       ...(results[index] || {})
     })).filter(u => u.user && u.lastSeen);
 
-    // Enrich with user names/numbers from DB
+    const [staffSet, assignedUserIds] = await Promise.all([
+      getStaffIdentifiersSet(),
+      getSalesAssignedUserIds(req)
+    ]);
+
+    // Enrich with user names/numbers/roles from DB
     const userIdsOrEmails = rawActiveUsers.map(u => u.user);
+    const phoneCandidates = [];
+    userIdsOrEmails.forEach(u => {
+      const str = String(u || '').trim();
+      if (str && !str.includes('@') && !(/^[a-fA-F0-9]{24}$/.test(str))) {
+        phoneCandidates.push(str);
+        const p10 = normalizePhone10(str);
+        if (p10) phoneCandidates.push(p10, `91${p10}`, `+91${p10}`);
+      }
+    });
+
     const users = await User.find({
       $or: [
-        { email: { $in: userIdsOrEmails } },
-        { phoneNumber: { $in: userIdsOrEmails } },
-        { _id: { $in: userIdsOrEmails.filter(id => mongoose.Types.ObjectId.isValid(id)) } }
+        { email: { $in: userIdsOrEmails.map(x => String(x).toLowerCase()) } },
+        { phoneNumber: { $in: [...new Set(phoneCandidates)] } },
+        { _id: { $in: userIdsOrEmails.filter(id => mongoose.Types.ObjectId.isValid(id) && /^[a-fA-F0-9]{24}$/.test(String(id))) } }
       ]
-    }).select('firstName lastName phoneNumber shopName email');
+    }).select('firstName lastName phoneNumber shopName email role').lean();
 
+    const staleStaffKeys = [];
     const enrichedUsers = rawActiveUsers.map(raw => {
-      const userKey = raw.user ? raw.user.toString() : '';
-      const isId = mongoose.Types.ObjectId.isValid(userKey);
-      const userLast10 = !isId ? userKey.replace(/\D/g, '').slice(-10) : '';
+      const userKey = raw.user ? raw.user.toString().trim() : '';
+      const isId = mongoose.Types.ObjectId.isValid(userKey) && /^[a-fA-F0-9]{24}$/.test(userKey);
+      const userLast10 = !isId ? normalizePhone10(userKey) : '';
 
       const match = users.find(u =>
-        u.email === userKey ||
+        (u.email && u.email.toLowerCase() === userKey.toLowerCase()) ||
         u.phoneNumber === userKey ||
         u._id.toString() === userKey ||
-        (!isId && userLast10.length === 10 && u.phoneNumber && u.phoneNumber.replace(/\D/g, '').slice(-10) === userLast10)
+        (!isId && userLast10 && u.phoneNumber && normalizePhone10(u.phoneNumber) === userLast10)
       );
-      const computedName = match ? (`${match.firstName || ''} ${match.lastName || ''}`.trim() || match.shopName) : (raw.userName !== 'Unknown' && raw.userName !== 'Guest' ? raw.userName : '');
-      const finalName = (computedName && computedName.trim().length > 0 && !computedName.toLowerCase().includes('admin')) ? computedName.trim() : 'New Customer';
+
+      const resolvedRole = String(match?.role || raw.role || 'user').toLowerCase();
+      if (STAFF_ROLES_SET.has(resolvedRole) || isStaffIdentifier(userKey, staffSet)) {
+        staleStaffKeys.push(userKey);
+        return null;
+      }
+
+      if (assignedUserIds) {
+        const lowerKey = userKey.toLowerCase();
+        const matchId = match?._id ? match._id.toString().toLowerCase() : '';
+        const matchPhone10 = match?.phoneNumber ? normalizePhone10(match.phoneNumber) : '';
+        const isAssigned =
+          assignedUserIds.has(lowerKey) ||
+          (userLast10 && assignedUserIds.has(userLast10)) ||
+          (matchId && assignedUserIds.has(matchId)) ||
+          (matchPhone10 && assignedUserIds.has(matchPhone10));
+        if (!isAssigned) return null;
+      }
+
+      const computedName = match
+        ? (`${match.firstName || ''} ${match.lastName || ''}`.trim() || match.shopName)
+        : (raw.userName !== 'Unknown' && raw.userName !== 'Guest' ? raw.userName : '');
+      const finalName = (computedName && computedName.trim().length > 0 && !computedName.toLowerCase().includes('admin') && !computedName.toLowerCase().includes('sales'))
+        ? computedName.trim()
+        : (match?.phoneNumber || 'New Customer');
       const intentInfo = calculateIntentScore(raw.currentScreen, raw.action);
       return {
         ...raw,
         userName: finalName,
         userPhone: match ? match.phoneNumber : (raw.userPhone || 'N/A'),
-        role: match ? match.role : (raw.role || 'user'),
+        role: 'user',
         intentScore: raw.intentScore || intentInfo.intentScore,
         intentLabel: raw.intentLabel || intentInfo.intentLabel
       };
-    }).filter(u => {
-      // STRICTLY ONLY show users with role 'user' (Exclude admins and sales reps)
-      const isRoleUser = (u.role || 'user').toLowerCase() === 'user';
-      const isNameOrEmailAdmin = (u.user || '').toLowerCase().includes('admin') ||
-                                (u.user || '').toLowerCase().includes('sales') ||
-                                (u.userName || '').toLowerCase().includes('admin') ||
-                                (u.userName || '').toLowerCase().includes('sales');
-      return isRoleUser && !isNameOrEmailAdmin;
-    });
+    }).filter(Boolean);
+
+    if (staleStaffKeys.length > 0) {
+      try {
+        await redisClient.zRem('presence_active_zset', staleStaffKeys);
+      } catch (_) {}
+    }
 
     res.json({ success: true, count: enrichedUsers.length, data: enrichedUsers });
   } catch (error) {
@@ -742,25 +964,30 @@ exports.getActiveUsers = async (req, res, next) => {
 
 async function getSalesAssignedUserData(req) {
   if (!req.user || req.user.role !== 'sales') return null;
-  const agentIdStr = req.user._id ? req.user._id.toString() : '';
+  const agentIdStr = (req.user._id || req.user.id || req.user.userId || '').toString();
   const agentEmail = req.user.email ? req.user.email.toLowerCase() : '';
   if (!agentIdStr && !agentEmail) return null;
-
-  const mongoose = require('mongoose');
-  const User = require('../models/User');
 
   const orConditions = [];
   if (agentIdStr && mongoose.Types.ObjectId.isValid(agentIdStr)) {
     orConditions.push({ assignedAgent: new mongoose.Types.ObjectId(agentIdStr) });
     orConditions.push({ assignedAgentId: agentIdStr });
+  } else if (agentIdStr) {
+    orConditions.push({ assignedAgentId: agentIdStr });
+  }
+  if (agentEmail) {
+    orConditions.push({ assignedAgentId: agentEmail });
   }
 
-  // If we have an email but no valid ObjectId for it yet, we don't want to crash.
-  // We only query assignedAgent with things that look like ObjectIds if the schema expects ObjectIds.
-  // If there are legacy records with email strings, they would be in a different field or we'd need a different approach.
+  if (orConditions.length === 0) {
+    return { idSet: new Set(), objectIds: [] };
+  }
 
   try {
-    const assignedUsers = await User.find({ $or: orConditions }, { _id: 1, email: 1, phoneNumber: 1, phone: 1, firstName: 1, lastName: 1, shopName: 1 }).lean();
+    const assignedUsers = await User.find(
+      { $or: orConditions, role: { $nin: STAFF_ROLES } },
+      { _id: 1, email: 1, phoneNumber: 1, phone: 1, firstName: 1, lastName: 1, shopName: 1 }
+    ).lean();
     const idSet = new Set();
     const objectIds = [];
 
@@ -769,12 +996,22 @@ async function getSalesAssignedUserData(req) {
         idSet.add(u._id.toString().toLowerCase());
         objectIds.push(u._id);
       }
-      if (u.email) idSet.add(u.email.toLowerCase());
-      if (u.phoneNumber) idSet.add(u.phoneNumber.toLowerCase());
-      if (u.phone) idSet.add(u.phone.toLowerCase());
+      if (u.email) idSet.add(String(u.email).trim().toLowerCase());
+      [u.phoneNumber, u.phone].forEach(p => {
+        if (p) {
+          const pLower = String(p).trim().toLowerCase();
+          if (pLower) idSet.add(pLower);
+          const p10 = normalizePhone10(pLower);
+          if (p10) {
+            idSet.add(p10);
+            idSet.add(`91${p10}`);
+            idSet.add(`+91${p10}`);
+          }
+        }
+      });
       const name = `${u.firstName || ''} ${u.lastName || ''}`.trim().toLowerCase();
       if (name) idSet.add(name);
-      if (u.shopName) idSet.add(u.shopName.toLowerCase());
+      if (u.shopName) idSet.add(String(u.shopName).trim().toLowerCase());
     });
     return { idSet, objectIds };
   } catch (err) {
@@ -794,11 +1031,11 @@ async function getSalesAssignedUserIds(req) {
 exports.getFunnelData = async (req, res, next) => {
   try {
     const Order = require('../models/Order');
-    const User = require('../models/User');
     const Cart = require('../models/Cart');
     const CheckoutSession = require('../models/CheckoutSession');
 
     const assignedUserData = await getSalesAssignedUserData(req);
+    const staffSet = await getStaffIdentifiersSet();
     const { days = 'all', startDate: reqStart, endDate: reqEnd } = req.query;
     let startDate = new Date(0);
     let endDate = new Date();
@@ -817,9 +1054,9 @@ exports.getFunnelData = async (req, res, next) => {
       startDate = new Date(Date.now() - numDays * 24 * 60 * 60 * 1000);
     }
 
-    // 0. Check Redis Cache First
+    // 0. Check Redis Cache First (v3 excludes staff/sales activity)
     const agentScope = assignedUserData ? (req.user?._id?.toString() || req.user?.email || 'sales') : 'global';
-    const cacheKey = `stats:events:funnel:${agentScope}:${days}:${reqStart || ''}_${reqEnd || ''}`;
+    const cacheKey = `stats:events:funnel:v3:${agentScope}:${days}:${reqStart || ''}_${reqEnd || ''}`;
     if (redisClient && redisClient.isOpen) {
       try {
         const cached = await redisClient.get(cacheKey);
@@ -834,14 +1071,20 @@ exports.getFunnelData = async (req, res, next) => {
     const timeframeQuery = { createdAt: { $gte: startDate, $lte: endDate } };
     const cartTimeframeQuery = { updatedAt: { $gte: startDate, $lte: endDate } };
 
-    // Function to filter user sets by sales agent assignment
-    const filterByAssignment = (userSet) => {
-      if (!assignedUserData) return userSet.size;
+    const isAssignedMatch = (u) => {
+      if (!assignedUserData) return true;
+      const lower = String(u || '').trim().toLowerCase();
+      if (!lower) return false;
+      if (assignedUserData.idSet.has(lower)) return true;
+      const p10 = normalizePhone10(lower);
+      return Boolean(p10 && assignedUserData.idSet.has(p10));
+    };
+
+    const filterCustomerSet = (userSet) => {
       let count = 0;
       userSet.forEach(u => {
-        if (assignedUserData.idSet.has(u.toString().toLowerCase())) {
-          count++;
-        }
+        if (!u || isStaffIdentifier(u, staffSet)) return;
+        if (isAssignedMatch(u)) count++;
       });
       return count;
     };
@@ -851,53 +1094,66 @@ exports.getFunnelData = async (req, res, next) => {
       ...timeframeQuery,
       orderStatus: { $ne: 'Cancelled' }
     }).select('user').lean();
-    const step4UserSet = new Set(orders.map(o => o.user.toString()));
-    const step4Count = filterByAssignment(step4UserSet);
+    const step4UserSet = new Set(orders.filter(o => o.user).map(o => o.user.toString()));
+    const step4Count = filterCustomerSet(step4UserSet);
 
     // --- STEP 3: Initiated Checkout (Sessions + History) ---
     const checkouts = await CheckoutSession.find(timeframeQuery).select('user').lean();
-    const step3UserSet = new Set(checkouts.map(c => c.user.toString()));
+    const step3UserSet = new Set(checkouts.filter(c => c.user).map(c => c.user.toString()));
     const historicalIntentUsers = await Event.distinct('user', {
       timestamp: { $gte: startDate, $lte: endDate },
+      role: { $nin: STAFF_ROLES },
       eventType: { $in: ['checkout_started', 'checkout_init', 'payment_failed', 'payment_fail', 'payment_initiated', 'apply_coupon'] }
     });
-    historicalIntentUsers.forEach(u => { if (u && u !== 'guest') step3UserSet.add(u.toString()); });
+    historicalIntentUsers.forEach(u => {
+      if (u && u !== 'guest' && !isStaffIdentifier(u, staffSet)) step3UserSet.add(u.toString());
+    });
     step4UserSet.forEach(u => step3UserSet.add(u));
-    const step3Count = filterByAssignment(step3UserSet);
+    const step3Count = filterCustomerSet(step3UserSet);
 
     // --- STEP 2: Added to Cart (Active Carts + Checkouts) ---
     const carts = await Cart.find({
       ...cartTimeframeQuery,
       'items.0': { $exists: true }
     }).select('user').lean();
-    const step2UserSet = new Set(carts.map(c => c.user.toString()));
+    const step2UserSet = new Set(carts.filter(c => c.user).map(c => c.user.toString()));
     const historicalCartUsers = await Event.distinct('user', {
       timestamp: { $gte: startDate, $lte: endDate },
+      role: { $nin: STAFF_ROLES },
       eventType: { $in: ['add_to_cart', 'cart_add', 'cart_view'] }
     });
-    historicalCartUsers.forEach(u => { if (u && u !== 'guest') step2UserSet.add(u.toString()); });
+    historicalCartUsers.forEach(u => {
+      if (u && u !== 'guest' && !isStaffIdentifier(u, staffSet)) step2UserSet.add(u.toString());
+    });
     step3UserSet.forEach(u => step2UserSet.add(u));
-    const step2Count = filterByAssignment(step2UserSet);
+    const step2Count = filterCustomerSet(step2UserSet);
 
-    // --- STEP 1: App Visits & Browsing (Source: Events + Cart Fallback) ---
+    // --- STEP 1: App Visits & Browsing (Customers only — strictly exclude sales/admin activity) ---
     const step1Users = await Event.distinct('user', {
       timestamp: { $gte: startDate, $lte: endDate },
+      role: { $nin: STAFF_ROLES },
+      eventType: { $nin: STAFF_EVENT_TYPES },
       user: { $nin: ['anonymous', 'guest', 'unknown', null] }
     });
-    const step1UserSet = new Set(step1Users.map(u => u.toString()));
-    step2UserSet.forEach(u => step1UserSet.add(u));
-    const step1Count = assignedUserData
-      ? Array.from(step1UserSet).filter(u => assignedUserData.idSet.has(u.toString().toLowerCase())).length
-      : step1UserSet.size;
+    const step1UserSet = new Set();
+    step1Users.forEach(u => {
+      if (u && !isStaffIdentifier(u, staffSet)) step1UserSet.add(u.toString());
+    });
+    step2UserSet.forEach(u => {
+      if (u && !isStaffIdentifier(u, staffSet)) step1UserSet.add(u);
+    });
+    const step1Count = filterCustomerSet(step1UserSet);
 
-    // --- Event Volume Metrics (Total Count of Actions) ---
+    // --- Event Volume Metrics (Customer Actions Only) ---
+    const staffExcludeList = ['anonymous', 'guest', 'unknown', null, ...Array.from(staffSet)];
     const eventMatch = {
       timestamp: { $gte: startDate, $lte: endDate },
-      user: { $nin: ['anonymous', 'guest', 'unknown', null] }
+      role: { $nin: STAFF_ROLES },
+      eventType: { $nin: STAFF_EVENT_TYPES },
+      user: assignedUserData
+        ? { $in: Array.from(assignedUserData.idSet) }
+        : { $nin: staffExcludeList }
     };
-    if (assignedUserData) {
-      eventMatch.user = { $in: Array.from(assignedUserData.idSet) };
-    }
 
     const rawCounts = await Event.aggregate([
       { $match: eventMatch },
@@ -919,26 +1175,22 @@ exports.getFunnelData = async (req, res, next) => {
       {
         stepName: '1. App Visits & Browsing',
         userCount: step1Count,
-        // Step 1 eventCount represents the total baseline activity (88.9k in your case)
-        eventCount: totalEventVolume || step1Count
+        eventCount: Math.max(totalEventVolume, step1Count)
       },
       {
         stepName: '2. High Interest (Added to Cart)',
         userCount: step2Count,
-        // Represents total add_to_cart volume (15.3k in your case)
-        eventCount: getStageEventCount(['add_to_cart', 'cart_add', 'cart_view']) || step2Count
+        eventCount: Math.max(getStageEventCount(['add_to_cart', 'cart_add', 'cart_view']), step2Count)
       },
       {
         stepName: '3. Initiated Checkout',
         userCount: step3Count,
-        // Represents total checkout flow volume (481 in your case)
-        eventCount: getStageEventCount(['checkout_started', 'checkout_init', 'apply_coupon', 'payment_initiated', 'payment_failed', 'payment_fail']) || step3Count
+        eventCount: Math.max(getStageEventCount(['checkout_started', 'checkout_init', 'apply_coupon', 'payment_initiated', 'payment_failed', 'payment_fail']), step3Count)
       },
       {
         stepName: '4. Successful Purchases',
         userCount: step4Count,
-        // Represents total success volume (62 in your case)
-        eventCount: getStageEventCount(['payment_success', 'payment_completed', 'order_placed', 'order_created', 'order_completed']) || step4Count
+        eventCount: Math.max(getStageEventCount(['payment_success', 'payment_completed', 'order_placed', 'order_created', 'order_completed']), step4Count)
       }
     ];
 
@@ -983,14 +1235,14 @@ exports.getFunnelData = async (req, res, next) => {
 exports.getSummaryMetrics = async (req, res, next) => {
   try {
     const isSales = req.user && req.user.role === 'sales';
-    const agentIdStr = req.user && req.user._id ? req.user._id.toString() : '';
+    const agentIdStr = (req.user?._id || req.user?.id || req.user?.userId || '').toString();
     const agentEmail = req.user && req.user.email ? req.user.email.toLowerCase() : '';
 
     const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
 
     const cacheKey = isSales
-      ? `stats:events:summary-metrics:sales:${agentIdStr || agentEmail}`
-      : 'stats:events:summary-metrics:v2';
+      ? `stats:events:summary-metrics:v3:sales:${agentIdStr || agentEmail}`
+      : 'stats:events:summary-metrics:v3';
     
     // 1. Try to fetch from Redis Cache first
     if (redisClient && redisClient.isOpen) {
@@ -1004,45 +1256,23 @@ exports.getSummaryMetrics = async (req, res, next) => {
       }
     }
 
-    // If Sales, find all assigned users first
-    let assignedUserIds = null;
-    if (isSales && (agentIdStr || agentEmail)) {
-      const orConditions = [];
-      if (agentIdStr) {
-        orConditions.push({ assignedAgent: agentIdStr });
-        orConditions.push({ assignedAgentId: agentIdStr });
-      }
-      if (agentEmail) {
-        orConditions.push({ assignedAgent: agentEmail });
-        orConditions.push({ assignedAgentId: agentEmail });
-      }
-      if (mongoose.Types.ObjectId.isValid(agentIdStr)) {
-        orConditions.push({ assignedAgent: new mongoose.Types.ObjectId(agentIdStr) });
-      }
+    const [assignedUserIds, staffSet] = await Promise.all([
+      getSalesAssignedUserIds(req),
+      getStaffIdentifiersSet()
+    ]);
 
-      if (orConditions.length > 0) {
-        try {
-          const assignedUsers = await User.find({ $or: orConditions }, { _id: 1, email: 1, phoneNumber: 1, phone: 1, firstName: 1, lastName: 1, shopName: 1 }).lean();
-          assignedUserIds = new Set();
-          assignedUsers.forEach(u => {
-            if (u._id) assignedUserIds.add(u._id.toString().toLowerCase());
-            if (u.email) assignedUserIds.add(u.email.toLowerCase());
-            if (u.phoneNumber) assignedUserIds.add(u.phoneNumber.toLowerCase());
-            if (u.phone) assignedUserIds.add(u.phone.toLowerCase());
-            const name = `${u.firstName || ''} ${u.lastName || ''}`.trim().toLowerCase();
-            if (name) assignedUserIds.add(name);
-            if (u.shopName) assignedUserIds.add(u.shopName.toLowerCase());
-          });
-        } catch (err) {
-          console.error('[SummaryMetrics] Error fetching assigned users:', err);
-        }
-      }
+    if (isSales && (!assignedUserIds || assignedUserIds.size === 0)) {
+      return res.json({
+        success: true,
+        data: { highPriority: 0, failedPayments: 0, abandonedCarts: 0, abandonedCheckouts: 0 }
+      });
     }
 
     const userEventStates = await Event.aggregate([
       {
         $match: {
           timestamp: { $gte: fourteenDaysAgo },
+          role: { $nin: STAFF_ROLES },
           eventType: {
             $in: [
               'payment_failed',
@@ -1074,25 +1304,31 @@ exports.getSummaryMetrics = async (req, res, next) => {
 
     userEventStates.forEach(userState => {
       const types = new Set(userState.eventTypes);
-      const userId = userState._id ? userState._id.toString().toLowerCase() : '';
+      const userId = userState._id ? userState._id.toString().trim().toLowerCase() : '';
       
-      // Filter out admins/sales/guests
-      if (userId.includes('admin') || userId.includes('sales') || userId === 'guest' || userId === '') {
+      // Filter out admins/sales/staff/guests
+      if (!userId || userId === 'guest' || userId === 'anonymous' || isStaffIdentifier(userId, staffSet)) {
         return;
       }
 
-      if (assignedUserIds && !assignedUserIds.has(userId)) {
-        return;
+      if (assignedUserIds) {
+        const p10 = normalizePhone10(userId);
+        if (!assignedUserIds.has(userId) && !(p10 && assignedUserIds.has(p10))) {
+          return;
+        }
       }
 
       // Resolution Logic: If they eventually succeeded, they are no longer High Priority
-      const hasSuccess = types.has('payment_success') || types.has('order_placed') || types.has('order_completed');
+      const hasSuccess = types.has('payment_success') || types.has('payment_completed') || types.has('order_placed') || types.has('order_created') || types.has('order_completed');
+      const hasFailed = types.has('payment_failed') || types.has('payment_fail');
+      const hasCheckout = types.has('checkout_started') || types.has('checkout_init');
+      const hasCart = types.has('add_to_cart') || types.has('cart_add');
 
-      if (types.has('payment_failed') && !hasSuccess) {
+      if (hasFailed && !hasSuccess) {
         failedPaymentsCount++;
-      } else if (types.has('checkout_started') && !hasSuccess) {
+      } else if (hasCheckout && !hasSuccess) {
         abandonedCheckoutsCount++;
-      } else if (types.has('add_to_cart') && !types.has('checkout_started') && !hasSuccess) {
+      } else if (hasCart && !hasCheckout && !hasSuccess) {
         abandonedCartsCount++;
       }
     });

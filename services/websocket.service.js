@@ -153,7 +153,10 @@ const initWebSocket = (server) => {
         }
 
         if (data.type === 'PRESENCE_UPDATE' && ws.userId) {
-          if (redisClient && redisClient.isOpen) {
+          const isStaffRole = ['admin', 'sales', 'staff', 'agent', 'manager', 'telecaller'].includes(
+            String(ws.userRole || '').toLowerCase()
+          );
+          if (!isStaffRole && redisClient && redisClient.isOpen) {
             const presenceKey = `presence:${ws.userId}`;
             const payload = data.data || {};
 
@@ -163,20 +166,21 @@ const initWebSocket = (server) => {
               action: payload.lastAction || 'Active',
               device: payload.platform || 'Unknown',
               sessionId: payload.sessionId || 'unknown',
-              role: ws.userRole || 'user'
+              role: 'user'
             };
 
             await redisClient.hSet(presenceKey, presenceData);
-            await redisClient.expire(presenceKey, 60);
+            await redisClient.expire(presenceKey, 120);
+            await redisClient.zAdd('presence_active_zset', { score: Date.now(), value: String(ws.userId) });
 
-            // Targeted Broadcast: Send presence to Admins and Sales agents across all instances
+            // Targeted Broadcast: Send genuine buyer presence to Admins and Sales agents across all instances
             broadcastToRoles(['admin', 'sales'], {
               type: 'PRESENCE_UPDATE',
               data: {
                 user: ws.userId,
                 userName: ws.userName,
                 userPhone: ws.userPhone,
-                role: ws.userRole || 'user',
+                role: 'user',
                 ...presenceData
               }
             });
