@@ -176,6 +176,17 @@ const AGENT_TELEPHONY_REGISTRY = {
     userUuid: '6b058b9a31c01206',
     extension: '11',
   },
+  // Ram Ji Shukla - 10 (Vicky Kumar)
+  '9131094645': {
+    name: 'Vicky Kumar',
+    accountName: 'Ram Ji Shukla - 10',
+    companyId: '6b05605b575b9426',
+    callingXApiKey: 'oomfKA3I2K6TCJYistHyb7sDf0l0F6c8AZro5DJh',
+    callingSecretKey: 'e5367adbad564e3901600bb8851dc16961bf015946e8f8d7aa535d1f1971c798',
+    callingToken: '0b2e0dfcb9b7f81f2597a96df1d60b0a',
+    userUuid: '6b058caeb6dda754',
+    extension: '11',
+  },
 };
 
 function normalizeIndianMobile(phone) {

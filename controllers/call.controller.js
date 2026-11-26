@@ -987,6 +987,14 @@ const TELEPHONY_ACCOUNTS = [
     accountName: 'Ram Ji Shukla - 9 (6b056022ca90a200)',
     companyId: '6b056022ca90a200',
     mobileNumber: '9201896600'
+  },
+  {
+    name: 'Vicky Kumar',
+    email: 'sales23ebs@gmail.com',
+    role: 'sales',
+    accountName: 'Ram Ji Shukla - 10 (6b05605b575b9426)',
+    companyId: '6b05605b575b9426',
+    mobileNumber: '9131094645'
   }
 ];
 
