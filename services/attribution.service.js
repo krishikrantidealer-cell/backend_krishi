@@ -814,6 +814,7 @@ class AttributionService {
         leadToDealerPct: effectiveLeads > 0 ? Number(((b.qualifiedDealers / effectiveLeads) * 100).toFixed(1)) : 0,
         costPerQualifiedDealer: b.qualifiedDealers > 0 ? Math.round(b.spend / b.qualifiedDealers) : 0,
         firstOrderPct: effectiveLeads > 0 ? Number(((b.orderingDealers / effectiveLeads) * 100).toFixed(1)) : 0,
+        dealerToOrderPct: b.qualifiedDealers > 0 ? Number(((b.orderingDealers / b.qualifiedDealers) * 100).toFixed(1)) : 0,
         costPerOrderingDealer: b.orderingDealers > 0 ? Math.round(b.spend / b.orderingDealers) : 0,
         deliveredRoas: b.spend > 0 ? Number((b.deliveredGmv / b.spend).toFixed(2)) : 0,
         rtoPct: b.ordersCount > 0 ? Number(((b.rtoOrders / b.ordersCount) * 100).toFixed(1)) : 0
@@ -857,6 +858,7 @@ class AttributionService {
         cpl: totals.uniqueLeads > 0 ? Math.round(totals.spend / totals.uniqueLeads) : 0,
         leadToDealerPct: totals.uniqueLeads > 0 ? Number(((totals.qualifiedDealers / totals.uniqueLeads) * 100).toFixed(1)) : 0,
         costPerQualifiedDealer: totals.qualifiedDealers > 0 ? Math.round(totals.spend / totals.qualifiedDealers) : 0,
+        dealerToOrderPct: totals.qualifiedDealers > 0 ? Number(((totals.orderingDealers / totals.qualifiedDealers) * 100).toFixed(1)) : 0,
         costPerOrderingDealer: totals.orderingDealers > 0 ? Math.round(totals.spend / totals.orderingDealers) : 0,
         deliveredRoas: totals.spend > 0 ? Number((totals.deliveredGmv / totals.spend).toFixed(2)) : 0,
         rtoPct: totals.ordersCount > 0 ? Number(((totals.rtoOrders / totals.ordersCount) * 100).toFixed(1)) : 0
