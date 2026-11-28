@@ -797,7 +797,7 @@ class AttributionService {
             b.totalGmv += amt;
             if (st === 'delivered') {
               b.deliveredGmv += amt;
-            } else if (st === 'rto' || st === 'returned') {
+            } else if (st.includes('rto') || st.includes('returned')) {
               b.rtoOrders += 1;
             }
           }
