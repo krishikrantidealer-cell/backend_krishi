@@ -61,6 +61,7 @@ class AttributionService {
       ...(Array.isArray(formAnswers) ? formAnswers : Object.values(formAnswers || {}))
     ]
       .join(' ')
+      .replace(/_/g, ' ')
       .toLowerCase();
 
     const hasShopMatch =
@@ -72,7 +73,8 @@ class AttributionService {
       joined.includes('दुकानदार') ||
       joined.includes('होलसेलर') ||
       joined.includes('डिस्ट्रीब्यूटर') ||
-      joined.includes('हां, मेरी दुकान है');
+      joined.includes('मेरी दुकान है') ||
+      joined.includes('हाँ, मेरी दुकान');
 
     const planningMatch =
       joined.includes('planning to open') ||
@@ -338,7 +340,7 @@ class AttributionService {
   }
 
   /**
-   * Sync daily ad spend from Meta Marketing API Insights into AdSpendDaily.
+   * Sync daily campaign-level ad spend from Meta Marketing API Insights (fully paginated).
    */
   async syncDailyAdSpend({ startDate, endDate } = {}) {
     const adAccountId = process.env.META_AD_ACCOUNT_ID;
@@ -351,69 +353,224 @@ class AttributionService {
       };
     }
 
-    const since = startDate || new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+    const since = startDate || new Date(Date.now() - 120 * 86400000).toISOString().slice(0, 10);
     const until = endDate || new Date().toISOString().slice(0, 10);
 
     try {
       const accountPath = adAccountId.startsWith('act_') ? adAccountId : `act_${adAccountId}`;
-      const url = `https://graph.facebook.com/v20.0/${accountPath}/insights`;
-      const res = await axios.get(url, {
-        params: {
-          access_token: token,
-          level: 'ad',
-          time_increment: 1,
-          time_range: JSON.stringify({ since, until }),
-          fields: 'date_start,campaign_id,campaign_name,adset_id,adset_name,ad_id,ad_name,spend,impressions,actions,objective',
-          limit: 500
-        },
-        timeout: 15000
-      });
+      let nextUrl = `https://graph.facebook.com/v20.0/${accountPath}/insights`;
+      let params = {
+        access_token: token,
+        level: 'campaign',
+        time_increment: 1,
+        time_range: JSON.stringify({ since, until }),
+        fields: 'date_start,campaign_id,campaign_name,spend,impressions,actions,objective',
+        limit: 500
+      };
 
-      const rows = res.data?.data || [];
-      let upserted = 0;
+      const bulkOps = [];
+      let pageCount = 0;
 
-      for (const row of rows) {
-        const objective = String(row.objective || '').toUpperCase();
-        const campaignLower = String(row.campaign_name || '').toLowerCase();
-        let channel = 'lead_form';
-        if (campaignLower.includes('ctwa') || campaignLower.includes('whatsapp') || objective.includes('MESSAGES')) {
-          channel = 'ctwa';
-        } else if (objective.includes('APP_INSTALLS') || campaignLower.includes('app')) {
-          channel = 'app_install';
+      while (nextUrl && pageCount < 20) {
+        pageCount++;
+        const res = await axios.get(nextUrl, { params, timeout: 20000 });
+        const rows = res.data?.data || [];
+
+        for (const row of rows) {
+          const objective = String(row.objective || '').toUpperCase();
+          const campaignLower = String(row.campaign_name || '').toLowerCase();
+          let channel = 'lead_form';
+          if (campaignLower.includes('ctwa') || campaignLower.includes('whatsapp') || objective.includes('MESSAGES')) {
+            channel = 'ctwa';
+          } else if (objective.includes('APP_INSTALLS') || objective.includes('APP_PROMOTION') || campaignLower.includes('app')) {
+            channel = 'app_install';
+          }
+
+          const leadAction = (row.actions || []).find(
+            a => a.action_type === 'lead' || a.action_type === 'onsite_conversion.lead_grouped'
+          );
+
+          bulkOps.push({
+            updateOne: {
+              filter: {
+                date: row.date_start,
+                campaignId: row.campaign_id || '',
+                adsetId: '',
+                adId: ''
+              },
+              update: {
+                $set: {
+                  channel,
+                  campaignName: row.campaign_name || '',
+                  adsetName: '',
+                  adName: '',
+                  spend: Number(row.spend || 0),
+                  impressions: Number(row.impressions || 0),
+                  leads: Number(leadAction?.value || 0)
+                }
+              },
+              upsert: true
+            }
+          });
         }
 
-        const leadAction = (row.actions || []).find(
-          a => a.action_type === 'lead' || a.action_type === 'onsite_conversion.messaging_conversation_started_7d'
-        );
-
-        await AdSpendDaily.findOneAndUpdate(
-          {
-            date: row.date_start,
-            campaignId: row.campaign_id || '',
-            adsetId: row.adset_id || '',
-            adId: row.ad_id || ''
-          },
-          {
-            $set: {
-              channel,
-              campaignName: row.campaign_name || '',
-              adsetName: row.adset_name || '',
-              adName: row.ad_name || '',
-              spend: Number(row.spend || 0),
-              impressions: Number(row.impressions || 0),
-              leads: Number(leadAction?.value || 0)
-            }
-          },
-          { upsert: true, new: true }
-        );
-        upserted++;
+        nextUrl = res.data?.paging?.next || null;
+        params = undefined; // nextUrl already carries query params
       }
 
-      return { synced: upserted, skipped: false, since, until };
+      // Remove any old ad-level rows in this date window to prevent double counting
+      await AdSpendDaily.deleteMany({
+        date: { $gte: since, $lte: until },
+        adId: { $ne: '' }
+      });
+
+      if (bulkOps.length > 0) {
+        await AdSpendDaily.bulkWrite(bulkOps, { ordered: false });
+      }
+
+      return { synced: bulkOps.length, pages: pageCount, skipped: false, since, until };
     } catch (err) {
       console.error('[Attribution] syncDailyAdSpend failed:', err.response?.data || err.message);
       throw new Error(err.response?.data?.error?.message || err.message);
     }
+  }
+
+  /**
+   * Sync ALL leads for active Lead-Form campaigns directly from Meta Ads API
+   * and match them by last 10 digits of phone to MongoDB Users & Orders.
+   */
+  async syncMetaCampaignLeads({ maxPagesPerAd = 60 } = {}) {
+    const token = process.env.META_MARKETING_API_TOKEN || process.env.META_PAGE_ACCESS_TOKEN;
+    if (!token) {
+      return { syncedTouches: 0, matchedUsers: 0, skipped: true };
+    }
+
+    const active = await this.getActiveMetaCampaigns();
+    const leadCampaigns = Array.from(active.map.values()).filter(c => {
+      const obj = String(c.objective || '').toUpperCase();
+      const nameLower = String(c.name || '').toLowerCase();
+      return (obj === 'OUTCOME_LEADS' || obj === 'LEAD_GENERATION') && !nameLower.includes('hiring') && !nameLower.includes('candidate');
+    });
+
+    if (leadCampaigns.length === 0) {
+      return { syncedTouches: 0, matchedUsers: 0, campaignsChecked: 0 };
+    }
+
+    // Build fast phone10 -> User map from MongoDB
+    const allUsers = await User.find({ role: 'user', isDeleted: { $ne: true } })
+      .select('_id phoneNumber')
+      .lean();
+    const phoneToUserId = new Map();
+    for (const u of allUsers) {
+      const d = String(u.phoneNumber || '').replace(/\D/g, '');
+      if (d.length >= 10) {
+        phoneToUserId.set(d.slice(-10), u._id);
+      }
+    }
+
+    let syncedTouches = 0;
+    let matchedUsers = 0;
+
+    for (const camp of leadCampaigns) {
+      const adsRes = await axios.get(`https://graph.facebook.com/v20.0/${camp.id}/ads`, {
+        params: { access_token: token, fields: 'id,name', limit: 100 },
+        timeout: 15000
+      });
+      const ads = adsRes.data?.data || [];
+
+      for (const ad of ads) {
+        let nextUrl = `https://graph.facebook.com/v20.0/${ad.id}/leads`;
+        let params = {
+          access_token: token,
+          fields: 'id,created_time,field_data,campaign_id,adset_id,ad_id,form_id,platform',
+          limit: 100
+        };
+        let page = 0;
+        const touchOps = [];
+        const userOps = [];
+
+        while (nextUrl && page < maxPagesPerAd) {
+          page++;
+          const leadsRes = await axios.get(nextUrl, { params, timeout: 20000 });
+          const leads = leadsRes.data?.data || [];
+
+          for (const lead of leads) {
+            const fields = lead.field_data || [];
+            const phoneField = fields.find(fd => {
+              const n = String(fd.name || '').toLowerCase();
+              return n.includes('phone') || n.includes('mobile') || n.includes('फ़ोन') || n.includes('फोन') || n.includes('मोबाइल');
+            });
+            const rawPhone = phoneField?.values?.[0] ? String(phoneField.values[0]).trim() : '';
+            const digits = rawPhone.replace(/\D/g, '');
+            const phone10 = digits.length >= 10 ? digits.slice(-10) : '';
+            if (!phone10) continue;
+
+            const e164 = `+91${phone10}`;
+            const matchedUserId = phoneToUserId.get(phone10) || null;
+            const formAnswers = fields.map(f => `${f.name}: ${(f.values || []).join(', ')}`);
+            const quality = this.classifyLeadQuality(formAnswers, '');
+
+            touchOps.push({
+              updateOne: {
+                filter: { clickIdentifier: String(lead.id), channel: 'lead_form' },
+                update: {
+                  $set: {
+                    lead: matchedUserId || undefined,
+                    phone: e164,
+                    channel: 'lead_form',
+                    metaCampaignId: String(lead.campaign_id || camp.id),
+                    metaCampaignName: camp.name,
+                    metaAdsetId: lead.adset_id ? String(lead.adset_id) : undefined,
+                    metaAdId: lead.ad_id ? String(lead.ad_id) : String(ad.id),
+                    metaAdName: ad.name || '',
+                    metaFormId: lead.form_id ? String(lead.form_id) : undefined,
+                    platform: lead.platform === 'ig' ? 'ig' : (lead.platform === 'fb' ? 'fb' : 'unknown'),
+                    formAnswers,
+                    touchedAt: lead.created_time ? new Date(lead.created_time) : new Date()
+                  }
+                },
+                upsert: true
+              }
+            });
+
+            if (matchedUserId) {
+              matchedUsers++;
+              userOps.push({
+                updateOne: {
+                  filter: { _id: matchedUserId },
+                  update: {
+                    $set: {
+                      sourceChannel: 'lead_form',
+                      metaCampaignId: String(lead.campaign_id || camp.id),
+                      metaLeadId: String(lead.id),
+                      ...(quality.leadQuality !== 'unknown' ? { leadQuality: quality.leadQuality } : {}),
+                      ...(quality.disqualificationReason ? { disqualificationReason: quality.disqualificationReason } : {})
+                    }
+                  }
+                }
+              });
+            }
+          }
+
+          nextUrl = leadsRes.data?.paging?.next || null;
+          params = undefined;
+        }
+
+        if (touchOps.length > 0) {
+          await LeadTouch.bulkWrite(touchOps, { ordered: false });
+          syncedTouches += touchOps.length;
+        }
+        if (userOps.length > 0) {
+          await User.bulkWrite(userOps, { ordered: false });
+        }
+      }
+    }
+
+    return {
+      syncedTouches,
+      matchedUsers,
+      campaignsChecked: leadCampaigns.length
+    };
   }
 
   /**
@@ -452,7 +609,7 @@ class AttributionService {
   /**
    * Unified Attribution & ROAS Report across Lead Forms, CTWA, and App Installs.
    */
-  async getAttributionReport({ startDate, endDate, channel = 'all', liveOnly = true } = {}) {
+  async getAttributionReport({ startDate, endDate, channel = 'all', liveOnly = true, leadFormsOnly = true } = {}) {
     const start = startDate ? new Date(startDate) : new Date(Date.now() - 90 * 86400000);
     const end = endDate ? new Date(endDate) : new Date();
     end.setHours(23, 59, 59, 999);
@@ -460,11 +617,39 @@ class AttributionService {
     const startStr = start.toISOString().slice(0, 10);
     const endStr = end.toISOString().slice(0, 10);
 
+    const activeCampaigns = liveOnly ? await this.getActiveMetaCampaigns() : { ids: null, map: new Map() };
+    const allowedActiveIds = new Set();
+    if (liveOnly && activeCampaigns.map.size > 0) {
+      for (const [cid, cinfo] of activeCampaigns.map.entries()) {
+        const nameLower = String(cinfo.name || '').toLowerCase();
+        const obj = String(cinfo.objective || '').toUpperCase();
+        const isLeadFormCampaign =
+          (obj === 'OUTCOME_LEADS' || obj === 'LEAD_GENERATION') &&
+          !nameLower.includes('hiring') &&
+          !nameLower.includes('candidate');
+
+        if (leadFormsOnly && !isLeadFormCampaign) continue;
+
+        let ch = 'lead_form';
+        if (nameLower.includes('ctwa') || nameLower.includes('whatsapp') || obj.includes('MESSAGES')) {
+          ch = 'ctwa';
+        } else if (obj.includes('APP_INSTALLS') || obj.includes('APP_PROMOTION') || nameLower.includes('app')) {
+          ch = 'app_install';
+        }
+        if (channel && channel !== 'all' && ch !== channel) continue;
+        allowedActiveIds.add(cid);
+      }
+    }
+
     const touchQuery = { touchedAt: { $gte: start, $lte: end } };
     const spendQuery = { date: { $gte: startStr, $lte: endStr } };
     if (channel && channel !== 'all') {
       touchQuery.channel = channel;
       spendQuery.channel = channel;
+    }
+    if (liveOnly && allowedActiveIds.size > 0) {
+      touchQuery.metaCampaignId = { $in: Array.from(allowedActiveIds) };
+      spendQuery.campaignId = { $in: Array.from(allowedActiveIds) };
     }
 
     const [touches, spends] = await Promise.all([
@@ -559,18 +744,18 @@ class AttributionService {
       b.metaLeads += Number(s.leads || 0);
     }
 
-    const activeCampaigns = liveOnly ? await this.getActiveMetaCampaigns() : { ids: null, map: new Map() };
-    if (liveOnly && activeCampaigns.map.size > 0) {
-      for (const [cid, cinfo] of activeCampaigns.map.entries()) {
+    if (liveOnly && allowedActiveIds.size > 0) {
+      for (const cid of allowedActiveIds) {
+        const cinfo = activeCampaigns.map.get(cid);
+        if (!cinfo) continue;
         const nameLower = String(cinfo.name || '').toLowerCase();
         const obj = String(cinfo.objective || '').toUpperCase();
         let ch = 'lead_form';
         if (nameLower.includes('ctwa') || nameLower.includes('whatsapp') || obj.includes('MESSAGES')) {
           ch = 'ctwa';
-        } else if (obj.includes('APP_INSTALLS') || nameLower.includes('app')) {
+        } else if (obj.includes('APP_INSTALLS') || obj.includes('APP_PROMOTION') || nameLower.includes('app')) {
           ch = 'app_install';
         }
-        if (channel && channel !== 'all' && ch !== channel) continue;
         ensureBucket(cid, { campaignId: cid, campaignName: cinfo.name, channel: ch });
       }
     }
@@ -634,7 +819,7 @@ class AttributionService {
     });
 
     if (liveOnly && activeCampaigns.ids) {
-      campaigns = campaigns.filter(c => activeCampaigns.ids.has(String(c.campaignId)));
+      campaigns = campaigns.filter(c => allowedActiveIds.has(String(c.campaignId)));
     }
 
     const totals = campaigns.reduce(

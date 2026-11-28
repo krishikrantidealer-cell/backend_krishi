@@ -5,12 +5,13 @@ const User = require('../models/User');
 
 exports.getAttributionReport = async (req, res, next) => {
   try {
-    const { startDate, endDate, channel, liveOnly } = req.query;
+    const { startDate, endDate, channel, liveOnly, leadFormsOnly } = req.query;
     const report = await attributionService.getAttributionReport({
       startDate,
       endDate,
       channel: channel || 'all',
-      liveOnly: liveOnly !== 'false'
+      liveOnly: liveOnly !== 'false',
+      leadFormsOnly: leadFormsOnly !== 'false'
     });
     res.json({ success: true, ...report });
   } catch (error) {
@@ -21,8 +22,11 @@ exports.getAttributionReport = async (req, res, next) => {
 exports.syncAdSpend = async (req, res, next) => {
   try {
     const { startDate, endDate } = req.body || {};
-    const result = await attributionService.syncDailyAdSpend({ startDate, endDate });
-    res.json({ success: true, ...result });
+    const spendResult = await attributionService.syncDailyAdSpend({ startDate, endDate });
+    const leadsResult = spendResult.skipped
+      ? { syncedTouches: 0, matchedUsers: 0 }
+      : await attributionService.syncMetaCampaignLeads({ maxPagesPerAd: 15 });
+    res.json({ success: true, ...spendResult, ...leadsResult });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
   }
