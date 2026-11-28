@@ -341,7 +341,7 @@ async function createOrUpdateProspectUser(data) {
 
   // Real-time broadcast to KD Panel (Sales & Admin screens update immediately)
   try {
-    broadcastToRoles(['admin', 'sales'], {
+    broadcastToRoles(['admin', 'sales', 'marketing'], {
       type: 'LEADS_UPDATE',
       action: 'NEW_META_LEAD',
       leadId: user._id,

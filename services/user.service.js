@@ -558,11 +558,13 @@ class UserService {
   }
 
   async createSalesAgent(agentData) {
-    const { firstName, lastName, email, phoneNumber, password, monthlyTarget, permissions, myoperator } = agentData;
+    const { firstName, lastName, email, phoneNumber, password, monthlyTarget, permissions, myoperator, role } = agentData;
 
     if (!firstName || !lastName || !email || !phoneNumber || !password) {
       throw new Error('All fields (first name, last name, email, phone number, password) are required');
     }
+
+    const targetRole = role === 'marketing' ? 'marketing' : 'sales';
 
     // Check if user already exists with email or phone number
     const existingEmail = await User.findOne({ email });
@@ -581,22 +583,22 @@ class UserService {
       phoneNumber,
       password: hashedPassword,
       monthlyTarget: monthlyTarget || 500000,
-      role: 'sales',
+      role: targetRole,
       isVerified: true,
       isProfileComplete: true,
       ...(permissions ? { permissions } : {}),
-      myoperator: myoperator === true
+      myoperator: targetRole === 'sales' ? myoperator === true : false
     });
 
     return user;
   }
 
   async updateSalesAgent(agentId, updateData) {
-    const { firstName, lastName, email, phoneNumber, password, monthlyTarget, permissions, myoperator } = updateData;
+    const { firstName, lastName, email, phoneNumber, password, monthlyTarget, permissions, myoperator, role } = updateData;
 
     const user = await User.findById(agentId);
-    if (!user) throw new Error('Sales agent not found');
-    if (user.role !== 'sales') throw new Error('User is not a sales agent');
+    if (!user) throw new Error('Team member not found');
+    if (user.role !== 'sales' && user.role !== 'marketing') throw new Error('User is not a sales or marketing team member');
 
     // Check email unique if changed
     if (email && email !== user.email) {
@@ -617,6 +619,7 @@ class UserService {
     if (monthlyTarget !== undefined) user.monthlyTarget = monthlyTarget;
     if (permissions !== undefined) user.permissions = permissions;
     if (myoperator !== undefined) user.myoperator = Boolean(myoperator);
+    if (role === 'sales' || role === 'marketing') user.role = role;
 
     if (password && password.trim() !== '') {
       const { hashData } = require('../utils/hash');
@@ -629,8 +632,8 @@ class UserService {
 
   async deleteSalesAgent(agentId) {
     const user = await User.findById(agentId);
-    if (!user) throw new Error('Sales agent not found');
-    if (user.role !== 'sales') throw new Error('User is not a sales agent');
+    if (!user) throw new Error('Team member not found');
+    if (user.role !== 'sales' && user.role !== 'marketing') throw new Error('User is not a sales or marketing team member');
 
     // Unassign this agent from any leads or dealers they are assigned to
     await User.updateMany({ assignedAgent: agentId }, { $set: { assignedAgent: null } });

@@ -4,9 +4,9 @@ const campaignController = require('../controllers/marketingCampaign.controller'
 const { protect, authorizeRoles } = require('../middlewares/auth.middleware');
 const upload = require('../middlewares/upload.middleware');
 
-// Protect all marketing campaign endpoints for admin/sales
+// Protect all marketing campaign endpoints for admin/sales/marketing
 router.use(protect);
-router.use(authorizeRoles('admin', 'sales'));
+router.use(authorizeRoles('admin', 'sales', 'marketing'));
 
 /**
  * @route   GET /api/marketing/push-campaigns

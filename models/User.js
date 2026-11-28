@@ -72,7 +72,7 @@ const userSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['user', 'admin', 'sales'],
+    enum: ['user', 'admin', 'sales', 'marketing'],
     default: 'user'
   },
   // KYC Fields

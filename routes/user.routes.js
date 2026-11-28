@@ -104,11 +104,11 @@ router.patch('/addresses/:addressId/default', userController.setDefaultAddress);
 
 // --- ADMIN ROUTES ---
 
-// Get all users (Admin and Sales)
-router.get('/', authorizeRoles('admin', 'sales'), userController.getAllUsers);
+// Get all users (Admin, Sales, and Marketing read-only lookup for telemetry/campaigns)
+router.get('/', authorizeRoles('admin', 'sales', 'marketing'), userController.getAllUsers);
 
-// Daily Lead & KYC Stats (Admin and Sales)
-router.get('/daily-lead-stats', authorizeRoles('admin', 'sales'), userController.getDailyLeadStats);
+// Daily Lead & KYC Stats (Admin, Sales, and Marketing)
+router.get('/daily-lead-stats', authorizeRoles('admin', 'sales', 'marketing'), userController.getDailyLeadStats);
 
 // Customer Directory Overview Stats (Admin only)
 router.get('/customer-directory-stats', authorizeRoles('admin'), userController.getCustomerDirectoryStats);
@@ -145,8 +145,8 @@ router.post(
 // Bulk Create Users (Admin and Sales)
 router.post('/bulk', authorizeRoles('admin', 'sales'), userController.adminBulkCreateUsers);
 
-// Get specific user (Admin and Sales)
-router.get('/:userId', authorizeRoles('admin', 'sales'), userController.getUserById);
+// Get specific user (Admin, Sales, and Marketing)
+router.get('/:userId', authorizeRoles('admin', 'sales', 'marketing'), userController.getUserById);
 
 // Update KYC Status (Approve/Reject) (Admin and Sales)
 router.put('/:userId/kyc', authorizeRoles('admin', 'sales'), userController.adminUpdateKycStatus);

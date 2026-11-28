@@ -5,7 +5,7 @@ const { redisClient } = require('../config/redis');
 const { broadcastToRoles } = require('../services/websocket.service');
 const { autoIdentifyDistrict, autoIdentifyState } = require('../utils/geoNormalizer');
 
-const STAFF_ROLES = ['admin', 'sales', 'staff', 'agent', 'manager', 'telecaller'];
+const STAFF_ROLES = ['admin', 'sales', 'marketing', 'staff', 'agent', 'manager', 'telecaller'];
 const STAFF_ROLES_SET = new Set(STAFF_ROLES);
 
 const STAFF_EVENT_TYPES = [
@@ -183,7 +183,7 @@ exports.createEvent = async (req, res, next) => {
       await redisClient.zAdd('presence_active_zset', { score: Date.now(), value: String(user) });
 
       // Notify Admins & Sales via WebSocket
-      broadcastToRoles(['admin', 'sales'], { type: 'PRESENCE_UPDATE', data: { user, ...presenceData } });
+      broadcastToRoles(['admin', 'sales', 'marketing'], { type: 'PRESENCE_UPDATE', data: { user, ...presenceData } });
     }
 
     // Increment Redis daily events count (customer events only)
@@ -262,7 +262,7 @@ exports.handleHeartbeat = async (req, res, next) => {
       await redisClient.expire(presenceKey, 120); // Longer expiry to survive idle heartbeat (60s)
       await redisClient.zAdd('presence_active_zset', { score: Date.now(), value: String(user) });
 
-      broadcastToRoles(['admin', 'sales'], {
+      broadcastToRoles(['admin', 'sales', 'marketing'], {
         type: 'PRESENCE_UPDATE',
         data: { user, ...presenceData }
       });
@@ -370,7 +370,7 @@ exports.ingestBatch = async (req, res, next) => {
           await redisClient.expire(presenceKey, 120);
           await redisClient.zAdd('presence_active_zset', { score: Date.now(), value: String(user) });
 
-          broadcastToRoles(['admin', 'sales'], {
+          broadcastToRoles(['admin', 'sales', 'marketing'], {
             type: 'PRESENCE_UPDATE',
             data: { user, ...presenceData }
           });

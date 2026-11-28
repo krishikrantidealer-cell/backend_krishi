@@ -51,7 +51,7 @@ const { authorizeRoles } = require('../middlewares/auth.middleware');
 router.post('/admin/create', authorizeRoles('admin', 'sales'), orderController.adminCreateOrder);
 
 // Get all orders (Admin and Sales)
-router.get('/admin/all', authorizeRoles('admin', 'sales'), orderController.getAllOrders);
+router.get('/admin/all', authorizeRoles('admin', 'sales', 'marketing'), orderController.getAllOrders);
 
 // Update order status (Admin only)
 router.put('/admin/:id/status', authorizeRoles('admin'), orderController.adminUpdateOrderStatus);

@@ -18,7 +18,7 @@ class AuthController {
         return res.status(403).json({ success: false, message: 'Your account has been blocked. Access denied.' });
       }
 
-      if (user.role !== 'admin' && user.role !== 'sales') {
+      if (!['admin', 'sales', 'marketing'].includes(user.role)) {
         return res.status(403).json({ success: false, message: 'Access denied: insufficient permissions' });
       }
 

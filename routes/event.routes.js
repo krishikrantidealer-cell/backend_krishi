@@ -14,20 +14,20 @@ router.post('/batch', eventController.ingestBatch);
 // Real-time Heartbeat (High frequency, Redis only)
 router.post('/heartbeat', eventController.handleHeartbeat);
 
-// --- Dashboard Queries (Admin Only) ---
+// --- Dashboard Queries (Admin, Sales, Marketing) ---
 // Fetch historical logs
-router.get('/', protect, authorizeRoles('admin', 'sales'), eventController.getEvents);
+router.get('/', protect, authorizeRoles('admin', 'sales', 'marketing'), eventController.getEvents);
 
 // Fetch real-time active users presence
-router.get('/realtime', protect, authorizeRoles('admin', 'sales'), eventController.getActiveUsers);
+router.get('/realtime', protect, authorizeRoles('admin', 'sales', 'marketing'), eventController.getActiveUsers);
 
 // Fetch conversion funnel analytics
-router.get('/funnel', protect, authorizeRoles('admin'), eventController.getFunnelData);
+router.get('/funnel', protect, authorizeRoles('admin', 'marketing'), eventController.getFunnelData);
 
 // Fetch overall summary metrics (high priority, failed payments, abandoned carts)
-router.get('/summary-metrics', protect, authorizeRoles('admin', 'sales'), eventController.getSummaryMetrics);
+router.get('/summary-metrics', protect, authorizeRoles('admin', 'sales', 'marketing'), eventController.getSummaryMetrics);
 
 // Fetch regional district intelligence & revenue analytics
-router.get('/district-analytics', protect, authorizeRoles('admin', 'sales'), eventController.getDistrictAnalytics);
+router.get('/district-analytics', protect, authorizeRoles('admin', 'sales', 'marketing'), eventController.getDistrictAnalytics);
 
 module.exports = router;

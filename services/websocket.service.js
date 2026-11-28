@@ -153,7 +153,7 @@ const initWebSocket = (server) => {
         }
 
         if (data.type === 'PRESENCE_UPDATE' && ws.userId) {
-          const isStaffRole = ['admin', 'sales', 'staff', 'agent', 'manager', 'telecaller'].includes(
+          const isStaffRole = ['admin', 'sales', 'marketing', 'staff', 'agent', 'manager', 'telecaller'].includes(
             String(ws.userRole || '').toLowerCase()
           );
           if (!isStaffRole && redisClient && redisClient.isOpen) {
@@ -173,8 +173,8 @@ const initWebSocket = (server) => {
             await redisClient.expire(presenceKey, 120);
             await redisClient.zAdd('presence_active_zset', { score: Date.now(), value: String(ws.userId) });
 
-            // Targeted Broadcast: Send genuine buyer presence to Admins and Sales agents across all instances
-            broadcastToRoles(['admin', 'sales'], {
+            // Targeted Broadcast: Send genuine buyer presence to Admins, Sales, and Marketing across all instances
+            broadcastToRoles(['admin', 'sales', 'marketing'], {
               type: 'PRESENCE_UPDATE',
               data: {
                 user: ws.userId,
