@@ -269,6 +269,20 @@ exports.triggerSegmentNow = async (req, res) => {
 
     const result = await pushNotificationSegmentService.sendToSegment(segment.toUpperCase(), customTemplate);
 
+    try {
+      const notificationService = require('../services/notification.service');
+      notificationService.notifyMarketing(
+        `Push Campaign Dispatched (${segment.toUpperCase()}) 📣`,
+        `Segment ${segment.toUpperCase()} broadcast sent to ${result.count} eligible dealers.`,
+        '/push-campaigns',
+        {
+          type: 'campaign_sent',
+          priority: 'normal',
+          metadata: { segment: segment.toUpperCase(), dispatchedCount: result.count }
+        }
+      ).catch(() => {});
+    } catch (_) {}
+
     return res.status(200).json({
       success: true,
       segment: segment.toUpperCase(),

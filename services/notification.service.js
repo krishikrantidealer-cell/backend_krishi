@@ -296,6 +296,25 @@ class NotificationService {
     );
   }
 
+  async notifyRoles(roles, title, body, actionRoute, options = {}) {
+    try {
+      const roleList = Array.isArray(roles) ? roles : [roles];
+      const recipients = await User.find({
+        role: { $in: roleList },
+        isDeleted: { $ne: true }
+      });
+      for (const user of recipients) {
+        await this.sendUtilityNotification(user._id, title, body, actionRoute, null, undefined, undefined, options);
+      }
+    } catch (error) {
+      console.error('Error in notifyRoles:', error);
+    }
+  }
+
+  async notifyMarketing(title, body, actionRoute = '/marketing', options = {}) {
+    return this.notifyRoles(['marketing'], title, body, actionRoute, options);
+  }
+
   async notifyAdmins(title, body, actionRoute, options = {}) {
     try {
       const admins = await User.find({ role: 'admin', isDeleted: { $ne: true } });

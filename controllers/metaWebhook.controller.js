@@ -339,7 +339,7 @@ async function createOrUpdateProspectUser(data) {
     }
   }
 
-  // Real-time broadcast to KD Panel (Sales & Admin screens update immediately)
+  // Real-time broadcast to KD Panel (Admin, Sales & Marketing screens update immediately)
   try {
     broadcastToRoles(['admin', 'sales', 'marketing'], {
       type: 'LEADS_UPDATE',
@@ -350,6 +350,30 @@ async function createOrUpdateProspectUser(data) {
   } catch (wsErr) {
     console.error('[Meta Webhook] Failed to broadcast WebSocket update:', wsErr.message);
   }
+
+  // Persistent + real-time Marketing alert for new Meta Ads leads (with 2-min anti-spam cooldown)
+  try {
+    const notificationService = require('../services/notification.service');
+    const leadLabel = [user.firstName, user.lastName].filter(Boolean).join(' ') || user.shopName || user.phoneNumber || 'New Lead';
+    notificationService.notifyMarketing(
+      'New Meta Ads Lead Captured 🎯',
+      `${leadLabel} (${user.phoneNumber || 'No phone'}) submitted a Meta Lead Form.`,
+      '/marketing',
+      {
+        type: 'marketing_lead',
+        priority: 'high',
+        entityId: user._id.toString(),
+        entityType: 'lead',
+        metadata: {
+          customerName: leadLabel,
+          phoneNumber: user.phoneNumber,
+          shopName: user.shopName,
+          source: 'meta_ads'
+        },
+        cooldownMinutes: 2
+      }
+    ).catch(() => {});
+  } catch (_) {}
 
   return user;
 }
