@@ -644,6 +644,7 @@ class AttributionService {
 
     const activeCampaigns = liveOnly ? await this.getActiveMetaCampaigns() : { ids: null, map: new Map() };
     const allowedActiveIds = new Set();
+    const activeAppCampaignIds = [];
     if (liveOnly && activeCampaigns.map.size > 0) {
       for (const [cid, cinfo] of activeCampaigns.map.entries()) {
         const nameLower = String(cinfo.name || '').toLowerCase();
@@ -665,8 +666,15 @@ class AttributionService {
         }
         if (channel && channel !== 'all' && ch !== channel) continue;
         allowedActiveIds.add(cid);
+        if (ch === 'app_install') {
+          activeAppCampaignIds.push(cid);
+        }
       }
     }
+
+    const singleActiveAppCampaignId =
+      activeAppCampaignIds.length === 1 ? activeAppCampaignIds[0] : null;
+    const META_APP_INSTALL_SOURCES = new Set(['Facebook App Ads', 'Instagram App Ads']);
 
     const touchQuery = { touchedAt: { $gte: start, $lte: end } };
     const spendQuery = { date: { $gte: startStr, $lte: endStr } };
@@ -675,7 +683,11 @@ class AttributionService {
       spendQuery.channel = channel;
     }
     if (liveOnly && allowedActiveIds.size > 0) {
-      touchQuery.metaCampaignId = { $in: Array.from(allowedActiveIds) };
+      const touchIds = Array.from(allowedActiveIds);
+      if (singleActiveAppCampaignId) {
+        touchIds.push('Facebook App Ads', 'Instagram App Ads');
+      }
+      touchQuery.metaCampaignId = { $in: touchIds };
       spendQuery.campaignId = { $in: Array.from(allowedActiveIds) };
     }
 
@@ -689,7 +701,14 @@ class AttributionService {
     const rawLeadsByBucket = new Map();
 
     for (const t of touches) {
-      const bucketKey = t.metaCampaignId || t.metaCampaignName || `${t.channel}_unattributed`;
+      let bucketKey = t.metaCampaignId || t.metaCampaignName || `${t.channel}_unattributed`;
+      if (
+        singleActiveAppCampaignId &&
+        t.channel === 'app_install' &&
+        META_APP_INSTALL_SOURCES.has(bucketKey)
+      ) {
+        bucketKey = singleActiveAppCampaignId;
+      }
       rawLeadsByBucket.set(bucketKey, (rawLeadsByBucket.get(bucketKey) || 0) + 1);
 
       const leadKey = t.lead ? String(t.lead) : (t.phone || String(t._id));
