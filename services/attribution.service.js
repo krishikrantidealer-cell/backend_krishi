@@ -364,7 +364,9 @@ class AttributionService {
       };
     }
 
-    const since = startDate || new Date(Date.now() - 120 * 86400000).toISOString().slice(0, 10);
+    const maxLookback = new Date(Date.now() - 180 * 86400000).toISOString().slice(0, 10);
+    let since = startDate || maxLookback;
+    if (since < maxLookback) since = maxLookback;
     const until = endDate || new Date().toISOString().slice(0, 10);
 
     try {
@@ -490,89 +492,93 @@ class AttributionService {
       const ads = adsRes.data?.data || [];
 
       for (const ad of ads) {
-        let nextUrl = `https://graph.facebook.com/v20.0/${ad.id}/leads`;
-        let params = {
-          access_token: token,
-          fields: 'id,created_time,field_data,campaign_id,adset_id,ad_id,form_id,platform',
-          limit: 100
-        };
-        let page = 0;
-        const touchOps = [];
-        const userOps = [];
+        try {
+          let nextUrl = `https://graph.facebook.com/v20.0/${ad.id}/leads`;
+          let params = {
+            access_token: token,
+            fields: 'id,created_time,field_data,campaign_id,adset_id,ad_id,form_id,platform',
+            limit: 100
+          };
+          let page = 0;
+          const touchOps = [];
+          const userOps = [];
 
-        while (nextUrl && page < maxPagesPerAd) {
-          page++;
-          const leadsRes = await axios.get(nextUrl, { params, timeout: 20000 });
-          const leads = leadsRes.data?.data || [];
+          while (nextUrl && page < maxPagesPerAd) {
+            page++;
+            const leadsRes = await axios.get(nextUrl, { params, timeout: 20000 });
+            const leads = leadsRes.data?.data || [];
 
-          for (const lead of leads) {
-            const fields = lead.field_data || [];
-            const phoneField = fields.find(fd => {
-              const n = String(fd.name || '').toLowerCase();
-              return n.includes('phone') || n.includes('mobile') || n.includes('फ़ोन') || n.includes('फोन') || n.includes('मोबाइल');
-            });
-            const rawPhone = phoneField?.values?.[0] ? String(phoneField.values[0]).trim() : '';
-            const digits = rawPhone.replace(/\D/g, '');
-            const phone10 = digits.length >= 10 ? digits.slice(-10) : '';
-            if (!phone10) continue;
+            for (const lead of leads) {
+              const fields = lead.field_data || [];
+              const phoneField = fields.find(fd => {
+                const n = String(fd.name || '').toLowerCase();
+                return n.includes('phone') || n.includes('mobile') || n.includes('फ़ोन') || n.includes('फोन') || n.includes('मोबाइल');
+              });
+              const rawPhone = phoneField?.values?.[0] ? String(phoneField.values[0]).trim() : '';
+              const digits = rawPhone.replace(/\D/g, '');
+              const phone10 = digits.length >= 10 ? digits.slice(-10) : '';
+              if (!phone10) continue;
 
-            const e164 = `+91${phone10}`;
-            const matchedUserId = phoneToUserId.get(phone10) || null;
-            const formAnswers = fields.map(f => `${f.name}: ${(f.values || []).join(', ')}`);
-            const quality = this.classifyLeadQuality(formAnswers, '');
+              const e164 = `+91${phone10}`;
+              const matchedUserId = phoneToUserId.get(phone10) || null;
+              const formAnswers = fields.map(f => `${f.name}: ${(f.values || []).join(', ')}`);
+              const quality = this.classifyLeadQuality(formAnswers, '');
 
-            touchOps.push({
-              updateOne: {
-                filter: { clickIdentifier: String(lead.id), channel: 'lead_form' },
-                update: {
-                  $set: {
-                    lead: matchedUserId || undefined,
-                    phone: e164,
-                    channel: 'lead_form',
-                    metaCampaignId: String(lead.campaign_id || camp.id),
-                    metaCampaignName: camp.name,
-                    metaAdsetId: lead.adset_id ? String(lead.adset_id) : undefined,
-                    metaAdId: lead.ad_id ? String(lead.ad_id) : String(ad.id),
-                    metaAdName: ad.name || '',
-                    metaFormId: lead.form_id ? String(lead.form_id) : undefined,
-                    platform: lead.platform === 'ig' ? 'ig' : (lead.platform === 'fb' ? 'fb' : 'unknown'),
-                    formAnswers,
-                    touchedAt: lead.created_time ? new Date(lead.created_time) : new Date()
-                  }
-                },
-                upsert: true
-              }
-            });
-
-            if (matchedUserId) {
-              matchedUsers++;
-              userOps.push({
+              touchOps.push({
                 updateOne: {
-                  filter: { _id: matchedUserId },
+                  filter: { clickIdentifier: String(lead.id), channel: 'lead_form' },
                   update: {
                     $set: {
-                      sourceChannel: 'lead_form',
+                      lead: matchedUserId || undefined,
+                      phone: e164,
+                      channel: 'lead_form',
                       metaCampaignId: String(lead.campaign_id || camp.id),
-                      metaLeadId: String(lead.id),
-                      ...(quality.leadQuality !== 'unknown' ? { leadQuality: quality.leadQuality } : {}),
-                      ...(quality.disqualificationReason ? { disqualificationReason: quality.disqualificationReason } : {})
+                      metaCampaignName: camp.name,
+                      metaAdsetId: lead.adset_id ? String(lead.adset_id) : undefined,
+                      metaAdId: lead.ad_id ? String(lead.ad_id) : String(ad.id),
+                      metaAdName: ad.name || '',
+                      metaFormId: lead.form_id ? String(lead.form_id) : undefined,
+                      platform: lead.platform === 'ig' ? 'ig' : (lead.platform === 'fb' ? 'fb' : 'unknown'),
+                      formAnswers,
+                      touchedAt: lead.created_time ? new Date(lead.created_time) : new Date()
                     }
-                  }
+                  },
+                  upsert: true
                 }
               });
+
+              if (matchedUserId) {
+                matchedUsers++;
+                userOps.push({
+                  updateOne: {
+                    filter: { _id: matchedUserId },
+                    update: {
+                      $set: {
+                        sourceChannel: 'lead_form',
+                        metaCampaignId: String(lead.campaign_id || camp.id),
+                        metaLeadId: String(lead.id),
+                        ...(quality.leadQuality !== 'unknown' ? { leadQuality: quality.leadQuality } : {}),
+                        ...(quality.disqualificationReason ? { disqualificationReason: quality.disqualificationReason } : {})
+                      }
+                    }
+                  }
+                });
+              }
             }
+
+            nextUrl = leadsRes.data?.paging?.next || null;
+            params = undefined;
           }
 
-          nextUrl = leadsRes.data?.paging?.next || null;
-          params = undefined;
-        }
-
-        if (touchOps.length > 0) {
-          await LeadTouch.bulkWrite(touchOps, { ordered: false });
-          syncedTouches += touchOps.length;
-        }
-        if (userOps.length > 0) {
-          await User.bulkWrite(userOps, { ordered: false });
+          if (touchOps.length > 0) {
+            await LeadTouch.bulkWrite(touchOps, { ordered: false });
+            syncedTouches += touchOps.length;
+          }
+          if (userOps.length > 0) {
+            await User.bulkWrite(userOps, { ordered: false });
+          }
+        } catch (adErr) {
+          console.warn(`[Attribution] Skipping leads sync for ad ${ad.id}:`, adErr.response?.data?.error?.message || adErr.message);
         }
       }
     }

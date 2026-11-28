@@ -25,7 +25,10 @@ exports.syncAdSpend = async (req, res, next) => {
     const spendResult = await attributionService.syncDailyAdSpend({ startDate, endDate });
     const leadsResult = spendResult.skipped
       ? { syncedTouches: 0, matchedUsers: 0 }
-      : await attributionService.syncMetaCampaignLeads({ maxPagesPerAd: 15 });
+      : await attributionService.syncMetaCampaignLeads({ maxPagesPerAd: 3 }).catch(() => ({
+          syncedTouches: 0,
+          matchedUsers: 0
+        }));
     res.json({ success: true, ...spendResult, ...leadsResult });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
