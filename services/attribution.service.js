@@ -855,6 +855,17 @@ class AttributionService {
         acc.totalGmv += c.totalGmv;
         acc.deliveredGmv += c.deliveredGmv;
         acc.rtoOrders += c.rtoOrders;
+        if (c.qualityBreakdown) {
+          acc.qualityBreakdown.qualified += c.qualityBreakdown.qualified || 0;
+          acc.qualityBreakdown.low_intent += c.qualityBreakdown.low_intent || 0;
+          acc.qualityBreakdown.unqualified += c.qualityBreakdown.unqualified || 0;
+          acc.qualityBreakdown.unknown += c.qualityBreakdown.unknown || 0;
+        }
+        if (c.disqualificationReasons) {
+          for (const [reason, cnt] of Object.entries(c.disqualificationReasons)) {
+            acc.disqualificationReasons[reason] = (acc.disqualificationReasons[reason] || 0) + cnt;
+          }
+        }
         return acc;
       },
       {
@@ -866,12 +877,20 @@ class AttributionService {
         ordersCount: 0,
         totalGmv: 0,
         deliveredGmv: 0,
-        rtoOrders: 0
+        rtoOrders: 0,
+        qualityBreakdown: { qualified: 0, low_intent: 0, unqualified: 0, unknown: 0 },
+        disqualificationReasons: {}
       }
     );
 
+    const latestSpendDoc = spends.reduce((latest, s) => {
+      const ts = s.updatedAt ? new Date(s.updatedAt).getTime() : 0;
+      return ts > latest ? ts : latest;
+    }, 0);
+
     return {
       range: { startDate: startStr, endDate: endStr, channel },
+      lastSyncedAt: latestSpendDoc ? new Date(latestSpendDoc).toISOString() : new Date().toISOString(),
       totals: {
         ...totals,
         cpl: totals.uniqueLeads > 0 ? Math.round(totals.spend / totals.uniqueLeads) : 0,
