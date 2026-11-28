@@ -464,8 +464,12 @@ class AttributionService {
             .lean()
         : [],
       leadIds.length > 0
-        ? Order.find({ user: { $in: leadIds }, status: { $ne: 'cancelled' } })
-            .select('user totalAmount status createdAt')
+        ? Order.find({
+            user: { $in: leadIds },
+            orderStatus: { $ne: 'Cancelled' },
+            status: { $ne: 'cancelled' }
+          })
+            .select('user totalAmount orderStatus status placedAt createdAt')
             .lean()
         : []
     ]);
@@ -544,16 +548,17 @@ class AttributionService {
         }
 
         const userOrders = ordersByUser.get(String(u._id)) || [];
-        const validOrders = userOrders.filter(o => new Date(o.createdAt) >= new Date(touch.touchedAt));
+        const validOrders = userOrders.filter(o => new Date(o.placedAt || o.createdAt) >= new Date(touch.touchedAt));
         if (validOrders.length > 0) {
           b.orderingDealers += 1;
           b.ordersCount += validOrders.length;
           for (const o of validOrders) {
             const amt = Number(o.totalAmount || 0);
+            const st = String(o.orderStatus || o.status || '').toLowerCase();
             b.totalGmv += amt;
-            if (o.status === 'delivered') {
+            if (st === 'delivered') {
               b.deliveredGmv += amt;
-            } else if (o.status === 'rto' || o.status === 'returned') {
+            } else if (st === 'rto' || st === 'returned') {
               b.rtoOrders += 1;
             }
           }
@@ -611,6 +616,123 @@ class AttributionService {
       },
       campaigns: campaigns.sort((a, b) => b.uniqueLeads - a.uniqueLeads)
     };
+  }
+
+  /**
+   * Backfill historical User records into LeadTouch so existing campaigns,
+   * KYC verified dealers, and orders appear in Attribution & ROAS immediately.
+   */
+  async backfillHistoricalTouches() {
+    const users = await User.find({
+      role: 'user',
+      isDeleted: { $ne: true },
+      firstTouchId: { $in: [null, undefined] }
+    })
+      .select('_id phoneNumber source sourceChannel metaCampaignId metaAdsetId metaAdId metaFormId metaLeadId ctwaClid notes businessType createdAt kycStatus isKycComplete kycApprovedAt')
+      .lean();
+
+    if (users.length === 0) {
+      return { backfilled: 0 };
+    }
+
+    const touchOps = [];
+    const userUpdates = [];
+
+    for (const u of users) {
+      const src = String(u.source || 'App');
+      let channel = 'organic';
+      let platform = 'unknown';
+      let campaignName = src;
+
+      if (src === 'Meta Lead Form') {
+        channel = 'lead_form';
+        campaignName = u.metaCampaignId || 'Meta Lead Form';
+      } else if (src === 'Apps.facebook.com Ads') {
+        channel = 'app_install';
+        platform = 'fb';
+        campaignName = 'Facebook App Ads';
+      } else if (src === 'Apps.instagram.com Ads') {
+        channel = 'app_install';
+        platform = 'ig';
+        campaignName = 'Instagram App Ads';
+      } else if (src === 'Google Ads') {
+        channel = 'app_install';
+        platform = 'android';
+        campaignName = 'Google Ads';
+      } else if (src === 'KD Panel') {
+        channel = 'referral';
+        campaignName = 'KD Panel Direct';
+      } else if (src === 'App') {
+        channel = 'app_install';
+        platform = 'android';
+        campaignName = 'Krishi Dealer App';
+      } else {
+        channel = 'organic';
+        campaignName = 'Organic';
+      }
+
+      const touchId = new (require('mongoose').Types.ObjectId)();
+      const quality = u.notes ? this.classifyLeadQuality([u.notes], u.businessType || '') : { leadQuality: 'unknown' };
+
+      touchOps.push({
+        _id: touchId,
+        lead: u._id,
+        phone: normalizePhoneE164(u.phoneNumber),
+        channel,
+        metaCampaignId: u.metaCampaignId || campaignName,
+        metaCampaignName: campaignName,
+        metaAdsetId: u.metaAdsetId || undefined,
+        metaAdId: u.metaAdId || undefined,
+        metaFormId: u.metaFormId || undefined,
+        platform,
+        clickIdentifier: u.metaLeadId || u.ctwaClid || undefined,
+        touchedAt: u.createdAt || new Date()
+      });
+
+      userUpdates.push({
+        updateOne: {
+          filter: { _id: u._id },
+          update: {
+            $set: {
+              firstTouchId: touchId,
+              sourceChannel: channel === 'referral' ? 'panel' : channel,
+              ...(quality.leadQuality !== 'unknown' ? { leadQuality: quality.leadQuality } : {}),
+              ...(quality.disqualificationReason ? { disqualificationReason: quality.disqualificationReason } : {}),
+              ...(u.kycStatus === 'verified' || u.isKycComplete ? { currentStage: 'KYC verified' } : {})
+            }
+          }
+        }
+      });
+    }
+
+    if (touchOps.length > 0) {
+      await LeadTouch.insertMany(touchOps, { ordered: false });
+    }
+    if (userUpdates.length > 0) {
+      await User.bulkWrite(userUpdates, { ordered: false });
+    }
+
+    return { backfilled: touchOps.length };
+  }
+
+  /**
+   * Upsert manual/CSV daily or campaign ad spend.
+   */
+  async upsertAdSpend({ date, channel = 'lead_form', campaignId, campaignName, spend = 0, leads = 0 }) {
+    const targetDate = date || new Date().toISOString().slice(0, 10);
+    const cid = campaignId || campaignName || 'Meta Lead Form';
+    return AdSpendDaily.findOneAndUpdate(
+      { date: targetDate, campaignId: cid, adsetId: '', adId: '' },
+      {
+        $set: {
+          channel,
+          campaignName: campaignName || cid,
+          spend: Number(spend || 0),
+          leads: Number(leads || 0)
+        }
+      },
+      { upsert: true, new: true }
+    );
   }
 }
 

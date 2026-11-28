@@ -27,6 +27,24 @@ exports.syncAdSpend = async (req, res, next) => {
   }
 };
 
+exports.backfillTouches = async (req, res, next) => {
+  try {
+    const result = await attributionService.backfillHistoricalTouches();
+    res.json({ success: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.upsertAdSpend = async (req, res, next) => {
+  try {
+    const doc = await attributionService.upsertAdSpend(req.body || {});
+    res.json({ success: true, spend: doc });
+  } catch (error) {
+    next(error);
+  }
+};
+
 exports.recordAppInstallReferrer = async (req, res, next) => {
   try {
     const {

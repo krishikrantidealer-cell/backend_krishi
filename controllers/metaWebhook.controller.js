@@ -381,8 +381,11 @@ async function createOrUpdateProspectUser(data) {
       phone: cleanPhone,
       channel: 'lead_form',
       metaCampaignId: data.metaMeta?.campaignId,
+      metaCampaignName: data.metaMeta?.campaignName || data.metaMeta?.formName,
       metaAdsetId: data.metaMeta?.adsetId,
+      metaAdsetName: data.metaMeta?.adsetName,
       metaAdId: data.metaMeta?.adId,
+      metaAdName: data.metaMeta?.adName,
       metaFormId: data.metaMeta?.formId,
       platform: data.metaMeta?.platform || 'unknown',
       clickIdentifier: data.metaMeta?.leadgenId,
@@ -469,7 +472,7 @@ async function syncRecentMetaLeads(options = {}) {
 
     for (const form of activeForms) {
       try {
-        let url = `https://graph.facebook.com/v20.0/${form.id}/leads?access_token=${pageAccessToken}&limit=${Math.min(limitPerForm, 100)}`;
+        let url = `https://graph.facebook.com/v20.0/${form.id}/leads?fields=id,created_time,field_data,ad_id,adset_id,campaign_id,form_id,platform&access_token=${pageAccessToken}&limit=${Math.min(limitPerForm, 100)}`;
         let pagesCount = 0;
         const maxPages = options.maxPages || 2;
 
@@ -492,13 +495,23 @@ async function syncRecentMetaLeads(options = {}) {
             const cleanPhone = normalizePhoneNumber(rawVal);
             if (!cleanPhone || cleanPhone.length < 10) continue;
 
+            const metaMeta = {
+              leadgenId: lead.id || '',
+              adId: lead.ad_id || '',
+              adsetId: lead.adset_id || '',
+              campaignId: lead.campaign_id || '',
+              formId: lead.form_id || form.id || '',
+              formName: form.name || '',
+              platform: lead.platform === 'ig' ? 'ig' : (lead.platform === 'fb' ? 'fb' : 'unknown'),
+              rawPayload: lead
+            };
+
             const existingUser = await User.findOne({ phoneNumber: cleanPhone });
             if (!existingUser) {
-              await processLeadFields(lead.field_data, lead.created_time);
+              await processLeadFields(lead.field_data, lead.created_time, metaMeta);
               totalNew++;
-            } else if (!existingUser.notes || !existingUser.notes.includes('Meta Lead Form Submission')) {
-              // Existing user without Meta form details: enrich them
-              await processLeadFields(lead.field_data, lead.created_time);
+            } else if (!existingUser.firstTouchId || !existingUser.metaCampaignId || !existingUser.notes || !existingUser.notes.includes('Meta Lead Form Submission')) {
+              await processLeadFields(lead.field_data, lead.created_time, metaMeta);
               totalUpdated++;
             }
           }
