@@ -715,7 +715,7 @@ class AttributionService {
             orderStatus: { $ne: 'Cancelled' },
             status: { $ne: 'cancelled' }
           })
-            .select('user totalAmount orderStatus status placedAt createdAt')
+            .select('user totalAmount orderStatus status orderSource source placedAt createdAt')
             .lean()
         : []
     ]);
@@ -743,7 +743,11 @@ class AttributionService {
           contactedLeads: 0,
           qualifiedDealers: 0,
           orderingDealers: 0,
+          repeatBuyers: 0,
           ordersCount: 0,
+          appOrders: 0,
+          panelOrders: 0,
+          crossChannelBuyers: 0,
           totalGmv: 0,
           deliveredGmv: 0,
           rtoOrders: 0,
@@ -815,16 +819,32 @@ class AttributionService {
         const validOrders = userOrders.filter(o => new Date(o.placedAt || o.createdAt) >= new Date(touch.touchedAt));
         if (validOrders.length > 0) {
           b.orderingDealers += 1;
+          if (validOrders.length > 1) {
+            b.repeatBuyers += 1;
+          }
           b.ordersCount += validOrders.length;
+          let hasApp = false;
+          let hasPanel = false;
           for (const o of validOrders) {
             const amt = Number(o.totalAmount || 0);
             const st = String(o.orderStatus || o.status || '').toLowerCase();
+            const src = String(o.orderSource || o.source || '').toLowerCase();
+            if (src === 'app') {
+              b.appOrders += 1;
+              hasApp = true;
+            } else if (src === 'panel') {
+              b.panelOrders += 1;
+              hasPanel = true;
+            }
             b.totalGmv += amt;
             if (st === 'delivered') {
               b.deliveredGmv += amt;
             } else if (st.includes('rto') || st.includes('returned')) {
               b.rtoOrders += 1;
             }
+          }
+          if (hasApp && hasPanel) {
+            b.crossChannelBuyers += 1;
           }
         }
       }
@@ -841,6 +861,7 @@ class AttributionService {
         firstOrderPct: effectiveLeads > 0 ? Number(((b.orderingDealers / effectiveLeads) * 100).toFixed(1)) : 0,
         dealerToOrderPct: b.qualifiedDealers > 0 ? Number(((b.orderingDealers / b.qualifiedDealers) * 100).toFixed(1)) : 0,
         costPerOrderingDealer: b.orderingDealers > 0 ? Math.round(b.spend / b.orderingDealers) : 0,
+        repeatRatePct: b.orderingDealers > 0 ? Number(((b.repeatBuyers / b.orderingDealers) * 100).toFixed(1)) : 0,
         deliveredRoas: b.spend > 0 ? Number((b.deliveredGmv / b.spend).toFixed(2)) : 0,
         rtoPct: b.ordersCount > 0 ? Number(((b.rtoOrders / b.ordersCount) * 100).toFixed(1)) : 0
       };
@@ -857,7 +878,11 @@ class AttributionService {
         acc.uniqueLeads += c.uniqueLeads;
         acc.qualifiedDealers += c.qualifiedDealers;
         acc.orderingDealers += c.orderingDealers;
+        acc.repeatBuyers += c.repeatBuyers || 0;
         acc.ordersCount += c.ordersCount;
+        acc.appOrders += c.appOrders || 0;
+        acc.panelOrders += c.panelOrders || 0;
+        acc.crossChannelBuyers += c.crossChannelBuyers || 0;
         acc.totalGmv += c.totalGmv;
         acc.deliveredGmv += c.deliveredGmv;
         acc.rtoOrders += c.rtoOrders;
@@ -880,7 +905,11 @@ class AttributionService {
         uniqueLeads: 0,
         qualifiedDealers: 0,
         orderingDealers: 0,
+        repeatBuyers: 0,
         ordersCount: 0,
+        appOrders: 0,
+        panelOrders: 0,
+        crossChannelBuyers: 0,
         totalGmv: 0,
         deliveredGmv: 0,
         rtoOrders: 0,
@@ -904,6 +933,7 @@ class AttributionService {
         costPerQualifiedDealer: totals.qualifiedDealers > 0 ? Math.round(totals.spend / totals.qualifiedDealers) : 0,
         dealerToOrderPct: totals.qualifiedDealers > 0 ? Number(((totals.orderingDealers / totals.qualifiedDealers) * 100).toFixed(1)) : 0,
         costPerOrderingDealer: totals.orderingDealers > 0 ? Math.round(totals.spend / totals.orderingDealers) : 0,
+        repeatRatePct: totals.orderingDealers > 0 ? Number(((totals.repeatBuyers / totals.orderingDealers) * 100).toFixed(1)) : 0,
         deliveredRoas: totals.spend > 0 ? Number((totals.deliveredGmv / totals.spend).toFixed(2)) : 0,
         rtoPct: totals.ordersCount > 0 ? Number(((totals.rtoOrders / totals.ordersCount) * 100).toFixed(1)) : 0
       },
