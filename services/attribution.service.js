@@ -8,6 +8,7 @@ const Order = require('../models/Order');
 
 const adHierarchyCache = new Map();
 let activeCampaignsCache = { ids: null, map: new Map(), expiresAt: 0 };
+let lastTodaySpendSyncAt = 0;
 
 function sha256(value) {
   if (!value) return undefined;
@@ -210,6 +211,11 @@ class AttributionService {
         }
       }
 
+      try {
+        const { broadcastToRoles } = require('./websocket.service');
+        broadcastToRoles(['admin', 'marketing'], { type: 'ATTRIBUTION_UPDATE', channel: touch.channel });
+      } catch (_) {}
+
       return touch;
     } catch (err) {
       console.error('[Attribution] recordTouch error:', err.message);
@@ -264,6 +270,11 @@ class AttributionService {
           await eventDoc.save();
         }
       }
+
+      try {
+        const { broadcastToRoles } = require('./websocket.service');
+        broadcastToRoles(['admin', 'marketing'], { type: 'ATTRIBUTION_UPDATE', stage });
+      } catch (_) {}
 
       return eventDoc;
     } catch (err) {
@@ -616,6 +627,14 @@ class AttributionService {
 
     const startStr = start.toISOString().slice(0, 10);
     const endStr = end.toISOString().slice(0, 10);
+    const todayStr = new Date().toISOString().slice(0, 10);
+
+    // Auto-sync today + yesterday Meta spend every 3 minutes when viewing current dates
+    if (endStr >= todayStr && Date.now() - lastTodaySpendSyncAt > 3 * 60 * 1000) {
+      lastTodaySpendSyncAt = Date.now();
+      const yestStr = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+      await this.syncDailyAdSpend({ startDate: yestStr, endDate: todayStr }).catch(() => {});
+    }
 
     const activeCampaigns = liveOnly ? await this.getActiveMetaCampaigns() : { ids: null, map: new Map() };
     const allowedActiveIds = new Set();

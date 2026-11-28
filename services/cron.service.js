@@ -539,6 +539,14 @@ const runMetaLeadSync = async (options = {}) => {
       maxPages: options.maxPages || 2,
       deepSync: options.deepSync || false
     });
+    const attributionService = require('./attribution.service');
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const yestStr = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    const spendSync = await attributionService.syncDailyAdSpend({ startDate: yestStr, endDate: todayStr });
+    if (spendSync && !spendSync.skipped) {
+      const { broadcastToRoles } = require('./websocket.service');
+      broadcastToRoles(['admin', 'marketing'], { type: 'ATTRIBUTION_UPDATE' });
+    }
   } catch (error) {
     console.error('[Cron] Error in Meta Lead Sync cron job:', error.message);
   }
