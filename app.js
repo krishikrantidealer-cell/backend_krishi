@@ -26,6 +26,7 @@ const bannerRoutes = require('./routes/banner.routes');
 const marketingCampaignRoutes = require('./routes/marketing.campaign.routes');
 const timelineRoutes = require('./routes/timeline.routes');
 const whatsappTemplateRoutes = require('./routes/whatsappTemplate.routes');
+const attributionRoutes = require('./routes/attribution.routes');
 
 const app = express();
 const zlib = require('zlib');
@@ -99,6 +100,7 @@ app.use('/api/banners', bannerRoutes);
 app.use('/api/marketing/push-campaigns', marketingCampaignRoutes);
 app.use('/api/timeline', timelineRoutes);
 app.use('/api/whatsapp/templates', whatsappTemplateRoutes);
+app.use('/api/attribution', attributionRoutes);
 
 // 404 Handler for API routes
 app.use('/api', (req, res) => {

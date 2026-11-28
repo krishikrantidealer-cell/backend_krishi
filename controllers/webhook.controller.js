@@ -46,6 +46,25 @@ const handleWebhook = async (req, res) => {
           // Inbound messages
           if (value.messages && Array.isArray(value.messages)) {
             for (const msg of value.messages) {
+              if (msg.referral && (msg.referral.ctwa_clid || msg.referral.source_id)) {
+                try {
+                  const attributionService = require('../services/attribution.service');
+                  const User = require('../models/User');
+                  const digits = String(msg.from || '').replace(/\D/g, '').slice(-10);
+                  const matchedUser = digits.length === 10
+                    ? await User.findOne({ phoneNumber: { $regex: `${digits}$` }, isDeleted: { $ne: true } })
+                    : null;
+                  await attributionService.recordTouch({
+                    user: matchedUser,
+                    phone: msg.from,
+                    channel: 'ctwa',
+                    metaAdId: msg.referral.source_id || undefined,
+                    platform: 'whatsapp',
+                    clickIdentifier: msg.referral.ctwa_clid || msg.referral.source_id,
+                    rawPayload: msg.referral
+                  });
+                } catch (_) {}
+              }
               await processIncomingMessage({
                 phone: msg.from,
                 name: value.contacts?.[0]?.profile?.name,

@@ -43,6 +43,20 @@ class OrderService {
     // Invalidate analytics caches
     this._invalidateAnalyticsCache().catch(() => {});
 
+    // Attribution & Meta CAPI Stage Event (First order / Repeat order)
+    try {
+      const attributionService = require('../services/attribution.service');
+      const orderUser = await User.findById(session.user);
+      if (orderUser) {
+        const isFirst = !orderUser.firstOrderAt;
+        await attributionService.recordStageEvent({
+          user: orderUser,
+          stage: isFirst ? 'First order' : 'Repeat order',
+          metadata: { orderId: order._id, amount: order.totalAmount }
+        });
+      }
+    } catch (_) {}
+
     // Atomically decrement stock for each ordered item
     if (Array.isArray(session.items)) {
       for (const item of session.items) {
@@ -333,6 +347,18 @@ class OrderService {
     });
 
     // 7. Clear the user's cart thoroughly
+    try {
+      const attributionService = require('../services/attribution.service');
+      const orderUser = await User.findById(userId);
+      if (orderUser) {
+        const isFirst = !orderUser.firstOrderAt;
+        await attributionService.recordStageEvent({
+          user: orderUser,
+          stage: isFirst ? 'First order' : 'Repeat order',
+          metadata: { orderId: order._id, amount: order.totalAmount }
+        });
+      }
+    } catch (_) {}
     cart.items = [];
     cart.totalAmount = 0;
     cart.appliedCoupon = undefined;
@@ -361,6 +387,20 @@ class OrderService {
 
     // Invalidate analytics caches
     this._invalidateAnalyticsCache().catch(() => {});
+
+    // Attribution & Meta CAPI Stage Event (First order / Repeat order)
+    try {
+      const attributionService = require('../services/attribution.service');
+      const orderUser = await User.findById(session.user);
+      if (orderUser) {
+        const isFirst = !orderUser.firstOrderAt;
+        await attributionService.recordStageEvent({
+          user: orderUser,
+          stage: isFirst ? 'First order' : 'Repeat order',
+          metadata: { orderId: order._id, amount: order.totalAmount }
+        });
+      }
+    } catch (_) {}
 
     return order;
   }

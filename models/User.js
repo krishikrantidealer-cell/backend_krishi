@@ -170,6 +170,75 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: 'App'
   },
+  sourceChannel: {
+    type: String,
+    enum: ['lead_form', 'ctwa', 'app_install', 'organic', 'sales_referral', 'panel', 'unknown'],
+    default: 'unknown',
+    index: true
+  },
+  metaLeadId: {
+    type: String,
+    trim: true,
+    index: true
+  },
+  metaCampaignId: {
+    type: String,
+    trim: true,
+    index: true
+  },
+  metaAdsetId: {
+    type: String,
+    trim: true
+  },
+  metaAdId: {
+    type: String,
+    trim: true
+  },
+  metaFormId: {
+    type: String,
+    trim: true
+  },
+  ctwaClid: {
+    type: String,
+    trim: true,
+    index: true
+  },
+  businessType: {
+    type: String,
+    trim: true
+  },
+  leadQuality: {
+    type: String,
+    enum: ['qualified', 'low_intent', 'unqualified', 'unknown'],
+    default: 'unknown',
+    index: true
+  },
+  currentStage: {
+    type: String,
+    enum: [
+      'New',
+      'Contacted',
+      'Interested',
+      'KYC submitted',
+      'KYC verified',
+      'First order',
+      'Repeat order',
+      'Disqualified'
+    ],
+    default: 'New',
+    index: true
+  },
+  disqualificationReason: {
+    type: String,
+    trim: true
+  },
+  firstTouchId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'LeadTouch'
+  },
+  firstOrderAt: {
+    type: Date
+  },
   deepLinkUrl: {
     type: String,
     default: null

@@ -1010,6 +1010,16 @@ exports.createDealer = async (req, res, next) => {
 
       await existingUser.save();
 
+      // Attribution & Meta CAPI Stage Event (KYC verified)
+      try {
+        const attributionService = require('../services/attribution.service');
+        await attributionService.recordStageEvent({
+          user: existingUser,
+          stage: 'KYC verified',
+          agentId: req.user?._id
+        });
+      } catch (_) {}
+
       // Audit Log
       try {
         auditService.logAction({
@@ -1270,6 +1280,16 @@ exports.createLead = async (req, res, next) => {
       });
 
       await existingUser.save();
+
+      // Attribution & Meta CAPI Stage Event (KYC verified)
+      try {
+        const attributionService = require('../services/attribution.service');
+        await attributionService.recordStageEvent({
+          user: existingUser,
+          stage: 'KYC verified',
+          agentId: req.user?._id
+        });
+      } catch (_) {}
 
       // Audit Log
       try {

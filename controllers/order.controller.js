@@ -113,6 +113,20 @@ exports.createOrder = async (req, res, next) => {
     ).catch(err => console.error("Error sending order notification in background:", err));
 
     try {
+      const attributionService = require('../services/attribution.service');
+      const orderUser = await User.findById(userId);
+      if (orderUser) {
+        const isFirst = !orderUser.firstOrderAt;
+        await attributionService.recordStageEvent({
+          user: orderUser,
+          stage: isFirst ? 'First order' : 'Repeat order',
+          agentId: req.user?._id,
+          metadata: { orderId: order._id, amount: order.totalAmount }
+        });
+      }
+    } catch (_) {}
+
+    try {
       const { broadcastToRoles } = require('../services/websocket.service');
       broadcastToRoles(['admin', 'sales'], { type: 'ORDERS_UPDATE' });
     } catch (wsErr) {
@@ -961,6 +975,20 @@ exports.adminCreateOrder = async (req, res, next) => {
     });
 
     try {
+      const attributionService = require('../services/attribution.service');
+      const orderUser = await User.findById(userId);
+      if (orderUser) {
+        const isFirst = !orderUser.firstOrderAt;
+        await attributionService.recordStageEvent({
+          user: orderUser,
+          stage: isFirst ? 'First order' : 'Repeat order',
+          agentId: req.user?._id,
+          metadata: { orderId: order._id, amount: order.totalAmount }
+        });
+      }
+    } catch (_) {}
+
+    try {
       const { broadcastToRoles } = require('../services/websocket.service');
       broadcastToRoles(['admin', 'sales'], { type: 'ORDERS_UPDATE' });
     } catch (wsErr) {
@@ -1135,6 +1163,20 @@ exports.adminUpdateOrderItems = async (req, res, next) => {
     }, req);
 
     try {
+      const attributionService = require('../services/attribution.service');
+      const orderUser = await User.findById(userId);
+      if (orderUser) {
+        const isFirst = !orderUser.firstOrderAt;
+        await attributionService.recordStageEvent({
+          user: orderUser,
+          stage: isFirst ? 'First order' : 'Repeat order',
+          agentId: req.user?._id,
+          metadata: { orderId: order._id, amount: order.totalAmount }
+        });
+      }
+    } catch (_) {}
+
+    try {
       const { broadcastToRoles } = require('../services/websocket.service');
       broadcastToRoles(['admin', 'sales'], { type: 'ORDERS_UPDATE' });
     } catch (wsErr) {
@@ -1188,6 +1230,20 @@ exports.adminUpdateCourierCharge = async (req, res, next) => {
       targetModel: 'Order',
       changes: { courierCharge: Number(courierCharge) }
     }, req);
+
+    try {
+      const attributionService = require('../services/attribution.service');
+      const orderUser = await User.findById(userId);
+      if (orderUser) {
+        const isFirst = !orderUser.firstOrderAt;
+        await attributionService.recordStageEvent({
+          user: orderUser,
+          stage: isFirst ? 'First order' : 'Repeat order',
+          agentId: req.user?._id,
+          metadata: { orderId: order._id, amount: order.totalAmount }
+        });
+      }
+    } catch (_) {}
 
     try {
       const { broadcastToRoles } = require('../services/websocket.service');

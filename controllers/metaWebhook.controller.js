@@ -1,6 +1,7 @@
 const axios = require('axios');
 const User = require('../models/User');
 const { broadcastToRoles } = require('../services/websocket.service');
+const attributionService = require('../services/attribution.service');
 
 /**
  * 1. Meta Webhook Verification Handshake
@@ -75,13 +76,31 @@ exports.handleMetaLeadWebhook = async (req, res) => {
 
             let fieldData = [];
             let leadCreatedTime = null;
+            let metaMeta = {
+              leadgenId: leadgenId || '',
+              adId: change.value.ad_id || '',
+              adsetId: change.value.adset_id || '',
+              campaignId: change.value.campaign_id || '',
+              formId: change.value.form_id || '',
+              platform: 'unknown',
+              rawPayload: change.value
+            };
 
             if (leadgenId && pageAccessToken) {
               try {
-                const graphUrl = `https://graph.facebook.com/v20.0/${leadgenId}?access_token=${pageAccessToken}`;
+                const graphUrl = `https://graph.facebook.com/v20.0/${leadgenId}?fields=id,created_time,field_data,ad_id,adset_id,campaign_id,form_id,platform&access_token=${pageAccessToken}`;
                 const metaRes = await axios.get(graphUrl);
                 fieldData = metaRes.data.field_data || [];
                 leadCreatedTime = metaRes.data.created_time || null;
+                metaMeta = {
+                  leadgenId: metaRes.data.id || leadgenId,
+                  adId: metaRes.data.ad_id || metaMeta.adId,
+                  adsetId: metaRes.data.adset_id || metaMeta.adsetId,
+                  campaignId: metaRes.data.campaign_id || metaMeta.campaignId,
+                  formId: metaRes.data.form_id || metaMeta.formId,
+                  platform: metaRes.data.platform === 'ig' ? 'ig' : (metaRes.data.platform === 'fb' ? 'fb' : 'unknown'),
+                  rawPayload: metaRes.data
+                };
               } catch (graphErr) {
                 console.error('[Meta Webhook] Failed to fetch lead data from Graph API:', graphErr.response?.data || graphErr.message);
               }
@@ -92,7 +111,7 @@ exports.handleMetaLeadWebhook = async (req, res) => {
             }
 
             if (fieldData.length > 0) {
-              await processLeadFields(fieldData, leadCreatedTime);
+              await processLeadFields(fieldData, leadCreatedTime, metaMeta);
             }
           }
         }
@@ -123,7 +142,7 @@ exports.handleMetaLeadWebhook = async (req, res) => {
 /**
  * Extracts normalized form fields from Meta field_data array
  */
-async function processLeadFields(fieldData, createdTime = null) {
+async function processLeadFields(fieldData, createdTime = null, metaMeta = {}) {
   let fullName = '';
   let firstNameVal = '';
   let lastNameVal = '';
@@ -224,17 +243,23 @@ async function processLeadFields(fieldData, createdTime = null) {
     ? `📋 Meta Lead Form Submission:\n${allFormAnswers.map(a => `• ${a}`).join('\n')}`
     : '';
 
+  const qualityInfo = attributionService.classifyLeadQuality(allFormAnswers, businessType);
+
   await createOrUpdateProspectUser({
     phoneNumber,
     fullName,
     shopName,
-    businessType,
+    businessType: qualityInfo.normalizedBusinessType || businessType,
+    leadQuality: qualityInfo.leadQuality,
+    disqualificationReason: qualityInfo.disqualificationReason,
     state,
     city,
     pincode,
     notes: customNotes,
     preferredLanguage: isHindiForm ? 'hi' : 'en',
-    createdAt: createdTime ? new Date(createdTime) : undefined
+    createdAt: createdTime ? new Date(createdTime) : undefined,
+    formAnswers: allFormAnswers,
+    metaMeta
   });
 }
 
@@ -275,6 +300,16 @@ async function createOrUpdateProspectUser(data) {
       kycStatus: 'pending',
       isKycComplete: false,
       source: 'Meta Lead Form',
+      sourceChannel: 'lead_form',
+      businessType: data.businessType || '',
+      leadQuality: data.leadQuality || 'unknown',
+      disqualificationReason: data.disqualificationReason || undefined,
+      currentStage: data.leadQuality === 'unqualified' ? 'Disqualified' : 'New',
+      metaLeadId: data.metaMeta?.leadgenId || undefined,
+      metaCampaignId: data.metaMeta?.campaignId || undefined,
+      metaAdsetId: data.metaMeta?.adsetId || undefined,
+      metaAdId: data.metaMeta?.adId || undefined,
+      metaFormId: data.metaMeta?.formId || undefined,
       status: 'prospect',
       monthlyTarget: 500000,
       preferredLanguage: data.preferredLanguage || 'hi',
@@ -337,6 +372,31 @@ async function createOrUpdateProspectUser(data) {
       await user.save();
       console.log(`[Meta Lead Form] Updated existing user with Meta Form details: ${cleanPhone}`);
     }
+  }
+
+  // Immutable Ad Touch + Initial Stage Event (Attribution Plan)
+  try {
+    await attributionService.recordTouch({
+      user,
+      phone: cleanPhone,
+      channel: 'lead_form',
+      metaCampaignId: data.metaMeta?.campaignId,
+      metaAdsetId: data.metaMeta?.adsetId,
+      metaAdId: data.metaMeta?.adId,
+      metaFormId: data.metaMeta?.formId,
+      platform: data.metaMeta?.platform || 'unknown',
+      clickIdentifier: data.metaMeta?.leadgenId,
+      formAnswers: data.formAnswers,
+      rawPayload: data.metaMeta?.rawPayload,
+      touchedAt: data.createdAt ? new Date(data.createdAt) : new Date()
+    });
+    await attributionService.recordStageEvent({
+      user,
+      stage: data.leadQuality === 'unqualified' ? 'Disqualified' : 'New',
+      dispositionReason: data.disqualificationReason || undefined
+    });
+  } catch (attrErr) {
+    console.warn('[Meta Lead Form] Attribution recording error:', attrErr.message);
   }
 
   // Real-time broadcast to KD Panel (Admin, Sales & Marketing screens update immediately)
