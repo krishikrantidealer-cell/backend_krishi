@@ -623,12 +623,14 @@ class AttributionService {
       for (const [cid, cinfo] of activeCampaigns.map.entries()) {
         const nameLower = String(cinfo.name || '').toLowerCase();
         const obj = String(cinfo.objective || '').toUpperCase();
-        const isLeadFormCampaign =
-          (obj === 'OUTCOME_LEADS' || obj === 'LEAD_GENERATION') &&
+        const isLeadOrDealerCampaign =
+          (obj === 'OUTCOME_LEADS' ||
+            obj === 'LEAD_GENERATION' ||
+            nameLower.includes('dealer')) &&
           !nameLower.includes('hiring') &&
           !nameLower.includes('candidate');
 
-        if (leadFormsOnly && !isLeadFormCampaign) continue;
+        if (leadFormsOnly && !isLeadOrDealerCampaign) continue;
 
         let ch = 'lead_form';
         if (nameLower.includes('ctwa') || nameLower.includes('whatsapp') || obj.includes('MESSAGES')) {
