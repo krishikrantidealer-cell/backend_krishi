@@ -5,11 +5,12 @@ const User = require('../models/User');
 
 exports.getAttributionReport = async (req, res, next) => {
   try {
-    const { startDate, endDate, channel } = req.query;
+    const { startDate, endDate, channel, liveOnly } = req.query;
     const report = await attributionService.getAttributionReport({
       startDate,
       endDate,
-      channel: channel || 'all'
+      channel: channel || 'all',
+      liveOnly: liveOnly !== 'false'
     });
     res.json({ success: true, ...report });
   } catch (error) {

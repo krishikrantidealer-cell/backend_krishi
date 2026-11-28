@@ -7,6 +7,7 @@ const User = require('../models/User');
 const Order = require('../models/Order');
 
 const adHierarchyCache = new Map();
+let activeCampaignsCache = { ids: null, map: new Map(), expiresAt: 0 };
 
 function sha256(value) {
   if (!value) return undefined;
@@ -416,9 +417,42 @@ class AttributionService {
   }
 
   /**
+   * Fetch currently ACTIVE (live) Meta campaigns from Ads Manager (5-min cache).
+   */
+  async getActiveMetaCampaigns() {
+    if (activeCampaignsCache.ids && Date.now() < activeCampaignsCache.expiresAt) {
+      return activeCampaignsCache;
+    }
+    const adAccountId = process.env.META_AD_ACCOUNT_ID;
+    const token = process.env.META_MARKETING_API_TOKEN || process.env.META_PAGE_ACCESS_TOKEN;
+    if (!adAccountId || !token) {
+      return { ids: null, map: new Map() };
+    }
+    try {
+      const accountPath = adAccountId.startsWith('act_') ? adAccountId : `act_${adAccountId}`;
+      const res = await axios.get(`https://graph.facebook.com/v20.0/${accountPath}/campaigns`, {
+        params: {
+          access_token: token,
+          fields: 'id,name,effective_status,objective',
+          limit: 200
+        },
+        timeout: 10000
+      });
+      const active = (res.data?.data || []).filter(c => c.effective_status === 'ACTIVE');
+      const map = new Map(active.map(c => [String(c.id), c]));
+      const ids = new Set(active.map(c => String(c.id)));
+      activeCampaignsCache = { ids, map, expiresAt: Date.now() + 5 * 60 * 1000 };
+      return activeCampaignsCache;
+    } catch (err) {
+      console.warn('[Attribution] Failed to fetch active Meta campaigns:', err.response?.data?.error?.message || err.message);
+      return { ids: null, map: new Map() };
+    }
+  }
+
+  /**
    * Unified Attribution & ROAS Report across Lead Forms, CTWA, and App Installs.
    */
-  async getAttributionReport({ startDate, endDate, channel = 'all' } = {}) {
+  async getAttributionReport({ startDate, endDate, channel = 'all', liveOnly = true } = {}) {
     const start = startDate ? new Date(startDate) : new Date(Date.now() - 90 * 86400000);
     const end = endDate ? new Date(endDate) : new Date();
     end.setHours(23, 59, 59, 999);
@@ -491,6 +525,7 @@ class AttributionService {
           channel: defaults.channel || 'lead_form',
           spend: 0,
           impressions: 0,
+          metaLeads: 0,
           rawLeads: rawLeadsByBucket.get(key) || 0,
           uniqueLeads: 0,
           contactedLeads: 0,
@@ -521,6 +556,23 @@ class AttributionService {
       });
       b.spend += Number(s.spend || 0);
       b.impressions += Number(s.impressions || 0);
+      b.metaLeads += Number(s.leads || 0);
+    }
+
+    const activeCampaigns = liveOnly ? await this.getActiveMetaCampaigns() : { ids: null, map: new Map() };
+    if (liveOnly && activeCampaigns.map.size > 0) {
+      for (const [cid, cinfo] of activeCampaigns.map.entries()) {
+        const nameLower = String(cinfo.name || '').toLowerCase();
+        const obj = String(cinfo.objective || '').toUpperCase();
+        let ch = 'lead_form';
+        if (nameLower.includes('ctwa') || nameLower.includes('whatsapp') || obj.includes('MESSAGES')) {
+          ch = 'ctwa';
+        } else if (obj.includes('APP_INSTALLS') || nameLower.includes('app')) {
+          ch = 'app_install';
+        }
+        if (channel && channel !== 'all' && ch !== channel) continue;
+        ensureBucket(cid, { campaignId: cid, campaignName: cinfo.name, channel: ch });
+      }
     }
 
     for (const { touch, bucketKey } of firstTouchByLeadKey.values()) {
@@ -566,16 +618,24 @@ class AttributionService {
       }
     }
 
-    const campaigns = Array.from(buckets.values()).map(b => ({
-      ...b,
-      cpl: b.uniqueLeads > 0 ? Math.round(b.spend / b.uniqueLeads) : 0,
-      leadToDealerPct: b.uniqueLeads > 0 ? Number(((b.qualifiedDealers / b.uniqueLeads) * 100).toFixed(1)) : 0,
-      costPerQualifiedDealer: b.qualifiedDealers > 0 ? Math.round(b.spend / b.qualifiedDealers) : 0,
-      firstOrderPct: b.uniqueLeads > 0 ? Number(((b.orderingDealers / b.uniqueLeads) * 100).toFixed(1)) : 0,
-      costPerOrderingDealer: b.orderingDealers > 0 ? Math.round(b.spend / b.orderingDealers) : 0,
-      deliveredRoas: b.spend > 0 ? Number((b.deliveredGmv / b.spend).toFixed(2)) : 0,
-      rtoPct: b.ordersCount > 0 ? Number(((b.rtoOrders / b.ordersCount) * 100).toFixed(1)) : 0
-    }));
+    let campaigns = Array.from(buckets.values()).map(b => {
+      const effectiveLeads = b.uniqueLeads > 0 ? b.uniqueLeads : b.metaLeads;
+      return {
+        ...b,
+        uniqueLeads: effectiveLeads,
+        cpl: effectiveLeads > 0 ? Math.round(b.spend / effectiveLeads) : 0,
+        leadToDealerPct: effectiveLeads > 0 ? Number(((b.qualifiedDealers / effectiveLeads) * 100).toFixed(1)) : 0,
+        costPerQualifiedDealer: b.qualifiedDealers > 0 ? Math.round(b.spend / b.qualifiedDealers) : 0,
+        firstOrderPct: effectiveLeads > 0 ? Number(((b.orderingDealers / effectiveLeads) * 100).toFixed(1)) : 0,
+        costPerOrderingDealer: b.orderingDealers > 0 ? Math.round(b.spend / b.orderingDealers) : 0,
+        deliveredRoas: b.spend > 0 ? Number((b.deliveredGmv / b.spend).toFixed(2)) : 0,
+        rtoPct: b.ordersCount > 0 ? Number(((b.rtoOrders / b.ordersCount) * 100).toFixed(1)) : 0
+      };
+    });
+
+    if (liveOnly && activeCampaigns.ids) {
+      campaigns = campaigns.filter(c => activeCampaigns.ids.has(String(c.campaignId)));
+    }
 
     const totals = campaigns.reduce(
       (acc, c) => {
